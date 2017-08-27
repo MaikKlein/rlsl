@@ -1,0 +1,8 @@
+[package]
+name = "rlsl"
+version = "0.1.0"
+authors = ["Maik Klein <maikklein@googlemail.com>"]
+
+[target.'cfg(NOT_A_PLATFORM)'.dependencies]
+rustc = {path = "compiler/rust/src/librustc"}
+
