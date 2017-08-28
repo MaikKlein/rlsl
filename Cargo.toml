@@ -5,4 +5,9 @@ authors = ["Maik Klein <maikklein@googlemail.com>"]
 
 [target.'cfg(NOT_A_PLATFORM)'.dependencies]
 rustc = {path = "compiler/rust/src/librustc"}
+rustc_driver = {path = "compiler/rust/src/librustc_driver"}
+syntax = {path = "compiler/rust/src/libsyntax"}
 
+
+[dependencies]
+#getopts = "*"
