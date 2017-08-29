@@ -1,2 +1,3 @@
 /target/
+rlsl-example/target/
 **/*.rs.bk
