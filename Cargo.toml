@@ -8,8 +8,12 @@ rustc = {path = "compiler/rust/src/librustc"}
 rustc_driver = {path = "compiler/rust/src/librustc_driver"}
 syntax = {path = "compiler/rust/src/libsyntax"}
 syntax_pos = {path = "compiler/rust/src/libsyntax_pos"}
+getopts = "0.2.14"
+env_logger = "0.4.3"
 
 
 [dependencies]
 #getopts = "*"
 debugit = "*"
+rspirv = {git = "https://github.com/google/rspirv.git", branch = "master" }
+spirv_headers = {git = "https://github.com/google/rspirv.git", branch = "master" }
