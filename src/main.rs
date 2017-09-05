@@ -21,6 +21,7 @@ extern crate rustc_plugin;
 extern crate rustc_borrowck;
 extern crate rustc_errors;
 extern crate test;
+extern crate rustc_trans;
 
 //use rustc_borrowck::borrowck;
 use rustc_passes::*;
@@ -45,6 +46,7 @@ use syntax::ast::NodeId;
 use rustc::hir;
 use syntax_pos::symbol::Symbol;
 use std::path::Path;
+use rustc_trans::collector;
 use rustc_driver::{run, run_compiler, get_args, CompilerCalls, Compilation};
 use rustc_driver::driver::{CompileState, CompileController};
 use rustc::mir::visit::Visitor;
@@ -185,10 +187,10 @@ impl<'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'a, 'tcx> {
         statement: &mir::Statement<'tcx>,
         location: mir::Location,
     ) {
-//        match statement.kind {
-//            mir::StatementKind::Assign(_, _) => println!("ASS"),
-//            _ => (),
-//        };
+        //        match statement.kind {
+        //            mir::StatementKind::Assign(_, _) => println!("ASS"),
+        //            _ => (),
+        //        };
         self.super_statement(block, statement, location);
     }
 
@@ -274,7 +276,7 @@ impl<'a, 'v: 'a> rustc::hir::intravisit::Visitor<'v> for RlslVisitor<'a, 'v> {
         //    println!("{:?}", v);
         //}
         self.visit_mir(mir_fn);
-        //println!("mir_fn = {:#?}", mir_fn);
+        println!("mir_fn = {:#?}", mir_fn);
         let sigs = self.ty_ctx.body_tables(b).liberated_fn_sigs();
         let hir_id = self.map.node_to_hir_id(id);
         let fn_sig = *sigs.get(hir_id).expect("sig");
@@ -406,39 +408,42 @@ impl mir::transform::PassHook for RlslMir {
         //unimplemented!()
     }
 }
-use rustc::session::config::{ErrorOutputType, Input, self };
+use rustc::session::config::{self, ErrorOutputType, Input};
 use std::path::PathBuf;
 use syntax::ast;
 use rustc_errors as errors;
 impl<'a> CompilerCalls<'a> for RlslCompilerCalls {
-    fn early_callback(&mut self,
-                      _: &getopts::Matches,
-                      _: &config::Options,
-                      _: &ast::CrateConfig,
-                      _: &errors::registry::Registry,
-                      _: ErrorOutputType)
-                      -> Compilation {
+    fn early_callback(
+        &mut self,
+        _: &getopts::Matches,
+        _: &config::Options,
+        _: &ast::CrateConfig,
+        _: &errors::registry::Registry,
+        _: ErrorOutputType,
+    ) -> Compilation {
         println!("early");
         Compilation::Continue
     }
-    fn late_callback(&mut self,
-                     matches: &getopts::Matches,
-                     sess: &Session,
-                     input: &Input,
-                     odir: &Option<PathBuf>,
-                     ofile: &Option<PathBuf>)
-                     -> Compilation {
+    fn late_callback(
+        &mut self,
+        matches: &getopts::Matches,
+        sess: &Session,
+        input: &Input,
+        odir: &Option<PathBuf>,
+        ofile: &Option<PathBuf>,
+    ) -> Compilation {
         println!("late");
         Compilation::Continue
     }
-    fn no_input(&mut self,
-                matches: &getopts::Matches,
-                _: &config::Options,
-                _: &ast::CrateConfig,
-                _: &Option<PathBuf>,
-                _: &Option<PathBuf>,
-                _: &errors::registry::Registry)
-                -> Option<(Input, Option<PathBuf>)> {
+    fn no_input(
+        &mut self,
+        matches: &getopts::Matches,
+        _: &config::Options,
+        _: &ast::CrateConfig,
+        _: &Option<PathBuf>,
+        _: &Option<PathBuf>,
+        _: &errors::registry::Registry,
+    ) -> Option<(Input, Option<PathBuf>)> {
         println!("no input");
         println!("matches = {:?}", matches.free);
         None
@@ -473,7 +478,7 @@ impl<'a> CompilerCalls<'a> for RlslCompilerCalls {
         controller.after_analysis.callback = box |s: &mut CompileState| {
             let tcx = &s.tcx.unwrap();
             let time_passes = tcx.sess.time_passes();
-            //let visitor = RlslVisitor::new(s);
+            let visitor = RlslVisitor::new(s);
             //visitor.build_module();
         };
         controller

@@ -28,5 +28,5 @@ pub mod prelude;
 #[prelude_import]
 pub use prelude::v1::*;
 
-/#[lang = "eh_personality"] pub extern fn eh_personality() {}
+#[lang = "eh_personality"] pub extern fn eh_personality() {}
 
