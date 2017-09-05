@@ -46,7 +46,7 @@ use syntax::ast::NodeId;
 use rustc::hir;
 use syntax_pos::symbol::Symbol;
 use std::path::Path;
-use rustc_trans::collector;
+use rustc_trans::collector::collect_roots;
 use rustc_driver::{run, run_compiler, get_args, CompilerCalls, Compilation};
 use rustc_driver::driver::{CompileState, CompileController};
 use rustc::mir::visit::Visitor;
@@ -275,6 +275,7 @@ impl<'a, 'v: 'a> rustc::hir::intravisit::Visitor<'v> for RlslVisitor<'a, 'v> {
         //for v in mir::traversal::preorder(mir_fn){
         //    println!("{:?}", v);
         //}
+
         self.visit_mir(mir_fn);
         println!("mir_fn = {:#?}", mir_fn);
         let sigs = self.ty_ctx.body_tables(b).liberated_fn_sigs();

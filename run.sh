@@ -1,1 +1,1 @@
-cargo build --release && RUST_LOG=error ./target/release/rlsl rlsl-example/src/main.rs --extern core=libcore.rlib --extern std=libstd.rlib -L . -A warnings && spirv-val shader.spv && spirv-cross shader.spv && spirv-dis shader.spv
+RUST_LOG=error cargo run --release -- rlsl-example/src/main.rs --extern core=libcore.rlib --extern std=libstd.rlib -L . -A warnings && spirv-val shader.spv && spirv-cross shader.spv && spirv-dis shader.spv
