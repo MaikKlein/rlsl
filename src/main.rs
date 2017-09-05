@@ -487,8 +487,6 @@ fn main() {
     let mut calls = RlslCompilerCalls;
     let result = run(move || {
         let (a, b) = run_compiler(&get_args(), &mut calls, None, None);
-        println!("............................:");
-        println!("a = {:?}", b.is_some());
         (a, b)
     });
 }

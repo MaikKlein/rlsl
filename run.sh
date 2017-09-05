@@ -1,1 +1,1 @@
-cargo build --release && RUST_LOG=error ./target/release/rlsl rlsl-example/src/main.rs --extern core=/home/maik/.xargo/HOST/lib/rustlib/x86_64-unknown-linux-gnu/lib/libcore-5fa97970baf5bd7c.rlib --extern std=libstd/target/release/libstd.rlib -A warnings && spirv-val shader.spv && spirv-cross shader.spv && spirv-dis shader.spv
+cargo build --release && RUST_LOG=error ./target/release/rlsl rlsl-example/src/main.rs --extern core=libcore.rlib --extern std=libstd.rlib -L . -A warnings && spirv-val shader.spv && spirv-cross shader.spv && spirv-dis shader.spv
