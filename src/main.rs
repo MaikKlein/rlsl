@@ -1,7 +1,10 @@
 #![feature(rustc_private)]
 #![feature(box_syntax)]
+#![feature(test)]
 //#[macro_use]
 //extern crate debugit;
+#[macro_use]
+extern crate log;
 extern crate rustc;
 extern crate rustc_driver;
 #[macro_use]
@@ -16,6 +19,8 @@ extern crate rustc_passes;
 extern crate arena;
 extern crate rustc_plugin;
 extern crate rustc_borrowck;
+extern crate rustc_errors;
+extern crate test;
 
 //use rustc_borrowck::borrowck;
 use rustc_passes::*;
@@ -180,10 +185,10 @@ impl<'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'a, 'tcx> {
         statement: &mir::Statement<'tcx>,
         location: mir::Location,
     ) {
-        match statement.kind {
-            mir::StatementKind::Assign(_, _) => println!("ASS"),
-            _ => (),
-        };
+//        match statement.kind {
+//            mir::StatementKind::Assign(_, _) => println!("ASS"),
+//            _ => (),
+//        };
         self.super_statement(block, statement, location);
     }
 
@@ -193,11 +198,11 @@ impl<'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'a, 'tcx> {
         context: mir::visit::LvalueContext<'tcx>,
         location: mir::Location,
     ) {
-        println!("lvalue = {:?}", lvalue);
+        //println!("lvalue = {:?}", lvalue);
         self.super_lvalue(lvalue, context, location);
     }
     fn visit_local_decl(&mut self, local_decl: &mir::LocalDecl<'tcx>) {
-        println!("decl = {:?}", local_decl.ty);
+        //println!("decl = {:?}", local_decl.ty);
         match local_decl.ty.sty {
             ty::TypeVariants::TyAdt(def, subs) => {
                 //println!("variants {:#?}", def.variants);
@@ -207,7 +212,7 @@ impl<'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'a, 'tcx> {
                 match node {
                     hir::map::Node::NodeItem(ref item) => {
                         let intrinsic = extract_intrinsic(&item.attrs);
-                        println!("intrinsic = {:?}", intrinsic);
+                        //println!("intrinsic = {:?}", intrinsic);
                     }
                     _ => (),
                 };
@@ -264,6 +269,7 @@ impl<'a, 'v: 'a> rustc::hir::intravisit::Visitor<'v> for RlslVisitor<'a, 'v> {
         let node = self.map.find(id);
         //println!("node = {:?}", node);
         let mir_fn = self.ty_ctx.maybe_optimized_mir(def_id).unwrap();
+        //println!("mir_fn = {:#?}", mir_fn);
         //for v in mir::traversal::preorder(mir_fn){
         //    println!("{:?}", v);
         //}
@@ -400,12 +406,49 @@ impl mir::transform::PassHook for RlslMir {
         //unimplemented!()
     }
 }
+use rustc::session::config::{ErrorOutputType, Input, self };
+use std::path::PathBuf;
+use syntax::ast;
+use rustc_errors as errors;
 impl<'a> CompilerCalls<'a> for RlslCompilerCalls {
+    fn early_callback(&mut self,
+                      _: &getopts::Matches,
+                      _: &config::Options,
+                      _: &ast::CrateConfig,
+                      _: &errors::registry::Registry,
+                      _: ErrorOutputType)
+                      -> Compilation {
+        println!("early");
+        Compilation::Continue
+    }
+    fn late_callback(&mut self,
+                     matches: &getopts::Matches,
+                     sess: &Session,
+                     input: &Input,
+                     odir: &Option<PathBuf>,
+                     ofile: &Option<PathBuf>)
+                     -> Compilation {
+        println!("late");
+        Compilation::Continue
+    }
+    fn no_input(&mut self,
+                matches: &getopts::Matches,
+                _: &config::Options,
+                _: &ast::CrateConfig,
+                _: &Option<PathBuf>,
+                _: &Option<PathBuf>,
+                _: &errors::registry::Registry)
+                -> Option<(Input, Option<PathBuf>)> {
+        println!("no input");
+        println!("matches = {:?}", matches.free);
+        None
+    }
     fn build_controller<'tcx>(
         &'tcx mut self,
         _: &rustc::session::Session,
         _: &getopts::Matches,
     ) -> CompileController<'a> {
+        println!("TT");
         let mut controller = CompileController::basic();
         controller.keep_ast = true;
         controller.after_analysis.stop = Compilation::Stop;
@@ -430,17 +473,22 @@ impl<'a> CompilerCalls<'a> for RlslCompilerCalls {
         controller.after_analysis.callback = box |s: &mut CompileState| {
             let tcx = &s.tcx.unwrap();
             let time_passes = tcx.sess.time_passes();
-            let visitor = RlslVisitor::new(s);
-            visitor.build_module();
+            //let visitor = RlslVisitor::new(s);
+            //visitor.build_module();
         };
         controller
     }
 }
 fn main() {
-    env_logger::init().unwrap();
+    env_logger::init();
+    info!("hello");
+    debug!("debug");
+    error!("error");
     let mut calls = RlslCompilerCalls;
     let result = run(move || {
         let (a, b) = run_compiler(&get_args(), &mut calls, None, None);
+        println!("............................:");
+        println!("a = {:?}", b.is_some());
         (a, b)
     });
 }

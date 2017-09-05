@@ -14,12 +14,14 @@ rustc_plugin = {path = "compiler/rust/src/librustc_plugin"}
 arena = {path = "compiler/rust/src/libarena"}
 rustc_borrowck = {path = "compiler/rust/src/librustc_borrowck"}
 rustc_trans = {path = "compiler/rust/src/librustc_trans"}
+rustc_errors = {path = "compiler/rust/src/librustc_errors"}
 getopts = "0.2.14"
 env_logger = "0.4.3"
 
 
 [dependencies]
 #getopts = "*"
+log = "*"
 debugit = "*"
 rspirv = {git = "https://github.com/google/rspirv.git", branch = "master" }
 spirv_headers = {git = "https://github.com/google/rspirv.git", branch = "master" }
