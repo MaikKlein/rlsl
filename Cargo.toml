@@ -15,6 +15,8 @@ arena = {path = "compiler/rust/src/libarena"}
 rustc_borrowck = {path = "compiler/rust/src/librustc_borrowck"}
 rustc_trans = {path = "compiler/rust/src/librustc_trans"}
 rustc_errors = {path = "compiler/rust/src/librustc_errors"}
+rustc_incremental = {path = "compiler/rust/src/librustc_incremental"}
+rustc_resolve = {path = "compiler/rust/src/librustc_resolve"}
 getopts = "0.2.14"
 env_logger = "0.4.3"
 

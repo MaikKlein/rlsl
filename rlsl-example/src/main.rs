@@ -18,12 +18,15 @@ impl Add for Vec2 {
         }
     }
 }
-fn test() -> f32 {
-    4.0 + 4.0
+fn test(f: f32, f1: f32) -> f32 {
+    f + f1
 }
 fn vert() {
-    let f = test();
+    let f = 4.0;
+    let f1 = 5.0;
+    let f2 = test(f, f1);
+    let f3 = test(f2, f1);
     let v = Vec2 { x: 1.0, y: 2.0 };
-    //let v1 = v + v;
+    let v1 = v + v;
 }
 fn main() {}

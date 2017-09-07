@@ -20,8 +20,13 @@ extern crate arena;
 extern crate rustc_plugin;
 extern crate rustc_borrowck;
 extern crate rustc_errors;
+extern crate rustc_incremental;
 extern crate test;
 extern crate rustc_trans;
+extern crate rustc_resolve;
+use rustc_resolve::MakeGlobMap;
+use rustc_incremental::{IncrementalHashesMap, compute_incremental_hashes_map};
+use rustc_trans::SharedCrateContext;
 
 //use rustc_borrowck::borrowck;
 use rustc_passes::*;
@@ -76,6 +81,7 @@ pub struct RlslVisitor<'a, 'tcx: 'a> {
     pub ty_ctx: rustc::ty::TyCtxt<'a, 'tcx, 'tcx>,
     current_table: Vec<&'a rustc::ty::TypeckTables<'tcx>>,
     pub ty_cache: SpirvTyCache<'tcx>,
+    pub mir: Option<&'a mir::Mir<'tcx>>,
     ctx: SpirvCtx,
 }
 impl<'a, 'tcx: 'a> RlslVisitor<'a, 'tcx> {
@@ -97,6 +103,7 @@ impl<'a, 'tcx: 'a> RlslVisitor<'a, 'tcx> {
             current_table: Vec::new(),
             ctx,
             ty_cache: SpirvTyCache::new(),
+            mir: None,
         };
         //println!("{:#?}", visitor.map.krate());
         hir_visit::walk_crate(&mut visitor, visitor.map.krate());
@@ -189,6 +196,7 @@ impl<'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'a, 'tcx> {
     ) {
         //        match statement.kind {
         //            mir::StatementKind::Assign(_, _) => println!("ASS"),
+        //            mir::StatementKind::
         //            _ => (),
         //        };
         self.super_statement(block, statement, location);
@@ -202,6 +210,35 @@ impl<'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'a, 'tcx> {
     ) {
         //println!("lvalue = {:?}", lvalue);
         self.super_lvalue(lvalue, context, location);
+    }
+    fn visit_terminator_kind(
+        &mut self,
+        block: mir::BasicBlock,
+        kind: &mir::TerminatorKind<'tcx>,
+        location: mir::Location,
+    ) {
+        self.super_terminator_kind(block, kind, location);
+        match kind {
+            &mir::TerminatorKind::Call { ref func, .. } => {
+                match func {
+                    &mir::Operand::Constant(ref constant) => {
+                        println!("const ty {:?}", constant.ty);
+                        if let mir::Literal::Value { ref value } = constant.literal {
+                            use rustc::middle::const_val::ConstVal;
+                            if let &ConstVal::Function(id, _) = value {
+                                //let node_id = self.map.as_local_node_id(id).unwrap();
+                                //let name = self.map.name(node_id);
+                                //println!("name = {:?}", name);
+                                let mir_fn = self.ty_ctx.maybe_optimized_mir(id);
+                                //                                println!("mir_fn = {:#?}", mir_fn);
+                            }
+                        }
+                    }
+                    _ => (),
+                }
+            }
+            _ => (),
+        };
     }
     fn visit_local_decl(&mut self, local_decl: &mir::LocalDecl<'tcx>) {
         //println!("decl = {:?}", local_decl.ty);
@@ -223,6 +260,18 @@ impl<'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'a, 'tcx> {
             _ => (),
         }
         self.super_local_decl(local_decl);
+    }
+    fn visit_rvalue(&mut self, rvalue: &mir::Rvalue<'tcx>, location: mir::Location) {
+        use rustc::mir::HasLocalDecls;
+        self.super_rvalue(rvalue, location);
+        if let &mir::Rvalue::BinaryOp(op, ref l, ref r) = rvalue {
+            println!("RVAL {:?} {:?}", l, r);
+            let mir = self.mir.unwrap();
+            let ty = l.ty(mir.local_decls(), self.ty_ctx);
+            println!("ty = {:?}", ty);
+            let ty = r.ty(mir.local_decls(), self.ty_ctx);
+            println!("ty = {:?}", ty);
+        }
     }
 }
 
@@ -267,66 +316,70 @@ impl<'a, 'v: 'a> rustc::hir::intravisit::Visitor<'v> for RlslVisitor<'a, 'v> {
     fn visit_fn(&mut self, fk: FnKind<'v>, fd: &'v FnDecl, b: BodyId, s: Span, id: NodeId) {
         use rustc::ty::{Slice, FnSig};
         use rustc::ty;
+        walk_fn(self, fk, fd, b, s, id);
         let def_id = self.map.local_def_id(id);
         let node = self.map.find(id);
         //println!("node = {:?}", node);
-        let mir_fn = self.ty_ctx.maybe_optimized_mir(def_id).unwrap();
+        println!("name = {:?}", self.map.name(id));
+        let mir_fn = self.ty_ctx.maybe_optimized_mir(def_id);
         //println!("mir_fn = {:#?}", mir_fn);
         //for v in mir::traversal::preorder(mir_fn){
         //    println!("{:?}", v);
         //}
 
-        self.visit_mir(mir_fn);
-        println!("mir_fn = {:#?}", mir_fn);
-        let sigs = self.ty_ctx.body_tables(b).liberated_fn_sigs();
-        let hir_id = self.map.node_to_hir_id(id);
-        let fn_sig = *sigs.get(hir_id).expect("sig");
-        let ty = self.ty_ctx.mk_fn_ptr(ty::Binder(fn_sig));
-        let fn_ty_spirv = self.ty_cache.from_ty(&mut self.ctx.builder, ty);
-        let ret_ty_spirv = self.ty_cache.from_ty(
-            &mut self.ctx.builder,
-            fn_sig.output(),
-        );
-        let spirv_function = self.ctx
-            .builder
-            .begin_function(
-                ret_ty_spirv.word,
-                None,
-                spirv::FunctionControl::empty(),
-                fn_ty_spirv.word,
-            )
-            .expect("begin fn");
-        println!("BLOCK");
-        self.ctx.builder.begin_basic_block(None).expect("block");
-        walk_fn(self, fk, fd, b, s, id);
-        self.ctx.builder.end_function().expect("end fn");
+        self.mir = mir_fn;
+        self.visit_mir(mir_fn.unwrap());
+        self.mir = None;
+        //println!("mir_fn = {:#?}", mir_fn);
+        //        let sigs = self.ty_ctx.body_tables(b).liberated_fn_sigs();
+        //        let hir_id = self.map.node_to_hir_id(id);
+        //        let fn_sig = *sigs.get(hir_id).expect("sig");
+        //        let ty = self.ty_ctx.mk_fn_ptr(ty::Binder(fn_sig));
+        //        let fn_ty_spirv = self.ty_cache.from_ty(&mut self.ctx.builder, ty);
+        //        let ret_ty_spirv = self.ty_cache.from_ty(
+        //            &mut self.ctx.builder,
+        //            fn_sig.output(),
+        //        );
+        //        let spirv_function = self.ctx
+        //            .builder
+        //            .begin_function(
+        //                ret_ty_spirv.word,
+        //                None,
+        //                spirv::FunctionControl::empty(),
+        //                fn_ty_spirv.word,
+        //            )
+        //            .expect("begin fn");
+        //        println!("BLOCK");
+        //        self.ctx.builder.begin_basic_block(None).expect("block");
+        //        self.ctx.builder.end_function().expect("end fn");
     }
+
     fn visit_expr(&mut self, ex: &'v Expr) {
         walk_expr(self, ex);
-        let spirv_expr = match ex.node {
-            Expr_::ExprLit(ref lit) => {
-                match lit.node {
-                    syntax::ast::LitKind::FloatUnsuffixed(sym) => {
-                        let ty = self.get_table().expr_ty(ex);
-                        let spirv_ty = self.ty_cache.from_ty(&mut self.ctx.builder, ty);
-                        let f = sym.as_str().parse::<f32>().expect("parse");
-                        Some(SpirvExpr(self.ctx.builder.constant_f32(spirv_ty.word, f)))
-                    }
-                    ref rest => unimplemented!("{:?}", rest),
-                }
-            }
-            //Expr_::ExprPath(ref path) => {
-            //    if let &QPath::Resolved(_, ref p) = path {
-            //        if let hir::def::Def::Local(l) = p.def {
-            //            println!("EXPR {:?}", self.map.get_if_local(l));
-            //        }
-            //    }
-            //}
-            _ => None,
-        };
-        if let Some(spirv_expr) = spirv_expr {
-            self.ctx.exprs.insert(ex.id, spirv_expr);
-        }
+        //let spirv_expr = match ex.node {
+        //    Expr_::ExprLit(ref lit) => {
+        //        match lit.node {
+        //            syntax::ast::LitKind::FloatUnsuffixed(sym) => {
+        //                let ty = self.get_table().expr_ty(ex);
+        //                let spirv_ty = self.ty_cache.from_ty(&mut self.ctx.builder, ty);
+        //                let f = sym.as_str().parse::<f32>().expect("parse");
+        //                Some(SpirvExpr(self.ctx.builder.constant_f32(spirv_ty.word, f)))
+        //            }
+        //            ref rest => unimplemented!("{:?}", rest),
+        //        }
+        //    }
+        //    //Expr_::ExprPath(ref path) => {
+        //    //    if let &QPath::Resolved(_, ref p) = path {
+        //    //        if let hir::def::Def::Local(l) = p.def {
+        //    //            println!("EXPR {:?}", self.map.get_if_local(l));
+        //    //        }
+        //    //    }
+        //    //}
+        //    _ => None,
+        //};
+        //if let Some(spirv_expr) = spirv_expr {
+        //    self.ctx.exprs.insert(ex.id, spirv_expr);
+        //}
     }
     fn visit_body(&mut self, b: &'v Body) {
         self.current_table.push(self.ty_ctx.body_tables(b.id()));
@@ -340,11 +393,11 @@ impl<'a, 'v: 'a> rustc::hir::intravisit::Visitor<'v> for RlslVisitor<'a, 'v> {
         //        ref rest => unimplemented!("{:?}", rest),
         //    };
         //}
-        if let Some(ret_expr) = self.ctx.exprs.get(&b.value.id) {
-            self.ctx.builder.ret_value(ret_expr.0).expect("ret value");
-        } else {
-            self.ctx.builder.ret().expect("ret");
-        }
+        //        if let Some(ret_expr) = self.ctx.exprs.get(&b.value.id) {
+        //            self.ctx.builder.ret_value(ret_expr.0).expect("ret value");
+        //        } else {
+        //            self.ctx.builder.ret().expect("ret");
+        //        }
         let _ = self.current_table.pop();
     }
     fn visit_fn_decl(&mut self, fd: &'v FnDecl) {
@@ -358,19 +411,19 @@ impl<'a, 'v: 'a> rustc::hir::intravisit::Visitor<'v> for RlslVisitor<'a, 'v> {
     fn visit_local(&mut self, l: &'v Local) {
 
         walk_local(self, l);
-        let ty = self.get_table().node_id_to_type(l.hir_id);
-        let spirv_ty = self.ty_cache.from_ty(&mut self.ctx.builder, ty);
-        let init_expr = l.init
-            .as_ref()
-            .and_then(|ex| self.ctx.exprs.get(&ex.id))
-            .map(|ex| ex.0);
-        let spirv_var = self.ctx.builder.variable(
-            spirv_ty.word,
-            None,
-            spirv::StorageClass::Function,
-            init_expr,
-        );
-        self.ctx.vars.insert(l.id, SpirvVar(spirv_var));
+        //        let ty = self.get_table().node_id_to_type(l.hir_id);
+        //        let spirv_ty = self.ty_cache.from_ty(&mut self.ctx.builder, ty);
+        //        let init_expr = l.init
+        //            .as_ref()
+        //            .and_then(|ex| self.ctx.exprs.get(&ex.id))
+        //            .map(|ex| ex.0);
+        //        let spirv_var = self.ctx.builder.variable(
+        //            spirv_ty.word,
+        //            None,
+        //            spirv::StorageClass::Function,
+        //            init_expr,
+        //        );
+        //        self.ctx.vars.insert(l.id, SpirvVar(spirv_var));
         //println!("local = {:?}", self.map.find(l.id));
     }
     fn visit_variant_data(
@@ -454,10 +507,20 @@ impl<'a> CompilerCalls<'a> for RlslCompilerCalls {
         _: &rustc::session::Session,
         _: &getopts::Matches,
     ) -> CompileController<'a> {
-        println!("TT");
         let mut controller = CompileController::basic();
-        controller.keep_ast = true;
+        //        controller.keep_ast = true;
+        //        controller.make_glob_map = MakeGlobMap::Yes;
         controller.after_analysis.stop = Compilation::Stop;
+        controller.after_expand.callback = box |s| {
+            //let dirpath = s.out_dir.expect("out");
+            //            let file = OutputFilenames {
+            //                out_directory: dirpath.into(),
+            //                out_filestem: stem,
+            //                single_output_file: None,
+            //                extra: sess.opts.cg.extra_filename.clone(),
+            //                outputs: sess.opts.output_types.clone(),
+            //            };
+        };
         controller.after_hir_lowering.callback = box |s: &mut CompileState| {
             let sess = s.session;
             let hir_map = s.hir_map.unwrap();
@@ -465,6 +528,14 @@ impl<'a> CompilerCalls<'a> for RlslCompilerCalls {
             let reso = s.resolutions.unwrap();
             let arena = s.arena.unwrap();
             let arenas = s.arenas.unwrap();
+            use syntax::attr;
+            let stem = sess.opts
+                .crate_name
+                .clone()
+                //.or_else(|| attr::find_crate_name(attrs).map(|n| n.to_string()))
+                .unwrap_or(s.input.filestem());
+
+            use rustc::session::config::OutputFilenames;
             //rustc_driver::driver::phase_3_run_analysis_passes(
             //    sess,
             //    hir_map.clone(),
@@ -479,11 +550,75 @@ impl<'a> CompilerCalls<'a> for RlslCompilerCalls {
         controller.after_analysis.callback = box |s: &mut CompileState| {
             let tcx = &s.tcx.unwrap();
             let time_passes = tcx.sess.time_passes();
-            let visitor = RlslVisitor::new(s);
+            let f = rustc_driver::driver::build_output_filenames(
+                s.input,
+                &s.out_dir.map(|p| p.into()),
+                &s.out_file.map(|p| p.into()),
+                &[],
+                tcx.sess,
+            );
+            let h = compute_incremental_hashes_map(*tcx);
+            trans_crate(*tcx, s.analysis.unwrap().clone(), h, &f);
+            //let visitor = RlslVisitor::new(s);
             //visitor.build_module();
         };
         controller
     }
+}
+use rustc_trans::back::write::OngoingCrateTranslation;
+pub fn trans_crate<'a, 'tcx>(
+    tcx: ty::TyCtxt<'a, 'tcx, 'tcx>,
+    analysis: ty::CrateAnalysis,
+    incremental_hashes_map: IncrementalHashesMap,
+    output_filenames: &rustc::session::config::OutputFilenames,
+) -> () {
+    //check_for_rustc_errors_attr(tcx);
+
+    // Be careful with this krate: obviously it gives access to the
+    // entire contents of the krate. So if you push any subtasks of
+    // `TransCrate`, you need to be careful to register "reads" of the
+    // particular items that will be processed.
+    use rustc_trans::{write_metadata, find_exported_symbols};
+    use rustc_trans::back::link;
+    use rustc_trans::back::symbol_export::ExportedSymbols;
+    let krate = tcx.hir.krate();
+    let ty::CrateAnalysis { reachable, .. } = analysis;
+    let check_overflow = tcx.sess.overflow_checks();
+    let link_meta = link::build_link_meta(&incremental_hashes_map);
+    let exported_symbol_node_ids = find_exported_symbols(tcx, &reachable);
+    let shared_ccx = SharedCrateContext::new(tcx, check_overflow, output_filenames);
+    let exported_symbols = ExportedSymbols::compute(tcx, &exported_symbol_node_ids);
+    let (items, inlining_map) = rustc_trans::collector::collect_crate_translation_items(
+        &shared_ccx,
+        &exported_symbols,
+        rustc_trans::collector::TransItemCollectionMode::Eager,
+    );
+    for item in &items {
+        println!("item = {:?}", item);
+    }
+    //    let (metadata_llcx, metadata_llmod, metadata, metadata_incr_hashes) =
+    //        time(tcx.sess.time_passes(), "write metadata", || {
+    //            write_metadata(tcx, &link_meta, &exported_symbol_node_ids)
+    //        });
+    //unimplemented!()
+
+    //    let metadata_module = ModuleTranslation {
+    //        name: link::METADATA_MODULE_NAME.to_string(),
+    //        symbol_name_hash: 0,
+    //        // we always rebuild metadata, at least for now
+    //        source: ModuleSource::Translated(ModuleLlvm {
+    //            llcx: metadata_llcx,
+    //            llmod: metadata_llmod,
+    //        }),
+    //        kind: ModuleKind::Metadata,
+    //    };
+    //
+    //    let no_builtins = attr::contains_name(&krate.attrs, "no_builtins");
+    //    let time_graph = if tcx.sess.opts.debugging_opts.trans_time_graph {
+    //        Some(time_graph::TimeGraph::new())
+    //    } else {
+    //        None
+    //    };
 }
 fn main() {
     env_logger::init();
