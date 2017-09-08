@@ -21,9 +21,10 @@ extern crate rustc_plugin;
 extern crate rustc_borrowck;
 extern crate rustc_errors;
 extern crate rustc_incremental;
-extern crate test;
 extern crate rustc_trans;
 extern crate rustc_resolve;
+extern crate rustc_data_structures;
+use rustc_data_structures::fx::FxHashSet;
 use rustc_resolve::MakeGlobMap;
 use rustc_incremental::{IncrementalHashesMap, compute_incremental_hashes_map};
 use rustc_trans::SharedCrateContext;
@@ -225,12 +226,13 @@ impl<'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'a, 'tcx> {
                         println!("const ty {:?}", constant.ty);
                         if let mir::Literal::Value { ref value } = constant.literal {
                             use rustc::middle::const_val::ConstVal;
-                            if let &ConstVal::Function(id, _) = value {
-                                //let node_id = self.map.as_local_node_id(id).unwrap();
-                                //let name = self.map.name(node_id);
-                                //println!("name = {:?}", name);
-                                let mir_fn = self.ty_ctx.maybe_optimized_mir(id);
-                                //                                println!("mir_fn = {:#?}", mir_fn);
+                            if let &ConstVal::Function(def_id, ref subst) = value {
+                                let mir = self.ty_ctx.maybe_optimized_mir(def_id).or_else(||
+                                    self.ty_ctx.maybe_optimized_mir(
+                                        resolve_fn_call(self.ty_ctx, def_id, subst),
+                                    ),
+                                );
+                                println!("fn call {:#?}", mir);
                             }
                         }
                     }
@@ -265,12 +267,12 @@ impl<'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'a, 'tcx> {
         use rustc::mir::HasLocalDecls;
         self.super_rvalue(rvalue, location);
         if let &mir::Rvalue::BinaryOp(op, ref l, ref r) = rvalue {
-            println!("RVAL {:?} {:?}", l, r);
-            let mir = self.mir.unwrap();
-            let ty = l.ty(mir.local_decls(), self.ty_ctx);
-            println!("ty = {:?}", ty);
-            let ty = r.ty(mir.local_decls(), self.ty_ctx);
-            println!("ty = {:?}", ty);
+            //            println!("RVAL {:?} {:?}", l, r);
+            //            let mir = self.mir.unwrap();
+            //            let ty = l.ty(mir.local_decls(), self.ty_ctx);
+            //            println!("ty = {:?}", ty);
+            //            let ty = r.ty(mir.local_decls(), self.ty_ctx);
+            //            println!("ty = {:?}", ty);
         }
     }
 }
@@ -279,7 +281,37 @@ impl<'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'a, 'tcx> {
 pub enum Intrinsic {
     Vec(u32),
 }
-
+pub fn resolve_fn_call<'a, 'tcx>(
+    tcx: ty::TyCtxt<'a, 'tcx, 'tcx>,
+    def_id: hir::def_id::DefId,
+    substs: &'tcx ty::subst::Substs<'tcx>,
+) -> hir::def_id::DefId {
+    if let Some(trait_id) = tcx.opt_associated_item(def_id).and_then(
+        |associated_item| {
+            match associated_item.container {
+                ty::TraitContainer(def_id) => Some(def_id),
+                ty::ImplContainer(_) => None,
+            }
+        },
+    )
+    {
+        let tref = ty::TraitRef::from_method(tcx, trait_id, substs);
+        let assoc_item = tcx.associated_items(trait_id)
+            .find(|a| a.def_id == def_id)
+            .unwrap();
+        let vtable = tcx.trans_fulfill_obligation(syntax::codemap::DUMMY_SP, ty::Binder(tref));
+        use rustc::traits::Vtable;
+        return match vtable {
+            Vtable::VtableImpl(ref data) => {
+                let (def_id, substs) =
+                    rustc::traits::find_associated_item(tcx, &assoc_item, substs, data);
+                def_id
+            }
+            _ => unimplemented!(),
+        };
+    }
+    unimplemented!()
+}
 pub fn extract_intrinsic(attr: &[syntax::ast::Attribute]) -> Option<Vec<Intrinsic>> {
     let spirv = attr.iter().filter_map(|a| a.meta()).find(|meta| {
         meta.name.as_str() == "spirv"
@@ -328,7 +360,7 @@ impl<'a, 'v: 'a> rustc::hir::intravisit::Visitor<'v> for RlslVisitor<'a, 'v> {
         //}
 
         self.mir = mir_fn;
-        self.visit_mir(mir_fn.unwrap());
+        //self.visit_mir(mir_fn.unwrap());
         self.mir = None;
         //println!("mir_fn = {:#?}", mir_fn);
         //        let sigs = self.ty_ctx.body_tables(b).liberated_fn_sigs();
@@ -558,20 +590,43 @@ impl<'a> CompilerCalls<'a> for RlslCompilerCalls {
                 tcx.sess,
             );
             let h = compute_incremental_hashes_map(*tcx);
-            trans_crate(*tcx, s.analysis.unwrap().clone(), h, &f);
-            //let visitor = RlslVisitor::new(s);
+            let mut visitor = RlslVisitor::new(s);
+            let items = trans_crate(*tcx, s.analysis.unwrap().clone(), h, &f);
+            for item in &items {
+                //println!("---------");
+                //let iter = map.iter_accesses(|ref source, other|{
+                //    println!("source = {:?}", source);
+                //    println!("other = {:?}", other);
+                //              //      if let &TransItem::Fn(ref inst) = source {
+                //              //          println!("inst = {:#?}", (inst.def.def_id()));
+                //              //          //println!("inst = {:#?}", tcx.maybe_optimized_mir(inst.def.def_id()));//
+                //              //          //if let Some(ref mir) = tcx.maybe_optimized_mir(inst.def.def_id()){
+                //              //          //    visitor.visit_mir(mir);
+                //              //          //}
+                //              //      }
+                //});
+                if let &TransItem::Fn(ref inst) = item {
+                    println!("inst = {:#?}", (inst.def.def_id()));
+                    //println!("inst = {:#?}", tcx.maybe_optimized_mir(inst.def.def_id()));
+                    if let Some(ref mir) = tcx.maybe_optimized_mir(inst.def.def_id()) {
+                        visitor.visit_mir(mir);
+                    }
+                }
+            }
+            //println!("item = {:?}", item);
             //visitor.build_module();
         };
         controller
     }
 }
 use rustc_trans::back::write::OngoingCrateTranslation;
+use rustc_trans::TransItem;
 pub fn trans_crate<'a, 'tcx>(
     tcx: ty::TyCtxt<'a, 'tcx, 'tcx>,
     analysis: ty::CrateAnalysis,
     incremental_hashes_map: IncrementalHashesMap,
     output_filenames: &rustc::session::config::OutputFilenames,
-) -> () {
+) -> FxHashSet<TransItem<'tcx>> {
     //check_for_rustc_errors_attr(tcx);
 
     // Be careful with this krate: obviously it gives access to the
@@ -588,14 +643,21 @@ pub fn trans_crate<'a, 'tcx>(
     let exported_symbol_node_ids = find_exported_symbols(tcx, &reachable);
     let shared_ccx = SharedCrateContext::new(tcx, check_overflow, output_filenames);
     let exported_symbols = ExportedSymbols::compute(tcx, &exported_symbol_node_ids);
-    let (items, inlining_map) = rustc_trans::collector::collect_crate_translation_items(
+    //    let (items, _) =
+    //        rustc_trans::collect_and_partition_translation_items(&shared_ccx, &exported_symbols);
+    let (items, _) = rustc_trans::collector::collect_crate_translation_items(
         &shared_ccx,
         &exported_symbols,
-        rustc_trans::collector::TransItemCollectionMode::Eager,
+        rustc_trans::collector::TransItemCollectionMode::Lazy,
     );
-    for item in &items {
-        println!("item = {:?}", item);
-    }
+    items
+    //    for item in &items {
+    //        if let &TransItem::Fn(ref inst) = item{
+    //            println!("inst = {:#?}", (inst.def.def_id()));
+    //            //println!("inst = {:#?}", tcx.maybe_optimized_mir(inst.def.def_id()));
+    //        }
+    //        //println!("item = {:?}", item);
+    //    }
     //    let (metadata_llcx, metadata_llmod, metadata, metadata_incr_hashes) =
     //        time(tcx.sess.time_passes(), "write metadata", || {
     //            write_metadata(tcx, &link_meta, &exported_symbol_node_ids)
@@ -622,9 +684,6 @@ pub fn trans_crate<'a, 'tcx>(
 }
 fn main() {
     env_logger::init();
-    info!("hello");
-    debug!("debug");
-    error!("error");
     let mut calls = RlslCompilerCalls;
     let result = run(move || {
         let (a, b) = run_compiler(&get_args(), &mut calls, None, None);
