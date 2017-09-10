@@ -1,1 +1,1 @@
-RUST_LOG=error cargo run --release -- rlsl-example/src/main.rs --extern core=libcore.rlib --extern std=libstd.rlib -L . -A warnings -Z always-encode-mir && spirv-val shader.spv && spirv-cross shader.spv && spirv-dis shader.spv
+RUST_LOG=error cargo run --bin rlsl --release -- rlsl-example/src/main.rs --extern core=libcore.rlib --extern std=libstd.rlib -L . -A warnings -Z always-encode-mir && spirv-val shader.spv && spirv-cross shader.spv && spirv-dis shader.spv
