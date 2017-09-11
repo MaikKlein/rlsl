@@ -1,14 +1,17 @@
 use std::collections::HashMap;
+use rustc;
 use super::*;
 pub struct SpirvTyCache<'a> {
     pub ty_cache: HashMap<rustc::ty::Ty<'a>, SpirvTy>,
 }
 use rustc::ty;
-impl<'a> SpirvTyCache<'a> {
+impl<'tcx> SpirvTyCache<'tcx> {
     pub fn new() -> Self {
-        SpirvTyCache { ty_cache: HashMap::new() }
+        SpirvTyCache {
+            ty_cache: HashMap::new(),
+        }
     }
-    pub fn from_ty<'tcx>(&'tcx mut self, builder: &mut Builder, ty: rustc::ty::Ty<'a>) -> SpirvTy {
+    pub fn from_ty(&mut self, builder: &mut Builder, ty: rustc::ty::Ty<'tcx>) -> SpirvTy {
         use rustc::ty::TypeVariants;
         if let Some(ty) = self.ty_cache.get(ty) {
             return *ty;
@@ -32,12 +35,29 @@ impl<'a> SpirvTyCache<'a> {
                     .collect();
                 builder.type_function(ret_ty.word, &input_ty).into()
             }
+            TypeVariants::TyRawPtr(type_and_mut) => {
+                let inner = self.from_ty(builder, type_and_mut.ty);
+                builder
+                    .type_pointer(None, spirv::StorageClass::Function, inner.word)
+                    .into()
+            }
             ref r => unimplemented!("{:?}", r),
         };
         self.ty_cache.insert(ty, spirv_type);
         spirv_type
     }
-    pub fn ty_ast_ptr(&mut self, builder: &mut Builder, ty: ty::Ty) -> SpirvTy {
-        unimplemented!()
+
+    pub fn from_ty_as_ptr<'a, 'gcx>(
+        &mut self,
+        builder: &mut Builder,
+        tcx: ty::TyCtxt<'a, 'gcx, 'tcx>,
+        ty: ty::Ty<'tcx>,
+    ) -> SpirvTy {
+        let t = ty::TypeAndMut {
+            ty,
+            mutbl: rustc::hir::Mutability::MutMutable,
+        };
+        let ty_ptr = tcx.mk_ptr(t);
+        self.from_ty(builder, ty_ptr)
     }
 }

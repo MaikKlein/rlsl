@@ -29,6 +29,7 @@
 fn test(f: f32, f3: f32) -> f32 {
     f + f3
 }
+#[entry(vertex)]
 fn vert() {
     let f: f32 = 4.0;
     let f1: f32 = 5.0;

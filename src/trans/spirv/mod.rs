@@ -2,6 +2,7 @@ pub mod terminator;
 pub mod rvalue;
 pub mod tycache;
 
+use rustc::hir::map::Map;
 use rspirv;
 use std::collections::HashMap;
 use rustc;
@@ -50,9 +51,11 @@ impl<'tcx> SpirvCtx<'tcx> {
         &mut self,
         local_decls: &D,
         operand: &mir::Operand<'tcx>,
-        tcx: ty::TyCtxt<'a, 'gcx, 'tcx>
+        tcx: ty::TyCtxt<'a, 'gcx, 'tcx>,
     ) -> SpirvExpr
-    where D: mir::HasLocalDecls<'tcx>{
+    where
+        D: mir::HasLocalDecls<'tcx>,
+    {
         let ty = operand.ty(local_decls, tcx);
         let spirv_ty = self.from_ty(ty);
         match operand {
@@ -95,6 +98,13 @@ impl<'tcx> SpirvCtx<'tcx> {
     pub fn from_ty(&mut self, ty: ty::Ty<'tcx>) -> SpirvTy {
         self.ty_cache.from_ty(&mut self.builder, ty)
     }
+    pub fn from_ty_as_ptr<'a, 'gcx>(
+        &mut self,
+        tcx: ty::TyCtxt<'a, 'gcx, 'tcx>,
+        ty: ty::Ty<'tcx>,
+    ) -> SpirvTy {
+        self.ty_cache.from_ty_as_ptr(&mut self.builder, tcx, ty)
+    }
     pub fn new() -> Self {
         SpirvCtx {
             builder: Builder::new(),
@@ -122,14 +132,44 @@ pub struct RlslVisitor<'a, 'tcx: 'a> {
     pub ty_ctx: ty::TyCtxt<'a, 'tcx, 'tcx>,
     current_table: Vec<&'a rustc::ty::TypeckTables<'tcx>>,
     pub mir: Option<&'a mir::Mir<'tcx>>,
+    pub entry: Option<IntrinsicEntry>,
     ctx: SpirvCtx<'tcx>,
 }
 
 #[derive(Debug)]
-pub enum Intrinsic {
+pub enum IntrinsicVec {
     Vec(u32),
 }
-pub fn extract_intrinsic(attr: &[syntax::ast::Attribute]) -> Option<Vec<Intrinsic>> {
+#[derive(Debug)]
+pub enum IntrinsicEntry {
+    Vertex,
+    Fragment,
+}
+pub fn extract_intrinsic_entry(attr: &[syntax::ast::Attribute]) -> Option<IntrinsicEntry> {
+    let spirv = attr.iter()
+        .filter_map(|a| a.meta())
+        .find(|meta| meta.name.as_str() == "entry");
+    if let Some(spirv) = spirv {
+        let list = spirv.meta_item_list().and_then(|nested_list| {
+            nested_list
+                .iter()
+                .map(|nested_meta| match nested_meta.node {
+                    syntax::ast::NestedMetaItemKind::MetaItem(ref meta) => {
+                        match &*meta.name.as_str() {
+                            "vertex" => IntrinsicEntry::Vertex,
+                            "fragment" => IntrinsicEntry::Fragment,
+                            ref rest => unimplemented!("{:?}", rest),
+                        }
+                    }
+                    ref rest => unimplemented!("{:?}", rest),
+                })
+                .nth(0)
+        });
+        return list;
+    }
+    None
+}
+pub fn extract_intrinsic_vec(attr: &[syntax::ast::Attribute]) -> Option<Vec<IntrinsicVec>> {
     let spirv = attr.iter()
         .filter_map(|a| a.meta())
         .find(|meta| meta.name.as_str() == "spirv");
@@ -139,12 +179,12 @@ pub fn extract_intrinsic(attr: &[syntax::ast::Attribute]) -> Option<Vec<Intrinsi
                 .iter()
                 .map(|nested_meta| match nested_meta.node {
                     syntax::ast::NestedMetaItemKind::Literal(ref lit) => match lit.node {
-                        syntax::ast::LitKind::Str(ref sym, _) => Intrinsic::Vec(2),
+                        syntax::ast::LitKind::Str(ref sym, _) => IntrinsicVec::Vec(2),
                         ref rest => unimplemented!("{:?}", rest),
                     },
                     syntax::ast::NestedMetaItemKind::MetaItem(ref meta) => {
                         match &*meta.name.as_str() {
-                            "Vec2" => Intrinsic::Vec(2),
+                            "Vec2" => IntrinsicVec::Vec(2),
                             ref rest => unimplemented!("{:?}", rest),
                         }
                     }
@@ -162,6 +202,13 @@ pub fn trans_spirv<'a, 'tcx>(tcx: ty::TyCtxt<'a, 'tcx, 'tcx>, items: &FxHashSet<
     for item in items {
         if let &TransItem::Fn(ref instance) = item {
             let mir = tcx.maybe_optimized_mir(instance.def_id());
+            let map: &Map = &tcx.hir;
+            let node_id = map.as_local_node_id(instance.def_id()).expect("node id");
+            let node = map.find(node_id).expect("node");
+            if let rustc::hir::map::Node::NodeItem(ref item) = node {
+                visitor.entry = extract_intrinsic_entry(&*item.attrs);
+            }
+            //println!("node = {:#?}", node);
             if let Some(ref mir) = mir {
                 visitor.mir = Some(mir);
                 visitor.visit_mir(mir);
@@ -216,6 +263,7 @@ impl<'a, 'tcx: 'a> RlslVisitor<'a, 'tcx> {
             current_table: Vec::new(),
             ctx,
             mir: None,
+            entry: None,
         };
         visitor
     }
@@ -252,9 +300,18 @@ impl<'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'a, 'tcx> {
     }
     fn visit_mir(&mut self, mir: &mir::Mir<'tcx>) {
         let ret_ty_spirv = self.ctx.from_ty(mir.return_ty);
-        let args_ty = mir.args_iter().map(|l| mir.local_decls[l].ty);
+        let args_ty: Vec<_> = mir.args_iter()
+            .map(|l| {
+                let ty = mir.local_decls[l].ty;
+                let t = ty::TypeAndMut {
+                    ty,
+                    mutbl: rustc::hir::Mutability::MutMutable,
+                };
+                self.ty_ctx.mk_ptr(t)
+            })
+            .collect();
         let fn_sig = self.ty_ctx.mk_fn_sig(
-            args_ty,
+            args_ty.into_iter(),
             mir.return_ty,
             false,
             hir::Unsafety::Normal,
@@ -275,7 +332,7 @@ impl<'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'a, 'tcx> {
         self.ctx.builder.begin_basic_block(None).expect("block");
         for local_arg in mir.args_iter() {
             let local_decl = &mir.local_decls[local_arg];
-            let spirv_arg_ty = self.ctx.from_ty(local_decl.ty);
+            let spirv_arg_ty = self.ctx.from_ty_as_ptr(self.ty_ctx, local_decl.ty);
             let spirv_param = self.ctx
                 .builder
                 .function_parameter(spirv_arg_ty.word)
@@ -284,7 +341,7 @@ impl<'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'a, 'tcx> {
         }
         for local_var in mir.vars_and_temps_iter() {
             let local_decl = &mir.local_decls[local_var];
-            let spirv_var_ty = self.ctx.from_ty(local_decl.ty);
+            let spirv_var_ty = self.ctx.from_ty_as_ptr(self.ty_ctx, local_decl.ty);
             let spirv_var = self.ctx.builder.variable(
                 spirv_var_ty.word,
                 None,
@@ -297,7 +354,7 @@ impl<'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'a, 'tcx> {
             use rustc_data_structures::indexed_vec::Idx;
             let local = mir::Local::new(0);
             let local_decl = &mir.local_decls[local];
-            let spirv_var_ty = self.ctx.from_ty(local_decl.ty);
+            let spirv_var_ty = self.ctx.from_ty_as_ptr(self.ty_ctx, local_decl.ty);
             let spirv_var = self.ctx.builder.variable(
                 spirv_var_ty.word,
                 None,
@@ -307,8 +364,13 @@ impl<'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'a, 'tcx> {
             self.ctx.vars.insert(local, SpirvVar(spirv_var));
         }
         self.super_mir(mir);
-        println!("mir = {:#?}", mir);
+        //println!("mir = {:#?}", mir);
         self.ctx.builder.end_function().expect("end fn");
+        if self.entry.is_some() {
+            self.ctx
+                .builder
+                .entry_point(spirv::ExecutionModel::Vertex, spirv_function, "main", &[])
+        }
     }
     fn visit_assign(
         &mut self,
@@ -319,7 +381,7 @@ impl<'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'a, 'tcx> {
     ) {
         self.super_assign(block, lvalue, rvalue, location);
         let ty = rvalue.ty(&self.mir.unwrap().local_decls, self.ty_ctx);
-        if let ty::TypeVariants::TyTuple(ref slice, _) = ty.sty{
+        if let ty::TypeVariants::TyTuple(ref slice, _) = ty.sty {
             if slice.len() == 0 {
                 return;
             }
@@ -330,7 +392,10 @@ impl<'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'a, 'tcx> {
             &mir::Lvalue::Local(local) => {
                 let expr = self.ctx.exprs.get(&location).expect("expr");
                 let var = self.ctx.vars.get(&local).expect("local");
-                self.ctx.builder.store(var.0, expr.0, None, &[]).expect("store");
+                self.ctx
+                    .builder
+                    .store(var.0, expr.0, None, &[])
+                    .expect("store");
             }
             rest => unimplemented!("{:?}", rest),
         };
@@ -353,7 +418,7 @@ impl<'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'a, 'tcx> {
     ) {
         self.super_terminator_kind(block, kind, location);
         let mir = self.mir.unwrap();
-        match kind{
+        match kind {
             &mir::TerminatorKind::Return => {
                 match mir.return_ty.sty {
                     ty::TypeVariants::TyTuple(ref slice, _) if slice.len() == 0 => {
@@ -361,11 +426,16 @@ impl<'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'a, 'tcx> {
                     }
                     _ => {
                         use rustc_data_structures::indexed_vec::Idx;
+                        let spirv_ty = { self.ctx.from_ty(mir.return_ty) };
                         let var = self.ctx.vars.get(&mir::Local::new(0)).unwrap();
-                        self.ctx.builder.ret_value(var.0).expect("ret value");
+                        let load = self.ctx
+                            .builder
+                            .load(spirv_ty.word, None, var.0, None, &[])
+                            .expect("load");
+                        self.ctx.builder.ret_value(load).expect("ret value");
                     }
                 };
-            } ,
+            }
             rest => unimplemented!("{:?}", rest),
         };
         //        match kind {
@@ -413,7 +483,6 @@ impl<'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'a, 'tcx> {
             &mir::Rvalue::Use(ref operand) => {
                 let load = self.ctx.load_operand(local_decls, operand, self.ty_ctx);
                 self.ctx.exprs.insert(location, load);
-
             }
             &mir::Rvalue::NullaryOp(..) => {}
             &mir::Rvalue::CheckedBinaryOp(..) => {}
