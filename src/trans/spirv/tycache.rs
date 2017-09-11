@@ -53,7 +53,7 @@ impl<'tcx> SpirvTyCache<'tcx> {
         tcx: ty::TyCtxt<'a, 'gcx, 'tcx>,
         ty: ty::Ty<'tcx>,
     ) -> SpirvTy {
-        let t = ty::TypeAndMut {
+            let t = ty::TypeAndMut {
             ty,
             mutbl: rustc::hir::Mutability::MutMutable,
         };

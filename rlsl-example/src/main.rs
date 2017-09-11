@@ -33,6 +33,7 @@ fn test(f: f32, f3: f32) -> f32 {
 fn vert() {
     let f: f32 = 4.0;
     let f1: f32 = 5.0;
+    let f2 = test(f, f1);
     //let f3 = Vec2::foo(); // Not visible
     //let f2 = test(f, f1); // Visible
     //let v = Vec2 { x: 1.0, y: 2.0 };

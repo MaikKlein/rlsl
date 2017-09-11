@@ -43,6 +43,8 @@ pub fn trans_items<'a, 'tcx>(
 pub struct SpirvCtx<'tcx> {
     pub builder: Builder,
     pub ty_cache: tycache::SpirvTyCache<'tcx>,
+    pub fns: HashMap<hir::def_id::DefId, SpirvFn>,
+    pub forward_fns: HashMap<hir::def_id::DefId, SpirvFn>,
     pub vars: HashMap<mir::Local, SpirvVar>,
     pub exprs: HashMap<mir::Location, SpirvExpr>,
 }
@@ -109,11 +111,15 @@ impl<'tcx> SpirvCtx<'tcx> {
         SpirvCtx {
             builder: Builder::new(),
             ty_cache: tycache::SpirvTyCache::new(),
+            fns: HashMap::new(),
+            forward_fns: HashMap::new(),
             vars: HashMap::new(),
             exprs: HashMap::new(),
         }
     }
 }
+#[derive(Copy, Clone, Debug)]
+pub struct SpirvFn(pub spirv::Word);
 #[derive(Copy, Clone, Debug)]
 pub struct SpirvVar(pub spirv::Word);
 #[derive(Copy, Clone, Debug)]
@@ -133,6 +139,7 @@ pub struct RlslVisitor<'a, 'tcx: 'a> {
     current_table: Vec<&'a rustc::ty::TypeckTables<'tcx>>,
     pub mir: Option<&'a mir::Mir<'tcx>>,
     pub entry: Option<IntrinsicEntry>,
+    pub def_id: Option<hir::def_id::DefId>,
     ctx: SpirvCtx<'tcx>,
 }
 
@@ -210,10 +217,13 @@ pub fn trans_spirv<'a, 'tcx>(tcx: ty::TyCtxt<'a, 'tcx, 'tcx>, items: &FxHashSet<
             }
             //println!("node = {:#?}", node);
             if let Some(ref mir) = mir {
+                visitor.def_id = Some(instance.def_id());
                 visitor.mir = Some(mir);
                 visitor.visit_mir(mir);
                 visitor.mir = None;
             }
+
+            println!("instance = {:?}", instance);
         }
     }
     visitor.build_module();
@@ -245,7 +255,7 @@ pub fn resolve_fn_call<'a, 'tcx>(
             _ => unimplemented!(),
         };
     }
-    unimplemented!()
+    def_id
 }
 impl<'a, 'tcx: 'a> RlslVisitor<'a, 'tcx> {
     pub fn get_table(&self) -> &'a ty::TypeckTables<'tcx> {
@@ -264,6 +274,7 @@ impl<'a, 'tcx: 'a> RlslVisitor<'a, 'tcx> {
             ctx,
             mir: None,
             entry: None,
+            def_id: None,
         };
         visitor
     }
@@ -320,15 +331,19 @@ impl<'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'a, 'tcx> {
         let fn_ty = self.ty_ctx.mk_fn_ptr(ty::Binder(fn_sig));
         let fn_ty_spirv = self.ctx.from_ty(fn_ty);
 
+        let def_id = self.def_id.unwrap();
+        let forward_fn = self.ctx.forward_fns.get(&def_id).map(|f| f.0);
         let spirv_function = self.ctx
             .builder
             .begin_function(
                 ret_ty_spirv.word,
-                None,
+                forward_fn,
                 spirv::FunctionControl::empty(),
                 fn_ty_spirv.word,
             )
             .expect("begin fn");
+        let def_id = self.def_id.unwrap();
+        self.ctx.fns.insert(def_id, SpirvFn(spirv_function));
         self.ctx.builder.begin_basic_block(None).expect("block");
         for local_arg in mir.args_iter() {
             let local_decl = &mir.local_decls[local_arg];
@@ -386,8 +401,6 @@ impl<'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'a, 'tcx> {
                 return;
             }
         }
-        println!("lvalue = {:?}", lvalue);
-        println!("ty = {:?}", ty);
         match lvalue {
             &mir::Lvalue::Local(local) => {
                 let expr = self.ctx.exprs.get(&location).expect("expr");
@@ -434,7 +447,75 @@ impl<'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'a, 'tcx> {
                             .expect("load");
                         self.ctx.builder.ret_value(load).expect("ret value");
                     }
+                    _ => (),
                 };
+            }
+            &mir::TerminatorKind::Call {
+                ref func, ref args, ref destination, ..
+            } => {
+                let local_decls = &self.mir.unwrap().local_decls;
+                match func {
+                    &mir::Operand::Constant(ref constant) => {
+                        let ret_ty_binder = constant.ty.fn_sig(self.ty_ctx).output();
+                        let ret_ty = self.ty_ctx
+                            .erase_late_bound_regions_and_normalize(&ret_ty_binder);
+                        let spirv_ty = self.ctx.from_ty(ret_ty);
+                        if let mir::Literal::Value { ref value } = constant.literal {
+                            use rustc::middle::const_val::ConstVal;
+                            if let &ConstVal::Function(def_id, ref subst) = value {
+                                let resolve_fn_id = resolve_fn_call(self.ty_ctx, def_id, subst);
+                                let spirv_fn =
+                                    self.ctx.fns.get(&resolve_fn_id).map(|v| *v).unwrap_or_else(
+                                        || {
+                                            let forward_id = SpirvFn(self.ctx.builder.id());
+                                            self.ctx.forward_fns.insert(resolve_fn_id, forward_id);
+                                            forward_id
+                                        },
+                                    );
+                                let arg_operand_loads: Vec<_> = args.iter()
+                                    .map(|arg| {
+                                        let operand =
+                                            self.ctx.load_operand(local_decls, arg, self.ty_ctx).0;
+                                        let var_ty = arg.ty(local_decls, self.ty_ctx);
+                                        let spirv_var_ty =
+                                            self.ctx.from_ty_as_ptr(self.ty_ctx, var_ty);
+                                        let spirv_var = self.ctx.builder.variable(
+                                            spirv_var_ty.word,
+                                            None,
+                                            spirv::StorageClass::Function,
+                                            None,
+                                        );
+                                        self.ctx
+                                            .builder
+                                            .store(spirv_var, operand, None, &[])
+                                            .expect("store");
+                                        spirv_var
+                                    })
+                                    .collect();
+                                let spirv_fn_call = self.ctx.builder.function_call(
+                                    spirv_ty.word,
+                                    None,
+                                    spirv_fn.0,
+                                    &arg_operand_loads,
+                                ).expect("fn call");
+                                if let &Some(ref dest) = destination{
+                                    let &(ref lvalue, _) = dest;
+                                    match lvalue {
+                                        &mir::Lvalue::Local(local) => {
+                                            let var = self.ctx.vars.get(&local).expect("local");
+                                            self.ctx
+                                                .builder
+                                                .store(var.0, spirv_fn_call, None, &[])
+                                                .expect("store");
+                                        }
+                                        rest => unimplemented!("{:?}", rest),
+                                    };
+                                }
+                            }
+                        }
+                    }
+                    _ => (),
+                }
             }
             rest => unimplemented!("{:?}", rest),
         };
