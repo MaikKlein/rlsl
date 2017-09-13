@@ -11,6 +11,7 @@
 debug_assert_ne, unreachable, unimplemented, write, writeln, try)]
 extern crate core as __core;
 
+pub use core::iter;
 pub use core::clone;
 pub use core::marker;
 pub use core::ops;

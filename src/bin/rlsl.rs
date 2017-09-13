@@ -260,6 +260,7 @@ impl<'a> CompilerCalls<'a> for RlslCompilerCalls {
                 &[],
                 tcx.sess,
             );
+            rustc_mir::transform::dump_mir::emit_mir(*tcx, &f);
             let items = rlsl::trans::spirv::trans_items(*tcx, s.analysis.unwrap().clone(), &f);
             rlsl::trans::spirv::trans_spirv(*tcx, &items);
         };
@@ -270,7 +271,7 @@ fn main() {
     env_logger::init();
     let mut calls = RlslCompilerCalls;
     let result = run(move || {
-        let (a, b) = run_compiler(&get_args(), &mut calls, None, None);
+        let (a, b) = run_compiler(&get_args(), &mut calls, None, Some(box std::io::stdout()));
         (a, b)
     });
 }
