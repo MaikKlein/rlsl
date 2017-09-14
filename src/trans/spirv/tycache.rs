@@ -18,9 +18,9 @@ impl<'tcx> SpirvTyCache<'tcx> {
         }
         let spirv_type: SpirvTy = match ty.sty {
             TypeVariants::TyBool => builder.type_bool().into(),
-            TypeVariants::TyUint(uint_ty) => {
-                builder.type_int(uint_ty.bit_width().unwrap() as u32, 0).into()
-            }
+            TypeVariants::TyUint(uint_ty) => builder
+                .type_int(uint_ty.bit_width().unwrap() as u32, 0)
+                .into(),
             TypeVariants::TyFloat(f_ty) => {
                 use syntax::ast::FloatTy;
                 match f_ty {
@@ -56,7 +56,7 @@ impl<'tcx> SpirvTyCache<'tcx> {
         tcx: ty::TyCtxt<'a, 'gcx, 'tcx>,
         ty: ty::Ty<'tcx>,
     ) -> SpirvTy {
-            let t = ty::TypeAndMut {
+        let t = ty::TypeAndMut {
             ty,
             mutbl: rustc::hir::Mutability::MutMutable,
         };

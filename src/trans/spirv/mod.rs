@@ -2,6 +2,7 @@ pub mod terminator;
 pub mod rvalue;
 pub mod tycache;
 
+use rustc_data_structures::indexed_vec::Idx;
 use rustc_data_structures::control_flow_graph::ControlFlowGraph;
 use rustc::mir::visit::Visitor;
 use rustc::hir::map::Map;
@@ -227,7 +228,6 @@ pub struct RlslVisitor<'a, 'tcx: 'a> {
     pub def_id: Option<hir::def_id::DefId>,
     pub merge_collector: Option<MergeCollector>,
     pub constants: HashMap<mir::Constant<'tcx>, SpirvVar>,
-    pub forward_labels: Vec<SpirvLabel>,
     pub label_blocks: HashMap<mir::BasicBlock, SpirvLabel>,
     pub ctx: SpirvCtx<'tcx>,
 }
@@ -318,7 +318,7 @@ pub fn trans_spirv<'a, 'tcx>(tcx: ty::TyCtxt<'a, 'tcx, 'tcx>, items: &FxHashSet<
             println!("instance = {:?}", instance);
         }
     }
-    //visitor.build_module();
+    visitor.build_module();
 }
 
 pub fn resolve_fn_call<'a, 'tcx>(
@@ -422,7 +422,6 @@ impl<'a, 'tcx: 'a> RlslVisitor<'a, 'tcx> {
             merge_collector: None,
             constants: HashMap::new(),
             label_blocks: HashMap::new(),
-            forward_labels: Vec::new(),
         };
         visitor
     }
@@ -451,12 +450,14 @@ impl<'a, 'tcx: 'a> RlslVisitor<'a, 'tcx> {
 impl<'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'a, 'tcx> {
     fn visit_basic_block_data(&mut self, block: mir::BasicBlock, data: &mir::BasicBlockData<'tcx>) {
         println!("basic block");
-        let label = self.ctx
-            .builder
-            .begin_basic_block(self.forward_labels.pop().map(|i| i.0))
-            .expect("begin block");
-        let spirv_label = SpirvLabel(label);
-        self.label_blocks.insert(block, spirv_label);
+
+        {
+            let spirv_label = self.label_blocks.get(&block).expect("no spirv label");
+            let label = self.ctx
+                .builder
+                .begin_basic_block(Some(spirv_label.0))
+                .expect("begin block");
+        }
 
         self.super_basic_block_data(block, data);
     }
@@ -469,7 +470,11 @@ impl<'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'a, 'tcx> {
         self.super_statement(block, statement, location);
     }
     fn visit_mir(&mut self, mir: &mir::Mir<'tcx>) {
+        for (block, _) in mir.basic_blocks().iter_enumerated(){
+            self.label_blocks.insert(block, SpirvLabel(self.ctx.builder.id()));
+        }
         let constants = collect_constants(mir);
+
         let ret_ty_spirv = self.ctx.from_ty(mir.return_ty);
         let args_ty: Vec<_> = mir.args_iter()
             .map(|l| {
@@ -555,10 +560,11 @@ impl<'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'a, 'tcx> {
                 None,
             );
             self.ctx.vars.insert(local, SpirvVar(spirv_var));
+            let spirv_label = self.label_blocks
+                .get(&mir::BasicBlock::new(0))
+                .expect("No first label");
+            self.ctx.builder.branch(spirv_label.0).expect("branch");
         }
-        let next_label = SpirvLabel(self.ctx.builder.id());
-        self.forward_labels.push(next_label);
-        self.ctx.builder.branch(next_label.0);
         self.super_mir(mir);
         // TODO: Other cases
         //        for scope in &mir.visibility_scopes {
@@ -645,17 +651,27 @@ impl<'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'a, 'tcx> {
                     _ => (),
                 };
             }
-            &mir::TerminatorKind::SwitchInt { ref targets, .. } => {
+            &mir::TerminatorKind::Goto {target} => {
+                let label = self.label_blocks.get(&target).expect("no goto label");
+                self.ctx.builder.branch(label.0);
+            }
+            &mir::TerminatorKind::SwitchInt {switch_ty, ref targets, .. } => {
                 use rustc_data_structures::control_flow_graph::ControlFlowGraph;
                 let mir = self.mir.unwrap();
                 println!("targets = {:?}", targets);
                 let collector = self.merge_collector.as_ref().unwrap();
-                let merge_block = collector.get(&location).expect("Unable to find a merge block");
+                let merge_block = collector
+                    .get(&location)
+                    .expect("Unable to find a merge block");
+                let merge_block_label = self.label_blocks.get(merge_block).expect("no label");
                 println!("merge_block = {:?}", merge_block);
-//                let label = self.ctx.builder.id();
-//                let spirv_label = SpirvLabel(label);
-//                self.forward_labels.push(spirv_label);
-//                self.ctx.builder.branch(label).expect("label");
+                println!("switch_ty = {:?}", switch_ty);
+                let spirv_ty = self.ctx.from_ty(switch_ty);
+                let b = self.ctx.builder.constant_true(spirv_ty.word);
+                self.ctx.builder.selection_merge(merge_block_label.0, spirv::SelectionControl::empty());
+                let true_label = self.label_blocks.get(&targets[0]).expect("true label");
+                let false_label = self.label_blocks.get(&targets[1]).expect("false label");
+                self.ctx.builder.branch_conditional(b, true_label.0, false_label.0, &[]);
             }
             &mir::TerminatorKind::Call {
                 ref func,
@@ -663,7 +679,6 @@ impl<'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'a, 'tcx> {
                 ref destination,
                 ..
             } => {
-                let destionation = destination.as_ref().expect("Fn call is diverging");
                 let local_decls = &self.mir.unwrap().local_decls;
                 match func {
                     &mir::Operand::Constant(ref constant) => {
@@ -719,10 +734,10 @@ impl<'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'a, 'tcx> {
                     }
                     _ => (),
                 }
-                let label = self.ctx.builder.id();
-                let spirv_label = SpirvLabel(label);
-                self.forward_labels.push(spirv_label);
-                self.ctx.builder.branch(label).expect("label");
+                let destination = destination.as_ref().expect("Fn call is diverging");
+                let &(_, target_block) = destination;
+                let target_label = self.label_blocks.get(&target_block).expect("no label");
+                self.ctx.builder.branch(target_label.0).expect("label");
             }
             rest => unimplemented!("{:?}", rest),
         };
