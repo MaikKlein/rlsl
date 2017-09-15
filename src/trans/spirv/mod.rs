@@ -180,6 +180,27 @@ impl<'tcx> SpirvOperand<'tcx> {
 }
 
 impl<'tcx> SpirvCtx<'tcx> {
+    pub fn build_module(self) {
+        use rspirv::binary::Assemble;
+        use rspirv::binary::Disassemble;
+        use std::mem::size_of;
+        use std::fs::File;
+        use std::io::Write;
+        let mut f = File::create("shader.spv").unwrap();
+        let spirv_module = self.builder.module();
+        let bytes: Vec<u8> = spirv_module
+            .assemble()
+            .iter()
+            .flat_map(|val| {
+                (0..size_of::<u32>()).map(move |i| ((val >> (8 * i)) & 0xff) as u8)
+            })
+            .collect();
+        let mut loader = rspirv::mr::Loader::new();
+        //let bytes = b.module().assemble_bytes();
+        rspirv::binary::parse_bytes(&bytes, &mut loader);
+        println!("{}", loader.module().disassemble());
+        f.write_all(&bytes);
+    }
     pub fn from_ty(&mut self, ty: rustc::ty::Ty<'tcx>) -> SpirvTy {
         use rustc::ty::TypeVariants;
         if let Some(ty) = self.ty_cache.get(ty) {
@@ -232,8 +253,12 @@ impl<'tcx> SpirvCtx<'tcx> {
         self.from_ty(ty_ptr)
     }
     pub fn new() -> Self {
+        let mut builder = Builder::new();
+        builder.capability(spirv::Capability::Shader);
+        builder.ext_inst_import("GLSL.std.450");
+        builder.memory_model(spirv::AddressingModel::Logical, spirv::MemoryModel::GLSL450);
         SpirvCtx {
-            builder: Builder::new(),
+            builder,
             ty_cache: HashMap::new(),
             fns: HashMap::new(),
             forward_fns: HashMap::new(),
@@ -290,7 +315,7 @@ pub struct RlslVisitor<'a, 'tcx: 'a> {
     pub merge_collector: Option<MergeCollector>,
     pub constants: HashMap<mir::Constant<'tcx>, SpirvVar<'tcx>>,
     pub label_blocks: HashMap<mir::BasicBlock, SpirvLabel>,
-    pub ctx: SpirvCtx<'tcx>,
+    pub ctx: &'a mut SpirvCtx<'tcx>,
     pub vars: HashMap<mir::Local, SpirvVar<'tcx>>,
     pub exprs: HashMap<mir::Location, SpirvExpr>,
 }
@@ -357,20 +382,26 @@ pub fn extract_intrinsic_vec(attr: &[syntax::ast::Attribute]) -> Option<Vec<Intr
 
 pub fn trans_spirv<'a, 'tcx>(tcx: ty::TyCtxt<'a, 'tcx, 'tcx>, items: &FxHashSet<TransItem>) {
     use rustc::mir::visit::Visitor;
-    let mut visitor = RlslVisitor::new(tcx);
+    let mut ctx = SpirvCtx::new();
+    for item in items {
+        if let &TransItem::Fn(ref instance) = item {
+            ctx.forward_fns
+                .insert(instance.def_id(), SpirvFn(ctx.builder.id()));
+        }
+    }
     for item in items {
         if let &TransItem::Fn(ref instance) = item {
             let mir = tcx.maybe_optimized_mir(instance.def_id());
             let map: &Map = &tcx.hir;
             let node_id = map.as_local_node_id(instance.def_id()).expect("node id");
             let name = map.name(node_id);
-            println!("name = {:?}", name);
             let node = map.find(node_id).expect("node");
-            if let rustc::hir::map::Node::NodeItem(ref item) = node {
-                visitor.entry = extract_intrinsic_entry(&*item.attrs);
-            }
             //println!("node = {:#?}", node);
             if let Some(ref mir) = mir {
+                let mut visitor = RlslVisitor::new(&mut ctx, tcx);
+                if let rustc::hir::map::Node::NodeItem(ref item) = node {
+                    visitor.entry = extract_intrinsic_entry(&*item.attrs);
+                }
                 visitor.def_id = Some(instance.def_id());
                 visitor.mir = Some(mir);
                 visitor.merge_collector = Some(merge_collector(mir));
@@ -381,7 +412,7 @@ pub fn trans_spirv<'a, 'tcx>(tcx: ty::TyCtxt<'a, 'tcx, 'tcx>, items: &FxHashSet<
             println!("instance = {:?}", instance);
         }
     }
-    visitor.build_module();
+    ctx.build_module();
 }
 
 pub fn resolve_fn_call<'a, 'tcx>(
@@ -468,12 +499,7 @@ impl<'a, 'tcx: 'a> RlslVisitor<'a, 'tcx> {
     pub fn get_table(&self) -> &'a ty::TypeckTables<'tcx> {
         self.current_table.last().expect("no table yet")
     }
-    pub fn new(tcx: ty::TyCtxt<'a, 'tcx, 'tcx>) -> Self {
-        let mut ctx = SpirvCtx::new();
-        ctx.builder.capability(spirv::Capability::Shader);
-        ctx.builder.ext_inst_import("GLSL.std.450");
-        ctx.builder
-            .memory_model(spirv::AddressingModel::Logical, spirv::MemoryModel::GLSL450);
+    pub fn new(ctx: &'a mut SpirvCtx<'tcx>, tcx: ty::TyCtxt<'a, 'tcx, 'tcx>) -> Self {
         let mut visitor = RlslVisitor {
             map: &tcx.hir,
             ty_ctx: tcx,
@@ -489,27 +515,6 @@ impl<'a, 'tcx: 'a> RlslVisitor<'a, 'tcx> {
             vars: HashMap::new(),
         };
         visitor
-    }
-    pub fn build_module(self) {
-        use rspirv::binary::Assemble;
-        use rspirv::binary::Disassemble;
-        use std::mem::size_of;
-        use std::fs::File;
-        use std::io::Write;
-        let mut f = File::create("shader.spv").unwrap();
-        let spirv_module = self.ctx.builder.module();
-        let bytes: Vec<u8> = spirv_module
-            .assemble()
-            .iter()
-            .flat_map(|val| {
-                (0..size_of::<u32>()).map(move |i| ((val >> (8 * i)) & 0xff) as u8)
-            })
-            .collect();
-        let mut loader = rspirv::mr::Loader::new();
-        //let bytes = b.module().assemble_bytes();
-        rspirv::binary::parse_bytes(&bytes, &mut loader);
-        println!("{}", loader.module().disassemble());
-        f.write_all(&bytes);
     }
 }
 impl<'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'a, 'tcx> {
@@ -554,18 +559,20 @@ impl<'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'a, 'tcx> {
         let fn_ty_spirv = self.ctx.from_ty(fn_ty);
 
         let def_id = self.def_id.unwrap();
-        let forward_fn = self.ctx.forward_fns.get(&def_id).map(|f| f.0);
+        let forward_fn = self.ctx
+            .forward_fns
+            .get(&def_id)
+            .map(|f| f.0)
+            .expect("forward");
         let spirv_function = self.ctx
             .builder
             .begin_function(
                 ret_ty_spirv.word,
-                forward_fn,
+                Some(forward_fn),
                 spirv::FunctionControl::empty(),
                 fn_ty_spirv.word,
             )
             .expect("begin fn");
-        let def_id = self.def_id.unwrap();
-        self.ctx.fns.insert(def_id, SpirvFn(spirv_function));
         //self.ctx.builder.begin_basic_block(None).expect("block");
         for local_arg in mir.args_iter() {
             let local_decl = &mir.local_decls[local_arg];
@@ -759,14 +766,11 @@ impl<'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'a, 'tcx> {
                             use rustc::middle::const_val::ConstVal;
                             if let &ConstVal::Function(def_id, ref subst) = value {
                                 let resolve_fn_id = resolve_fn_call(self.ty_ctx, def_id, subst);
-                                let spirv_fn =
-                                    self.ctx.fns.get(&resolve_fn_id).map(|v| *v).unwrap_or_else(
-                                        || {
-                                            let forward_id = SpirvFn(self.ctx.builder.id());
-                                            self.ctx.forward_fns.insert(resolve_fn_id, forward_id);
-                                            forward_id
-                                        },
-                                    );
+                                let spirv_fn = self.ctx
+                                    .forward_fns
+                                    .get(&resolve_fn_id)
+                                    .map(|v| *v)
+                                    .expect("forward fn call");
                                 let arg_operand_loads: Vec<_> = args.iter()
                                     .map(|arg| {
                                         let operand = self.load_operand(arg);
