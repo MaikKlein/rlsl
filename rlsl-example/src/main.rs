@@ -26,11 +26,12 @@
 //        }
 //    }
 //}
-//fn test(f: f32, f3: f32) -> f32 {
-//    f + f3
-//}
+fn test(f: f32, f3: f32) -> f32 {
+    f + f3
+}
 #[entry(vertex)]
 fn vert() {
+    let f1 = test(1.0, 2.0);
     let f:f32 = if 2.0f32 > 1.0 { if 2.0f32 > 1.0 { 1.0 } else { 2.0 } } else { 2.0 };
     //let f:f32 = if 2.0f32 > 1.0 { 1.0 } else { 2.0 };
     //let f: f32 = 40.0;
