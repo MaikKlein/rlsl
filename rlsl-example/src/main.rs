@@ -1,14 +1,14 @@
 #![feature(custom_attribute, attr_literals)]
 
 //use std::ops::Add;
-//#[spirv(Vec2)]
-//#[repr(C)]
+#[spirv(Vec2)]
+#[repr(C)]
 //#[derive(Copy, Clone)]
-//struct Vec2 {
-//    x: f32,
-//    y: f32,
-//}
-////
+struct Vec2 {
+    x: f32,
+    y: f32,
+}
+//
 //trait Foo{
 //    fn foo() -> f32;
 //}
