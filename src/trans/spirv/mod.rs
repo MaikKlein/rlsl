@@ -1,8 +1,6 @@
 pub mod terminator;
 pub mod rvalue;
-pub mod tycache;
 
-use rustc_data_structures::indexed_vec::Idx;
 use rustc_data_structures::control_flow_graph::ControlFlowGraph;
 use rustc::mir::visit::Visitor;
 use rustc::hir::map::Map;
@@ -11,8 +9,6 @@ use std::collections::HashMap;
 use rustc;
 use rustc::{hir, mir};
 use spirv;
-use syntax::ast::NodeId;
-use rustc_driver::driver::CompileState;
 use rustc_data_structures::fx::FxHashSet;
 use rustc_trans::{SharedCrateContext, TransItem};
 use rustc::ty;
@@ -21,7 +17,6 @@ use rustc_trans::find_exported_symbols;
 use rustc_trans::back::symbol_export::ExportedSymbols;
 use rustc::session::config::OutputFilenames;
 use rspirv::mr::Builder;
-use rustc_data_structures::indexed_vec::IndexVec;
 use syntax;
 pub fn trans_items<'a, 'tcx>(
     tcx: ty::TyCtxt<'a, 'tcx, 'tcx>,
@@ -45,7 +40,7 @@ pub fn trans_items<'a, 'tcx>(
 
 pub struct SpirvCtx<'tcx> {
     pub builder: Builder,
-    pub ty_cache: tycache::SpirvTyCache<'tcx>,
+    pub ty_cache: HashMap<rustc::ty::Ty<'tcx>, SpirvTy>,
     pub fns: HashMap<hir::def_id::DefId, SpirvFn>,
     pub forward_fns: HashMap<hir::def_id::DefId, SpirvFn>,
 }
@@ -185,20 +180,61 @@ impl<'tcx> SpirvOperand<'tcx> {
 }
 
 impl<'tcx> SpirvCtx<'tcx> {
-    pub fn from_ty(&mut self, ty: ty::Ty<'tcx>) -> SpirvTy {
-        self.ty_cache.from_ty(&mut self.builder, ty)
+    pub fn from_ty(&mut self, ty: rustc::ty::Ty<'tcx>) -> SpirvTy {
+        use rustc::ty::TypeVariants;
+        if let Some(ty) = self.ty_cache.get(ty) {
+            return *ty;
+        }
+        let spirv_type: SpirvTy = match ty.sty {
+            TypeVariants::TyBool => self.builder.type_bool().into(),
+            TypeVariants::TyUint(uint_ty) => self.builder
+                .type_int(uint_ty.bit_width().unwrap() as u32, 0)
+                .into(),
+            TypeVariants::TyFloat(f_ty) => {
+                use syntax::ast::FloatTy;
+                match f_ty {
+                    FloatTy::F32 => self.builder.type_float(32).into(),
+                    FloatTy::F64 => self.builder.type_float(64).into(),
+                }
+            }
+            TypeVariants::TyTuple(slice, _) if slice.len() == 0 => self.builder.type_void().into(),
+            TypeVariants::TyFnPtr(sig) => {
+                let ret_ty = self.from_ty(sig.output().skip_binder());
+                let input_ty: Vec<_> = sig.inputs()
+                    .skip_binder()
+                    .iter()
+                    .map(|ty| self.from_ty(ty).word)
+                    .collect();
+                self.builder.type_function(ret_ty.word, &input_ty).into()
+            }
+            TypeVariants::TyRawPtr(type_and_mut) => {
+                let inner = self.from_ty(type_and_mut.ty);
+                self.builder
+                    .type_pointer(None, spirv::StorageClass::Function, inner.word)
+                    .into()
+            }
+            ref r => unimplemented!("{:?}", r),
+        };
+        self.ty_cache.insert(ty, spirv_type);
+        spirv_type
     }
+
     pub fn from_ty_as_ptr<'a, 'gcx>(
         &mut self,
         tcx: ty::TyCtxt<'a, 'gcx, 'tcx>,
         ty: ty::Ty<'tcx>,
     ) -> SpirvTy {
-        self.ty_cache.from_ty_as_ptr(&mut self.builder, tcx, ty)
+        let t = ty::TypeAndMut {
+            ty,
+            mutbl: rustc::hir::Mutability::MutMutable,
+        };
+        let ty_ptr = tcx.mk_ptr(t);
+        self.from_ty(ty_ptr)
     }
     pub fn new() -> Self {
         SpirvCtx {
             builder: Builder::new(),
-            ty_cache: tycache::SpirvTyCache::new(),
+            ty_cache: HashMap::new(),
             fns: HashMap::new(),
             forward_fns: HashMap::new(),
         }
@@ -782,7 +818,6 @@ impl<'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'a, 'tcx> {
         self.super_local_decl(local_decl);
     }
     fn visit_rvalue(&mut self, rvalue: &mir::Rvalue<'tcx>, location: mir::Location) {
-        use rustc::mir::HasLocalDecls;
         self.super_rvalue(rvalue, location);
         //println!("location = {:?}", location);
         let local_decls = &self.mir.unwrap().local_decls;
@@ -793,6 +828,7 @@ impl<'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'a, 'tcx> {
                 // TODO: Different types
                 let l_load = self.load_operand(l).load_raw(&mut self.ctx, spirv_ty);
                 let r_load = self.load_operand(r).load_raw(&mut self.ctx, spirv_ty);
+                // TODO: Impl ops
                 match op {
                     mir::BinOp::Add => {
                         let add = self.ctx
