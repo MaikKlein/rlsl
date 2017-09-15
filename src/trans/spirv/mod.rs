@@ -309,9 +309,9 @@ pub struct RlslVisitor<'a, 'tcx: 'a> {
     pub map: &'a hir::map::Map<'tcx>,
     pub ty_ctx: ty::TyCtxt<'a, 'tcx, 'tcx>,
     current_table: Vec<&'a rustc::ty::TypeckTables<'tcx>>,
-    pub mir: Option<&'a mir::Mir<'tcx>>,
+    pub mir: &'a mir::Mir<'tcx>,
     pub entry: Option<IntrinsicEntry>,
-    pub def_id: Option<hir::def_id::DefId>,
+    pub def_id: hir::def_id::DefId,
     pub merge_collector: Option<MergeCollector>,
     pub constants: HashMap<mir::Constant<'tcx>, SpirvVar<'tcx>>,
     pub label_blocks: HashMap<mir::BasicBlock, SpirvLabel>,
@@ -398,15 +398,12 @@ pub fn trans_spirv<'a, 'tcx>(tcx: ty::TyCtxt<'a, 'tcx, 'tcx>, items: &FxHashSet<
             let node = map.find(node_id).expect("node");
             //println!("node = {:#?}", node);
             if let Some(ref mir) = mir {
-                let mut visitor = RlslVisitor::new(&mut ctx, tcx);
+                let mut visitor = RlslVisitor::new(&mut ctx, tcx, mir, instance.def_id());
                 if let rustc::hir::map::Node::NodeItem(ref item) = node {
                     visitor.entry = extract_intrinsic_entry(&*item.attrs);
                 }
-                visitor.def_id = Some(instance.def_id());
-                visitor.mir = Some(mir);
                 visitor.merge_collector = Some(merge_collector(mir));
                 visitor.visit_mir(mir);
-                visitor.mir = None;
             }
 
             println!("instance = {:?}", instance);
@@ -445,7 +442,7 @@ pub fn resolve_fn_call<'a, 'tcx>(
 }
 impl<'a, 'tcx: 'a> RlslVisitor<'a, 'tcx> {
     pub fn load_operand<'gcx>(&mut self, operand: &mir::Operand<'tcx>) -> SpirvOperand<'tcx> {
-        let mir = self.mir.unwrap();
+        let mir = self.mir;
         let local_decls = &mir.local_decls;
         let ty = operand.ty(local_decls, self.ty_ctx);
         let spirv_ty = self.ctx.from_ty(ty);
@@ -499,15 +496,20 @@ impl<'a, 'tcx: 'a> RlslVisitor<'a, 'tcx> {
     pub fn get_table(&self) -> &'a ty::TypeckTables<'tcx> {
         self.current_table.last().expect("no table yet")
     }
-    pub fn new(ctx: &'a mut SpirvCtx<'tcx>, tcx: ty::TyCtxt<'a, 'tcx, 'tcx>) -> Self {
+    pub fn new(
+        ctx: &'a mut SpirvCtx<'tcx>,
+        tcx: ty::TyCtxt<'a, 'tcx, 'tcx>,
+        mir: &'a mir::Mir<'tcx>,
+        def_id: rustc::hir::def_id::DefId,
+    ) -> Self {
         let mut visitor = RlslVisitor {
             map: &tcx.hir,
             ty_ctx: tcx,
             current_table: Vec::new(),
             ctx,
-            mir: None,
+            mir,
             entry: None,
-            def_id: None,
+            def_id,
             merge_collector: None,
             constants: HashMap::new(),
             label_blocks: HashMap::new(),
@@ -558,7 +560,7 @@ impl<'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'a, 'tcx> {
         let fn_ty = self.ty_ctx.mk_fn_ptr(ty::Binder(fn_sig));
         let fn_ty_spirv = self.ctx.from_ty(fn_ty);
 
-        let def_id = self.def_id.unwrap();
+        let def_id = self.def_id;
         let forward_fn = self.ctx
             .forward_fns
             .get(&def_id)
@@ -600,16 +602,6 @@ impl<'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'a, 'tcx> {
             self.vars
                 .insert(local_var, SpirvVar::new(spirv_var, false, local_decl.ty));
         }
-        //        for constant in constants {
-        //            let spirv_var_ty = self.ctx.from_ty_as_ptr(self.ty_ctx, constant.ty);
-        //            let spirv_var = self.ctx.builder.variable(
-        //                spirv_var_ty.word,
-        //                None,
-        //                spirv::StorageClass::Function,
-        //                None,
-        //            );
-        //            self.constants.insert(constant, SpirvVar(spirv_var));
-        //        }
         {
             use rustc_data_structures::indexed_vec::Idx;
             let local = mir::Local::new(0);
@@ -629,21 +621,6 @@ impl<'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'a, 'tcx> {
             self.ctx.builder.branch(spirv_label.0).expect("branch");
         }
         self.super_mir(mir);
-        // TODO: Other cases
-        //        for scope in &mir.visibility_scopes {
-        //            self.visit_visibility_scope_data(scope);
-        //        }
-        //        let lookup = mir::visit::Lookup::Src(mir::SourceInfo {
-        //            span: mir.span,
-        //            scope: mir::ARGUMENT_VISIBILITY_SCOPE,
-        //        });
-        //        for local_decl in &mir.local_decls {
-        //            self.visit_local_decl(local_decl);
-        //        }
-        //        self.visit_ty(&mir.return_ty, lookup);
-        //
-        //        self.visit_span(&mir.span);
-        //println!("mir = {:#?}", mir);
         self.ctx.builder.end_function().expect("end fn");
         if self.entry.is_some() {
             self.ctx
@@ -659,7 +636,7 @@ impl<'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'a, 'tcx> {
         location: mir::Location,
     ) {
         self.super_assign(block, lvalue, rvalue, location);
-        let ty = rvalue.ty(&self.mir.unwrap().local_decls, self.ty_ctx);
+        let ty = rvalue.ty(&self.mir.local_decls, self.ty_ctx);
         if let ty::TypeVariants::TyTuple(ref slice, _) = ty.sty {
             if slice.len() == 0 {
                 return;
@@ -694,7 +671,7 @@ impl<'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'a, 'tcx> {
         location: mir::Location,
     ) {
         self.super_terminator_kind(block, kind, location);
-        let mir = self.mir.unwrap();
+        let mir = self.mir;
         match kind {
             &mir::TerminatorKind::Return => {
                 match mir.return_ty.sty {
@@ -725,7 +702,7 @@ impl<'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'a, 'tcx> {
                 ..
             } => {
                 use rustc_data_structures::control_flow_graph::ControlFlowGraph;
-                let mir = self.mir.unwrap();
+                let mir = self.mir;
                 println!("targets = {:?}", targets);
                 let spirv_operand = { self.load_operand(discr).into_raw_word() };
                 let collector = self.merge_collector.as_ref().unwrap();
@@ -755,7 +732,7 @@ impl<'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'a, 'tcx> {
                 ref destination,
                 ..
             } => {
-                let local_decls = &self.mir.unwrap().local_decls;
+                let local_decls = &self.mir.local_decls;
                 match func {
                     &mir::Operand::Constant(ref constant) => {
                         let ret_ty_binder = constant.ty.fn_sig(self.ty_ctx).output();
@@ -824,7 +801,7 @@ impl<'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'a, 'tcx> {
     fn visit_rvalue(&mut self, rvalue: &mir::Rvalue<'tcx>, location: mir::Location) {
         self.super_rvalue(rvalue, location);
         //println!("location = {:?}", location);
-        let local_decls = &self.mir.unwrap().local_decls;
+        let local_decls = &self.mir.local_decls;
         let ty = rvalue.ty(local_decls, self.ty_ctx);
         let spirv_ty = self.ctx.from_ty(ty);
         match rvalue {
