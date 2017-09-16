@@ -1,6 +1,7 @@
 pub mod terminator;
 pub mod rvalue;
 
+use rustc_data_structures::indexed_vec::Idx;
 use rustc_data_structures::control_flow_graph::ControlFlowGraph;
 use rustc::mir::visit::Visitor;
 use rustc::hir::map::Map;
@@ -207,17 +208,18 @@ impl<'a, 'tcx> SpirvCtx<'a, 'tcx> {
                     .type_pointer(None, spirv::StorageClass::Function, inner.word)
                     .into()
             }
-            //            TypeVariants::TyAdt(adt, substs) => {
-            //                match adt.adt_kind(){
-            //                    ty::AdtKind::Struct => {
-            //                        adt.all_fields().map(|f| {
-            //                            f.ty()
-            //                        })
-            //                    }
-            //                    ref r => unimplemented!("{:?}", r),
-            //
-            //                }
-            //            }
+            TypeVariants::TyAdt(adt, substs) => match adt.adt_kind() {
+                ty::AdtKind::Struct => {
+                    let field_ty_spirv: Vec<_> = adt.all_fields()
+                        .map(|f| {
+                            let ty = f.ty(self.tcx, substs);
+                            self.from_ty(ty).word
+                        })
+                        .collect();
+                    self.builder.type_struct(&field_ty_spirv).into()
+                }
+                ref r => unimplemented!("{:?}", r),
+            },
             ref r => unimplemented!("{:?}", r),
         };
         self.ty_cache.insert(ty, spirv_type);
@@ -388,7 +390,7 @@ pub fn trans_spirv<'a, 'tcx>(tcx: ty::TyCtxt<'a, 'tcx, 'tcx>, items: &FxHashSet<
             }
         }
     }
-    //ctx.build_module();
+    ctx.build_module();
 }
 
 pub fn resolve_fn_call<'a, 'tcx>(
@@ -629,6 +631,34 @@ impl<'b, 'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'b, 'a, 
                     .store(var.word, expr.0, None, &[])
                     .expect("store");
             }
+            &mir::Lvalue::Projection(ref proj) => match &proj.elem {
+                &mir::ProjectionElem::Field(field, ty) => {
+                    println!("field = {:?}", field.index());
+                    println!("field = {:?}", ty);
+                    match &proj.base {
+                        &mir::Lvalue::Local(local) => {
+                            let expr = self.exprs.get(&location).expect("expr");
+                            let var = self.vars.get(&local).expect("local");
+                            let spirv_ty_ptr = self.ctx.from_ty_as_ptr(ty);
+                            let index_ty = self.ctx.tcx.mk_mach_uint(syntax::ast::UintTy::U32);
+                            let spirv_index_ty = self.ctx.from_ty(index_ty);
+                            let index = self.ctx.builder.constant_u32(spirv_index_ty.word, field.index() as u32);
+                            let field_access = self.ctx.builder.access_chain(
+                                spirv_ty_ptr.word,
+                                None,
+                                var.word,
+                                &[index],
+                            ).expect("access chain");
+                            self.ctx
+                                .builder
+                                .store(field_access, expr.0, None, &[])
+                                .expect("store");
+                        }
+                        rest => unimplemented!("{:?}", rest),
+                    }
+                }
+                rest => unimplemented!("{:?}", rest),
+            },
             rest => unimplemented!("{:?}", rest),
         };
     }
