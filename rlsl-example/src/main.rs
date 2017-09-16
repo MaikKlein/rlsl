@@ -39,7 +39,7 @@ fn vert() {
 //    let f2 = test(f, f1);
     //let f3 = Vec2::foo(); // Not visible
     //let f2 = test(f, f1); // Visible
-    //let v = Vec2 { x: 1.0, y: 2.0 };
+    let v = Vec2 { x: 1.0, y: 2.0 };
     //let v1 = v.clone();
    //let v1 = v + v; // Add impl NOT visible
 }
