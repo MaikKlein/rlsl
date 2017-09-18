@@ -1,22 +1,26 @@
 #![feature(custom_attribute, attr_literals)]
 
 //use std::ops::Add;
-#[spirv(Vec2)]
-#[repr(C)]
-//#[derive(Copy, Clone)]
-struct Vec2 {
-    x: f32,
-    y: f32,
-}
-pub struct Position<T>{
-    pos: T,
-}
-impl<T> Position<T>{
-    pub fn new(pos: T) -> Self{
-        Position{
-            pos
-        }
-    }
+//#[spirv(Vec2)]
+//#[repr(C)]
+////#[derive(Copy, Clone)]
+//struct Vec2 {
+//    x: f32,
+//    y: f32,
+//}
+//pub struct Position<T>{
+//    pos: T,
+//}
+//impl<T> Position<T>{
+//    pub fn new(pos: T) -> Self{
+//        Position{
+//            pos
+//        }
+//    }
+//}
+//
+pub struct Ref<'a, T: 'a>{
+    f: &'a T
 }
 //
 //trait Foo{
@@ -36,21 +40,32 @@ impl<T> Position<T>{
 //        }
 //    }
 //}
-fn test(f: f32, f3: f32) -> f32 {
-    f + f3
+//fn test(f: f32, f3: f32) -> f32 {
+//    f + f3
+//}
+fn reference(f: &f32) -> Ref<f32>{
+    Ref{
+        f
+    }
 }
-#[entry(vertex)]
+#[spirv(vertex)]
 fn vert() {
     //let f1 = test(1.0, 2.0);
     //let f:f32 = if 2.0f32 > 1.0 { if 2.0f32 > 1.0 { 1.0 } else { 2.0 } } else { 2.0 };
     //let f:f32 = if 2.0f32 > 1.0 { 1.0 } else { 2.0 };
-    //let f: f32 = 40.0;
+    let f: f32 = 40.0;
+    //let r = Ref{ f: &f };
+    //let r1 = id(&f);
 //    let f1: f32 = 5.0;
 //    let f2 = test(f, f1);
     //let f3 = Vec2::foo(); // Not visible
     //let f2 = test(f, f1); // Visible
-    let v = Vec2 { x: 1.0, y: 2.0 };
-    let pos = Position::new(v);
+//    for i in 0 .. 100{
+//
+//    }
+    //let v = Vec2 { x: 1.0, y: 2.0 };
+    //let f = v.x;
+    //let pos = Position::new(v);
 
     //let v1 = v.clone();
    //let v1 = v + v; // Add impl NOT visible
