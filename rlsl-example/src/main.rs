@@ -1,13 +1,13 @@
 #![feature(custom_attribute, attr_literals)]
 
-//use std::ops::Add;
-//#[spirv(Vec2)]
-//#[repr(C)]
-////#[derive(Copy, Clone)]
-//struct Vec2 {
-//    x: f32,
-//    y: f32,
-//}
+use std::ops::Add;
+#[spirv(Vec2)]
+#[repr(C)]
+//#[derive(Copy, Clone)]
+struct Vec2<T> {
+    x: T,
+    y: T,
+}
 //pub struct Position<T>{
 //    pos: T,
 //}
@@ -19,9 +19,9 @@
 //    }
 //}
 //
-pub struct Ref<'a, T: 'a>{
-    f: &'a T
-}
+//pub struct Ref<'a, T: 'a>{
+//    f: &'a T
+//}
 //
 //trait Foo{
 //    fn foo() -> f32;
@@ -31,43 +31,30 @@ pub struct Ref<'a, T: 'a>{
 //       4.0
 //    }
 //}
-//impl Add for Vec2 {
-//    type Output = Vec2;
-//    fn add(self, other: Vec2) -> Vec2 {
-//        Vec2 {
-//            x: self.x + other.x,
-//            y: self.y + other.y,
-//        }
-//    }
-//}
-//fn test(f: f32, f3: f32) -> f32 {
-//    f + f3
-//}
-fn reference(f: &f32) -> Ref<f32>{
-    Ref{
-        f
+impl<T> Add for Vec2<T>
+where T: Add<Output = T>{
+    type Output = Vec2<T>;
+    fn add(self, other: Vec2<T>) -> Vec2<T> {
+        Vec2 {
+            x: self.x + other.x,
+            y: self.y + other.y,
+        }
     }
 }
+
+fn add(f: f32, f1: f32) -> f32{
+    f + f1
+}
+fn test<T: Add<Output = T>>(v: Vec2<T>,v1: Vec2<T>) -> Vec2<T> {
+    v + v1
+}
+
 #[spirv(vertex)]
 fn vert() {
-    //let f1 = test(1.0, 2.0);
-    //let f:f32 = if 2.0f32 > 1.0 { if 2.0f32 > 1.0 { 1.0 } else { 2.0 } } else { 2.0 };
-    //let f:f32 = if 2.0f32 > 1.0 { 1.0 } else { 2.0 };
-    let f: f32 = 40.0;
-    //let r = Ref{ f: &f };
-    //let r1 = id(&f);
-//    let f1: f32 = 5.0;
-//    let f2 = test(f, f1);
-    //let f3 = Vec2::foo(); // Not visible
-    //let f2 = test(f, f1); // Visible
-//    for i in 0 .. 100{
-//
-//    }
-    //let v = Vec2 { x: 1.0, y: 2.0 };
-    //let f = v.x;
-    //let pos = Position::new(v);
-
-    //let v1 = v.clone();
-   //let v1 = v + v; // Add impl NOT visible
+    let f = 1.0f32;
+    let f2 = add(f, f);
+    let v = Vec2 { x: f, y: f };
+    let v1 = Vec2 { x: f, y: f };
+    let v2 = test(v, v1);
 }
 fn main() {}

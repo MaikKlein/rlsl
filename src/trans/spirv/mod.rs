@@ -124,10 +124,10 @@ pub enum SpirvOperand<'tcx> {
     ConstVal(SpirvExpr),
 }
 impl<'tcx> SpirvOperand<'tcx> {
-    pub fn is_param(&self) -> bool{
-        match self{
+    pub fn is_param(&self) -> bool {
+        match self {
             &SpirvOperand::Consume(ref var) => var.is_param(),
-            _ => false
+            _ => false,
         }
     }
     pub fn expect_var(self) -> SpirvVar<'tcx> {
@@ -223,17 +223,45 @@ impl<'a, 'tcx> SpirvCtx<'a, 'tcx> {
                     .type_pointer(None, spirv::StorageClass::Function, inner.word)
                     .into()
             }
+            TypeVariants::TyParam(ref param) => {
+                let ty = param.to_ty(self.tcx);
+                println!("param ty = {:?}", ty);
+                self.from_ty(ty).into()
+            }
             TypeVariants::TyAdt(adt, substs) => match adt.adt_kind() {
                 ty::AdtKind::Struct => {
                     let node_id = self.tcx.hir.as_local_node_id(adt.did);
                     let node = node_id.and_then(|id| self.tcx.hir.find(id));
-                    let item = node.and_then(|node|{
-                        match node{
-                            hir::map::Node::NodeItem(item) => Some(item),
-                            _ => None
-                        }
+                    let item = node.and_then(|node| match node {
+                        hir::map::Node::NodeItem(item) => Some(item),
+                        _ => None,
+                    });
+                    let intrinsic = item.and_then(|item| {
+                        item.attrs
+                            .iter()
+                            .filter_map(|attr| {
+                                extract_spirv_attr(attr, &[], |s| match s {
+                                    "Vec2" => Some(IntrinsicType::Vec(2)),
+                                    _ => None,
+                                })
+                            })
+                            .nth(0)
                     });
 
+                    if let Some(intrinsic) = intrinsic {
+                        let intrinsic_spirv = match intrinsic {
+                            IntrinsicType::Vec(dim) => {
+                                let field_ty = adt.all_fields()
+                                    .nth(0)
+                                    .map(|f| f.ty(self.tcx, substs))
+                                    .expect("no field");
+                                let spirv_ty = self.from_ty(field_ty);
+                                self.builder.type_vector(spirv_ty.word, dim as u32).into()
+                            }
+                            ref r => unimplemented!("{:?}", r),
+                        };
+                        return intrinsic_spirv;
+                    }
                     let field_ty_spirv: Vec<_> = adt.all_fields()
                         .map(|f| {
                             let ty = f.ty(self.tcx, substs);
@@ -327,8 +355,8 @@ pub struct RlslVisitor<'b, 'a: 'b, 'tcx: 'a> {
 }
 
 #[derive(Debug)]
-pub enum IntrinsicVec {
-    Vec(u32),
+pub enum IntrinsicType {
+    Vec(usize),
 }
 #[derive(Debug)]
 pub enum IntrinsicEntry {
@@ -336,26 +364,31 @@ pub enum IntrinsicEntry {
     Fragment,
 }
 
-pub fn extract_spirv_attr<'a, R, F>(attr: &'a syntax::ast::Attribute, keywords: &[&str], f: F) -> Option<R>
-where F: Fn(&str) -> Option<R> {
-    let meta_item_list = attr.name().and_then(|name| {
-        if name.as_str() == "spirv" {
-            attr.meta_item_list()
-        } else {
-            None
-        }
+pub fn extract_spirv_attr<'a, R, F>(
+    attr: &'a syntax::ast::Attribute,
+    keywords: &[&str],
+    f: F,
+) -> Option<R>
+where
+    F: Fn(&str) -> Option<R>,
+{
+    let meta_item_list = attr.name().and_then(|name| if name.as_str() == "spirv" {
+        attr.meta_item_list()
+    } else {
+        None
     });
     if let Some(meta_item_list) = meta_item_list {
-        let iter = keywords.iter().zip(meta_item_list.iter()).filter_map(
-            |(keyword, meta_item)| {
+        let iter = keywords
+            .iter()
+            .zip(meta_item_list.iter())
+            .filter_map(|(keyword, meta_item)| {
                 if let syntax::ast::NestedMetaItemKind::MetaItem(ref meta) = meta_item.node {
                     if &meta.name().as_str() == keyword {
                         return Some(());
                     }
                 }
                 None
-            },
-        );
+            });
 
         if iter.count() == keywords.len() {
             return meta_item_list.get(keywords.len()).and_then(|meta_item| {
@@ -368,8 +401,71 @@ where F: Fn(&str) -> Option<R> {
     }
     None
 }
+pub struct MirContext<'a, 'tcx: 'a> {
+    tcx: ty::TyCtxt<'a, 'tcx, 'tcx>,
+    mir: &'a mir::Mir<'tcx>,
+    substs: &'tcx ty::subst::Substs<'tcx>,
+}
+impl<'a, 'tcx> MirContext<'a, 'tcx> {
+    pub fn monomorphize<T>(&self, value: &T) -> T
+    where
+        T: rustc::infer::TransNormalize<'tcx>,
+    {
+        self.tcx.trans_apply_param_substs(self.substs, value)
+    }
+}
 
-pub fn trans_spirv<'a, 'tcx>(tcx: ty::TyCtxt<'a, 'tcx, 'tcx>, items: &FxHashSet<TransItem>) {
+
+use std::fmt::{Debug, Error, Formatter};
+impl<'a, 'tcx> Debug for MirContext<'a, 'tcx> {
+    fn fmt(&self, f: &mut Formatter) -> Result<(), Error> {
+        f.write_fmt(format_args!("{:#?}", self.mir))
+    }
+}
+
+pub struct CollectMirContext<'a, 'tcx: 'a> {
+    tcx: ty::TyCtxt<'a, 'tcx, 'tcx>,
+    contexts: Vec<MirContext<'a, 'tcx>>,
+}
+pub fn collect_mir_context<'a, 'tcx>(
+    tcx: ty::TyCtxt<'a, 'tcx, 'tcx>,
+    mir: &'a mir::Mir<'tcx>,
+) -> Vec<MirContext<'a, 'tcx>> {
+    let mut collector = CollectMirContext {
+        tcx,
+        contexts: Vec::new(),
+    };
+    collector.visit_mir(mir);
+    collector.contexts
+}
+impl<'a, 'tcx> rustc::mir::visit::Visitor<'tcx> for CollectMirContext<'a, 'tcx> {
+    fn visit_terminator_kind(
+        &mut self,
+        block: mir::BasicBlock,
+        kind: &mir::TerminatorKind<'tcx>,
+        location: mir::Location,
+    ) {
+        self.super_terminator_kind(block, kind, location);
+        if let &mir::TerminatorKind::Call { ref func, .. } = kind {
+            if let &mir::Operand::Constant(ref constant) = func {
+                if let mir::Literal::Value { ref value } = constant.literal {
+                    use rustc::middle::const_val::ConstVal;
+                    if let &ConstVal::Function(def_id, substs) = value {
+                        let resolve_def_id = resolve_fn_call(self.tcx, def_id, substs);
+                        let mir = self.tcx.maybe_optimized_mir(resolve_def_id);
+                        self.contexts.push(MirContext {
+                            tcx: self.tcx,
+                            mir: mir.expect("mir"),
+                            substs,
+                        });
+                    }
+                }
+            }
+        }
+    }
+}
+
+pub fn trans_spirv<'a, 'tcx>(tcx: ty::TyCtxt<'a, 'tcx, 'tcx>, items: &'a FxHashSet<TransItem<'tcx>>) {
     use rustc::mir::visit::Visitor;
     let mut ctx = SpirvCtx::new(tcx);
     for item in items {
@@ -378,32 +474,80 @@ pub fn trans_spirv<'a, 'tcx>(tcx: ty::TyCtxt<'a, 'tcx, 'tcx>, items: &FxHashSet<
                 .insert(instance.def_id(), SpirvFn(ctx.builder.id()));
         }
     }
+    //    let entry_points = items
+    //        .iter()
+    //        .filter_map(|item| {
+    //            if let &TransItem::Fn(ref instance) = item {
+    //                let mir = tcx.maybe_optimized_mir(instance.def_id()).expect("mir");
+    //                let map: &Map = &tcx.hir;
+    //                if let Some( node_id ) = map.as_local_node_id(instance.def_id()){
+    //                    let name = map.name(node_id);
+    //                    let node = map.find(node_id).expect("node");
+    //                    if let rustc::hir::map::Node::NodeItem(ref item) = node {
+    //                        let intrinsic = item.attrs
+    //                            .iter()
+    //                            .filter_map(|attr| {
+    //                                extract_spirv_attr(attr, &[], |s| match s {
+    //                                    "vertex" => Some(IntrinsicEntry::Vertex),
+    //                                    "fragment" => Some(IntrinsicEntry::Fragment),
+    //                                    _ => None,
+    //                                })
+    //                            })
+    //                            .nth(0);
+    //                        if let Some(intrinsic) = intrinsic {
+    //                            return Some(mir);
+    //                        }
+    //                    }
+    //                }
+    //            }
+    //            None
+    //        })
+    //        .nth(0)
+    //        .expect("enty point");
+    //    let contexts = collect_mir_context(tcx, entry_points);
+    //    for context in &contexts{
+    //        let ty = context.mir.return_ty;
+    //        let mono_ty = context.monomorphize(&ty);
+    //        println!("ty = {:?}", ty);
+    //        println!("mono_ty = {:?}", mono_ty);
+    //    }
     for item in items {
         if let &TransItem::Fn(ref instance) = item {
+            //let resolved_def_id = resolve_fn_call(tcx, )
             let mir = tcx.maybe_optimized_mir(instance.def_id());
             let map: &Map = &tcx.hir;
-            let node_id = map.as_local_node_id(instance.def_id()).expect("node id");
-            let name = map.name(node_id);
-            let node = map.find(node_id).expect("node");
+            //            let node_id = map.as_local_node_id(instance.def_id()).expect("node id");
+            //            let name = map.name(node_id);
+            //            let node = map.find(node_id).expect("node");
             //println!("node = {:#?}", node);
             if let Some(ref mir) = mir {
-                let mut visitor = RlslVisitor::new(&mut ctx, tcx, mir, instance.def_id());
-                if let rustc::hir::map::Node::NodeItem(ref item) = node {
-                    let intrinsic = item.attrs
-                        .iter()
-                        .filter_map(|attr| extract_spirv_attr(attr, &[], |s|{
-                            match s{
-                                "vertex" => Some(IntrinsicEntry::Vertex),
-                                "fragment" => Some(IntrinsicEntry::Fragment),
-                                _ => None
-                            }
-                        }))
-                        .nth(0);
-                    println!("intrinsic = {:?}", intrinsic);
-                    visitor.entry = intrinsic;
-                }
-                visitor.merge_collector = Some(merge_collector(mir));
-                visitor.visit_mir(mir);
+                let mir_ctx = MirContext {
+                    tcx,
+                    substs: instance.substs,
+                    mir,
+                };
+                let ty = mir.return_ty;
+                let mono_ty = mir_ctx.monomorphize(&ty);
+                println!("ty = {:?}", ty);
+                println!("mono_ty = {:?}", mono_ty);
+                //println!("mir = {:#?}", mir);
+                //let mut visitor = RlslVisitor::new(&mut ctx, tcx, mir, instance.def_id());
+                //                if let rustc::hir::map::Node::NodeItem(ref item) = node {
+                //                    let intrinsic = item.attrs
+                //                        .iter()
+                //                        .filter_map(|attr| {
+                //                            extract_spirv_attr(attr, &[], |s| match s {
+                //                                "vertex" => Some(IntrinsicEntry::Vertex),
+                //                                "fragment" => Some(IntrinsicEntry::Fragment),
+                //                                _ => None,
+                //                            })
+                //                        })
+                //                        .nth(0);
+                //                    //println!("intrinsic = {:?}", intrinsic);
+                //                    //visitor.entry = intrinsic;
+                //                }
+                //visitor.merge_collector = Some(merge_collector(mir));
+                //visitor.visit_mir(mir);
             }
         }
     }
@@ -612,11 +756,10 @@ impl<'b, 'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'b, 'a, 
             let lvalue_ty = local_decl.ty;
             let is_ptr = lvalue_ty.is_unsafe_ptr() || lvalue_ty.is_mutable_pointer() ||
                 lvalue_ty.is_region_ptr();
-            let spirv_var_ty =if is_ptr{
+            let spirv_var_ty = if is_ptr {
                 //self.ctx.from_ty(local_decl.ty)
                 self.ctx.from_ty_as_ptr(local_decl.ty)
-            }
-            else{
+            } else {
                 self.ctx.from_ty_as_ptr(local_decl.ty)
             };
             let param = local_decl.ty.as_opt_param_ty();
@@ -726,18 +869,17 @@ impl<'b, 'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'b, 'a, 
                 match lvalue {
                     &mir::Lvalue::Local(local) => {
                         let var = self.vars.get(&local).expect("no local");
-                        if is_ptr{
+                        if is_ptr {
                             //self.ctx.builder.load(self.ctx.from_ty(var.ty))
                             // TODO
                             SpirvExpr(var.word)
-                        }
-                        else{
+                        } else {
                             SpirvExpr(var.word)
                         }
                     }
                     rest => unimplemented!("{:?}", rest),
                 }
-            },
+            }
 
             rest => unimplemented!("{:?}", rest),
         };
@@ -786,16 +928,16 @@ impl<'b, 'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'b, 'a, 
         location: mir::Location,
     ) {
         // TODO KERNEL NOT SUPPORTED :(
-//        if let &mir::Lvalue::Local(local) = lvalue{
-//            if context.is_storage_live_marker(){
-//                let var = self.vars.get(&local).expect("no local");
-//                self.ctx.builder.lifetime_start(var.word, 0);
-//            }
-//            if context.is_storage_dead_marker(){
-//                let var = self.vars.get(&local).expect("no local");
-//                self.ctx.builder.lifetime_stop(var.word, 0);
-//            }
-//        }
+        //        if let &mir::Lvalue::Local(local) = lvalue{
+        //            if context.is_storage_live_marker(){
+        //                let var = self.vars.get(&local).expect("no local");
+        //                self.ctx.builder.lifetime_start(var.word, 0);
+        //            }
+        //            if context.is_storage_dead_marker(){
+        //                let var = self.vars.get(&local).expect("no local");
+        //                self.ctx.builder.lifetime_stop(var.word, 0);
+        //            }
+        //        }
         self.super_lvalue(lvalue, context, location);
     }
     fn visit_terminator_kind(
