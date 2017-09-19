@@ -313,15 +313,18 @@ impl<'b, 'a, 'tcx> MirContext<'b, 'a, 'tcx> {
     }
     pub fn from_ty(&mut self, ty: rustc::ty::Ty<'tcx>) -> SpirvTy {
         use rustc::ty::TypeVariants;
-//        use std::collections::hash_map::DefaultHasher;
-//        use std::hash::Hash;
-//        use std::hash::Hasher;
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::Hash;
+        use std::hash::Hasher;
+        let ty = self.monomorphize(&ty);
 //        {
 //            let mut hasher = DefaultHasher::new();
 //            ty.hash(&mut hasher);
-//            println!("ty before = {:?}", hasher.finish());
+//
+//            println!("ty = {:?}", ty);
+//            println!("ty = {:?}", hasher.finish());
+//            //println!("ty = {:#?}", self.stx.ty_cache);
 //        }
-        let ty = self.monomorphize(&ty);
         let ty = match ty.sty {
             TypeVariants::TyRef(_, type_and_mut) => {
                 let t = ty::TypeAndMut {
@@ -410,15 +413,17 @@ impl<'b, 'a, 'tcx> MirContext<'b, 'a, 'tcx> {
                             }
                             ref r => unimplemented!("{:?}", r),
                         };
-                        return intrinsic_spirv;
+                        intrinsic_spirv
                     }
-                    let field_ty_spirv: Vec<_> = adt.all_fields()
-                        .map(|f| {
-                            let ty = f.ty(self.tcx, substs);
-                            self.from_ty(ty).word
-                        })
-                        .collect();
-                    self.stx.builder.type_struct(&field_ty_spirv).into()
+                    else {
+                        let field_ty_spirv: Vec<_> = adt.all_fields()
+                            .map(|f| {
+                                let ty = f.ty(self.tcx, substs);
+                                self.from_ty(ty).word
+                            })
+                            .collect();
+                        self.stx.builder.type_struct(&field_ty_spirv).into()
+                    }
                 }
                 ref r => unimplemented!("{:?}", r),
             },
