@@ -10,7 +10,7 @@ extern crate getopts;
 #[macro_use]
 extern crate log;
 extern crate rlsl;
-extern crate rspirv;
+//extern crate rspirv;
 extern crate rustc;
 extern crate rustc_borrowck;
 extern crate rustc_data_structures;
@@ -22,7 +22,7 @@ extern crate rustc_passes;
 extern crate rustc_plugin;
 extern crate rustc_resolve;
 extern crate rustc_trans;
-extern crate spirv_headers as spirv;
+//extern crate spirv_headers as spirv;
 #[macro_use]
 extern crate syntax;
 extern crate syntax_pos;
@@ -42,9 +42,10 @@ use rustc::middle;
 use rustc::middle::stability;
 use rustc::util::common::time;
 use rustc::mir;
-use rspirv::mr::{Builder, Operand};
-use rspirv::binary::Disassemble;
-use rspirv::binary::Assemble;
+//use rspirv::mr::{Builder, Operand};
+//use rspirv::binary::Disassemble;
+
+//use rspirv::binary::Assemble;
 use std::mem;
 use rustc::hir::intravisit as hir_visit;
 use rustc::hir::intravisit::*;
@@ -261,8 +262,9 @@ impl<'a> CompilerCalls<'a> for RlslCompilerCalls {
                 tcx.sess,
             );
             rustc_mir::transform::dump_mir::emit_mir(*tcx, &f);
-            let items = rlsl::trans::spirv::trans_items(*tcx, s.analysis.unwrap().clone(), &f);
-            rlsl::trans::spirv::trans_spirv(*tcx, &items);
+            let (shared_ccx, items) =
+                rlsl::trans::spirv::trans_items(*tcx, s.analysis.unwrap().clone(), &f);
+            rlsl::trans::spirv::trans_spirv(*tcx, shared_ccx, &items);
         };
         controller
     }

@@ -3,8 +3,8 @@
 use std::ops::Add;
 #[spirv(Vec2)]
 #[repr(C)]
-//#[derive(Copy, Clone)]
-struct Vec2<T> {
+#[derive(Copy, Clone)]
+struct Vec2<T: Copy> {
     x: T,
     y: T,
 }
@@ -31,8 +31,10 @@ struct Vec2<T> {
 //       4.0
 //    }
 //}
-impl<T> Add for Vec2<T>
-where T: Add<Output = T>{
+impl<T: Copy> Add for Vec2<T>
+where
+    T: Add<Output = T>,
+{
     type Output = Vec2<T>;
     fn add(self, other: Vec2<T>) -> Vec2<T> {
         Vec2 {
@@ -42,19 +44,22 @@ where T: Add<Output = T>{
     }
 }
 
-fn add(f: f32, f1: f32) -> f32{
-    f + f1
-}
-fn test<T: Add<Output = T>>(v: Vec2<T>,v1: Vec2<T>) -> Vec2<T> {
-    v + v1
-}
+//fn add(f: f32, f1: f32) -> f32 {
+//    f + f1
+//}
+//fn test<T: Add<Output = T>>(v: Vec2<T>, v1: Vec2<T>) -> Vec2<T> {
+//    v + v1
+//}
 
 #[spirv(vertex)]
 fn vert() {
     let f = 1.0f32;
-    let f2 = add(f, f);
     let v = Vec2 { x: f, y: f };
     let v1 = Vec2 { x: f, y: f };
-    let v2 = test(v, v1);
+    //let v2 = v + v1;
+    //let v2 = test(v, v1);
+    //    let iv = Vec2{x: 1u32, y: 2};
+    //    let iv2 = Vec2{x: 1u32, y: 2};
+    //    let a = iv + iv2;
 }
 fn main() {}

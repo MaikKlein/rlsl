@@ -1,8 +1,5 @@
 #![feature(rustc_private)]
 #![feature(box_syntax)]
-#![feature(test)]
-//#[macro_use]
-//extern crate debugit;
 
 extern crate arena;
 extern crate env_logger;

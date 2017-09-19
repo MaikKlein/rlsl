@@ -4,6 +4,7 @@ version = "0.1.0"
 authors = ["Maik Klein <maikklein@googlemail.com>"]
 
 [target.'cfg(NOT_A_PLATFORM)'.dependencies]
+std = {path = "compiler/rust/src/libstd"}
 rustc = {path = "compiler/rust/src/librustc"}
 rustc_driver = {path = "compiler/rust/src/librustc_driver"}
 syntax = {path = "compiler/rust/src/libsyntax"}
