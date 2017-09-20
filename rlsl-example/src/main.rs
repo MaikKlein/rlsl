@@ -51,6 +51,11 @@ where
 //    v + v1
 //}
 
+
+fn test(v: Vec2<f32> ){}
+fn test1(v: &Vec2<f32> ) -> f32{
+    v.x
+}
 #[spirv(vertex)]
 fn vert() {
     let f = 1.0f32;
@@ -58,7 +63,7 @@ fn vert() {
     let f2 = f1 + f;
     let v = Vec2 { x: f, y: f };
     let v1 = Vec2 { x: f, y: f };
-    v1;
+    test1(v);
     //let v2 = v + v1;
     //let v2 = test(v, v1);
     //    let iv = Vec2{x: 1u32, y: 2};

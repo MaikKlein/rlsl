@@ -44,6 +44,7 @@ pub struct SpirvCtx<'a, 'tcx: 'a> {
     pub builder: Builder,
     pub ty_cache: HashMap<ty::Ty<'tcx>, SpirvTy>,
     pub forward_fns: HashMap<hir::def_id::DefId, SpirvFn>,
+    pub debug_symbols: bool,
 }
 
 pub type MergeCollector = HashMap<mir::Location, mir::BasicBlock>;
@@ -158,7 +159,24 @@ impl<'tcx> SpirvOperand<'tcx> {
     }
 }
 
+use syntax_pos::symbol::InternedString;
 impl<'a, 'tcx> SpirvCtx<'a, 'tcx> {
+    pub fn name_from_def_id(&mut self, def_id: hir::def_id::DefId, id: spirv::Word){
+        let name = self.tcx
+            .hir
+            .as_local_node_id(def_id)
+            .map(|node_id| self.tcx.hir.name(node_id).as_str());
+        if let Some(name) = name {
+            if self.debug_symbols{
+                self.builder.name(id, name.as_ref());
+            }
+        }
+    }
+    pub fn name_from_str(&mut self, name: &str, id: spirv::Word){
+        if self.debug_symbols{
+            self.builder.name(id, name);
+        }
+    }
     pub fn build_module(self) {
         use rspirv::binary::Assemble;
         use rspirv::binary::Disassemble;
@@ -189,6 +207,7 @@ impl<'a, 'tcx> SpirvCtx<'a, 'tcx> {
         builder.ext_inst_import("GLSL.std.450");
         builder.memory_model(spirv::AddressingModel::Logical, spirv::MemoryModel::GLSL450);
         SpirvCtx {
+            debug_symbols: true,
             builder,
             ty_cache: HashMap::new(),
             forward_fns: HashMap::new(),
@@ -317,14 +336,14 @@ impl<'b, 'a, 'tcx> MirContext<'b, 'a, 'tcx> {
         use std::hash::Hash;
         use std::hash::Hasher;
         let ty = self.monomorphize(&ty);
-//        {
-//            let mut hasher = DefaultHasher::new();
-//            ty.hash(&mut hasher);
-//
-//            println!("ty = {:?}", ty);
-//            println!("ty = {:?}", hasher.finish());
-//            //println!("ty = {:#?}", self.stx.ty_cache);
-//        }
+        //        {
+        //            let mut hasher = DefaultHasher::new();
+        //            ty.hash(&mut hasher);
+        //
+        //            println!("ty = {:?}", ty);
+        //            println!("ty = {:?}", hasher.finish());
+        //            //println!("ty = {:#?}", self.stx.ty_cache);
+        //        }
         let ty = match ty.sty {
             TypeVariants::TyRef(_, type_and_mut) => {
                 let t = ty::TypeAndMut {
@@ -414,15 +433,16 @@ impl<'b, 'a, 'tcx> MirContext<'b, 'a, 'tcx> {
                             ref r => unimplemented!("{:?}", r),
                         };
                         intrinsic_spirv
-                    }
-                    else {
+                    } else {
                         let field_ty_spirv: Vec<_> = adt.all_fields()
                             .map(|f| {
                                 let ty = f.ty(self.tcx, substs);
                                 self.from_ty(ty).word
                             })
                             .collect();
-                        self.stx.builder.type_struct(&field_ty_spirv).into()
+                        let spirv_struct = self.stx.builder.type_struct(&field_ty_spirv);
+                        self.stx.name_from_def_id(adt.did, spirv_struct);
+                        spirv_struct.into()
                     }
                 }
                 ref r => unimplemented!("{:?}", r),
@@ -757,6 +777,7 @@ impl<'b, 'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'b, 'a, 
                 fn_ty_spirv.word,
             )
             .expect("begin fn");
+        self.mtx.stx.name_from_def_id(def_id, spirv_function);
         //self.ctx.builder.begin_basic_block(None).expect("block");
         for local_arg in mir.args_iter() {
             let local_decl = &mir.local_decls[local_arg];
@@ -767,6 +788,9 @@ impl<'b, 'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'b, 'a, 
                 .builder
                 .function_parameter(spirv_arg_ty.word)
                 .expect("fn param");
+            if let Some(name) = local_decl.name{
+                self.mtx.stx.name_from_str(name.as_str().as_ref(), spirv_param);
+            }
             self.vars
                 .insert(local_arg, SpirvVar::new(spirv_param, true, local_decl.ty));
         }
@@ -782,14 +806,15 @@ impl<'b, 'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'b, 'a, 
             } else {
                 self.mtx.from_ty_as_ptr(local_decl.ty)
             };
-            let param = local_decl.ty.as_opt_param_ty();
-            println!("param = {:?}", param);
             let spirv_var = self.mtx.stx.builder.variable(
                 spirv_var_ty.word,
                 None,
                 spirv::StorageClass::Function,
                 None,
             );
+            if let Some(name) = local_decl.name{
+                self.mtx.stx.name_from_str(name.as_str().as_ref(), spirv_var);
+            }
             self.vars
                 .insert(local_var, SpirvVar::new(spirv_var, false, local_decl.ty));
         }
@@ -804,6 +829,7 @@ impl<'b, 'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'b, 'a, 
                 spirv::StorageClass::Function,
                 None,
             );
+            self.mtx.stx.name_from_str("retvar", spirv_var);
             self.vars
                 .insert(local, SpirvVar::new(spirv_var, false, local_decl.ty));
             let spirv_label = self.label_blocks
