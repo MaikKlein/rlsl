@@ -3,40 +3,27 @@
 use std::ops::Add;
 #[spirv(Vec2)]
 #[repr(C)]
-#[derive(Copy, Clone)]
-struct Vec2<T: Copy> {
+//#[derive(Copy, Clone)]
+pub struct Vec2<T: Copy> {
     x: T,
     y: T,
 }
-//pub struct Position<T>{
-//    pos: T,
-//}
-//impl<T> Position<T>{
-//    pub fn new(pos: T) -> Self{
-//        Position{
-//            pos
+//impl<T: Copy> Add for Vec2<T>
+//where
+//    T: Add<Output = T>,
+//{
+//    type Output = Vec2<T>;
+//    fn add(self, other: Vec2<T>) -> Vec2<T> {
+//        Vec2 {
+//            x: self.x + other.x,
+//            y: self.y + other.y,
 //        }
 //    }
 //}
-//
-//pub struct Ref<'a, T: 'a>{
-//    f: &'a T
-//}
-//
-//trait Foo{
-//    fn foo() -> f32;
-//}
-//impl Foo for Vec2{
-//    fn foo() -> f32{
-//       4.0
-//    }
-//}
-impl<T: Copy> Add for Vec2<T>
-where
-    T: Add<Output = T>,
+impl Add for Vec2<f32>
 {
-    type Output = Vec2<T>;
-    fn add(self, other: Vec2<T>) -> Vec2<T> {
+    type Output = Vec2<f32>;
+    fn add(self, other: Vec2<f32>) -> Vec2<f32> {
         Vec2 {
             x: self.x + other.x,
             y: self.y + other.y,
@@ -44,30 +31,11 @@ where
     }
 }
 
-//fn add(f: f32, f1: f32) -> f32 {
-//    f + f1
-//}
-//fn test<T: Add<Output = T>>(v: Vec2<T>, v1: Vec2<T>) -> Vec2<T> {
-//    v + v1
-//}
-
-
-fn test(v: Vec2<f32> ){}
-fn test1(v: &Vec2<f32> ) -> f32{
-    v.x
-}
 #[spirv(vertex)]
 fn vert() {
-    let f = 1.0f32;
-    let f1 = 1.0f32;
-    let f2 = f1 + f;
+    let f: f32 = 2.0;
     let v = Vec2 { x: f, y: f };
     let v1 = Vec2 { x: f, y: f };
-    test1(v);
-    //let v2 = v + v1;
-    //let v2 = test(v, v1);
-    //    let iv = Vec2{x: 1u32, y: 2};
-    //    let iv2 = Vec2{x: 1u32, y: 2};
-    //    let a = iv + iv2;
+    let v2 = v + v1;
 }
 fn main() {}
