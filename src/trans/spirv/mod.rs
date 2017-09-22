@@ -450,7 +450,17 @@ impl<'b, 'a, 'tcx> MirContext<'b, 'a, 'tcx> {
                                 self.from_ty(ty).word
                             })
                             .collect();
+
                         let spirv_struct = self.stx.builder.type_struct(&field_ty_spirv);
+                        if self.stx.debug_symbols {
+                            for (index, field) in adt.all_fields().enumerate() {
+                                self.stx.builder.member_name(
+                                    spirv_struct,
+                                    index as u32,
+                                    field.name.as_str().to_string(),
+                                );
+                            }
+                        }
                         self.stx.name_from_def_id(adt.did, spirv_struct);
                         spirv_struct.into()
                     }
