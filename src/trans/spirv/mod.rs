@@ -727,42 +727,7 @@ impl<'b, 'a, 'tcx: 'a> RlslVisitor<'b, 'a, 'tcx> {
 
                     SpirvOperand::ConstVal(SpirvExpr(load))
                 }
-                //                println!("access_chain = {:?}", access_chain);
-                //                self.trans_lvalue(lvalue)
             }
-            //            &mir::Operand::Consume(ref lvalue) => match lvalue {
-            //                &mir::Lvalue::Local(local) => {
-            //                    let local_decl = &local_decls[local];
-            //                    let spirv_ty = self.mtx.from_ty(local_decl.ty);
-            //                    let spirv_var = self.vars.get(&local).expect("local");
-            //                    SpirvOperand::Consume(*spirv_var)
-            //                }
-            //                &mir::Lvalue::Projection(ref proj) => match &proj.elem {
-            //                    &mir::ProjectionElem::Field(field, ty) => match &proj.base {
-            //                        &mir::Lvalue::Local(local) => {
-            //                            let var = self.vars.get(&local).expect("local");
-            //                            let spirv_ty_ptr = self.mtx.from_ty_as_ptr(ty);
-            //                            let index_ty = self.mtx.stx.tcx.mk_mach_uint(syntax::ast::UintTy::U32);
-            //                            let spirv_index_ty = self.mtx.from_ty(index_ty);
-            //                            let index = self.mtx
-            //                                .stx
-            //                                .builder
-            //                                .constant_u32(spirv_index_ty.word, field.index() as u32);
-            //                            let field_access = self.mtx
-            //                                .stx
-            //                                .builder
-            //                                .in_bounds_access_chain(spirv_ty_ptr.word, None, var.word, &[index])
-            //                                .expect("access chain");
-            //
-            //                            let spirv_var = SpirvVar::new(field_access, false, ty);
-            //                            SpirvOperand::Consume(spirv_var)
-            //                        }
-            //                        rest => unimplemented!("{:?}", rest),
-            //                    },
-            //                    ref rest => unimplemented!("{:?}", rest),
-            //                },
-            //                ref rest => unimplemented!("{:?}", rest),
-            //            },
             &mir::Operand::Constant(ref constant) => match constant.literal {
                 mir::Literal::Value { ref value } => {
                     use rustc::middle::const_val::ConstVal;
@@ -782,17 +747,6 @@ impl<'b, 'a, 'tcx: 'a> RlslVisitor<'b, 'a, 'tcx> {
                         }
                         ref rest => unimplemented!("{:?}", rest),
                     };
-                    //                    if let Some(const_var) = self.constants.get(constant) {
-                    //                        //                        let load_const = self.ctx
-                    //                        //                            .builder
-                    //                        //                            .load(spirv_ty.word, None, expr.0, None, &[])
-                    //                        //                            .expect("load");
-                    //                        self.ctx
-                    //                            .builder
-                    //                            .store(const_var.0, expr.0, None, &[])
-                    //                            .expect("store");
-                    //                        return SpirvOperand::Consume(*const_var);
-                    //                    }
                     SpirvOperand::ConstVal(expr)
                 }
                 ref rest => unimplemented!("{:?}", rest),
@@ -1105,45 +1059,78 @@ impl<'b, 'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'b, 'a, 
             rest => unimplemented!("{:?}", rest),
         };
 
-        match lvalue {
-            &mir::Lvalue::Local(local) => {
-                let var = self.vars.get(&local).expect("local");
-                self.mtx
-                    .stx
-                    .builder
-                    .store(var.word, expr.0, None, &[])
-                    .expect("store");
-            }
-            &mir::Lvalue::Projection(ref proj) => match &proj.elem {
-                &mir::ProjectionElem::Field(field, ty) => match &proj.base {
-                    &mir::Lvalue::Local(local) => {
-                        let var = self.vars.get(&local).expect("local");
-                        let spirv_ty_ptr = self.mtx.from_ty_as_ptr(ty);
-                        let index_ty = self.mtx.stx.tcx.mk_mach_uint(syntax::ast::UintTy::U32);
-                        let spirv_index_ty = self.mtx.from_ty(index_ty);
-                        let index = self.mtx
-                            .stx
-                            .builder
-                            .constant_u32(spirv_index_ty.word, field.index() as u32);
-                        let field_access = self.mtx
-                            .stx
-                            .builder
-                            .in_bounds_access_chain(spirv_ty_ptr.word, None, var.word, &[index])
-                            .expect("access chain");
-                        let spirv_ptr = self.mtx.from_ty(ty);
-                        //let load = self.ctx.builder.load(spirv_ptr.word, None, field_access, None, &[]).expect("load");
-                        self.mtx
-                            .stx
-                            .builder
-                            .store(field_access, expr.0, None, &[])
-                            .expect("store");
-                    }
-                    rest => unimplemented!("{:?}", rest),
-                },
-                rest => unimplemented!("{:?}", rest),
-            },
-            rest => unimplemented!("{:?}", rest),
+        let access_chain = self.access_chain(lvalue);
+        let spirv_var = match access_chain.base {
+            &mir::Lvalue::Local(local) => *self.vars.get(&local).expect("Local"),
+            _ => panic!("Should be local"),
         };
+        let store = if access_chain.indices.is_empty() {
+            spirv_var.word
+        } else {
+            let spirv_ty_ptr = self.mtx.from_ty_as_ptr(ty);
+            let index_ty = self.mtx.stx.tcx.mk_mach_uint(syntax::ast::UintTy::U32);
+            let spirv_index_ty = self.mtx.from_ty(index_ty);
+            let indices: Vec<_> = access_chain
+                .indices
+                .iter()
+                .map(|&i| {
+                    self.mtx
+                        .stx
+                        .builder
+                        .constant_u32(spirv_index_ty.word, i as u32)
+                })
+                .collect();
+            let access = self.mtx
+                .stx
+                .builder
+                .access_chain(spirv_ty_ptr.word, None, spirv_var.word, &indices)
+                .expect("access_chain");
+            access
+        };
+        self.mtx
+            .stx
+            .builder
+            .store(store, expr.0, None, &[])
+            .expect("store");
+        //        match lvalue {
+        //            &mir::Lvalue::Local(local) => {
+        //                let var = self.vars.get(&local).expect("local");
+        //                self.mtx
+        //                    .stx
+        //                    .builder
+        //                    .store(var.word, expr.0, None, &[])
+        //                    .expect("store");
+        //            }
+        //            &mir::Lvalue::Projection(ref proj) => match &proj.elem {
+        //                &mir::ProjectionElem::Field(field, ty) => match &proj.base {
+        //                    &mir::Lvalue::Local(local) => {
+        //                        let var = self.vars.get(&local).expect("local");
+        //                        let spirv_ty_ptr = self.mtx.from_ty_as_ptr(ty);
+        //                        let index_ty = self.mtx.stx.tcx.mk_mach_uint(syntax::ast::UintTy::U32);
+        //                        let spirv_index_ty = self.mtx.from_ty(index_ty);
+        //                        let index = self.mtx
+        //                            .stx
+        //                            .builder
+        //                            .constant_u32(spirv_index_ty.word, field.index() as u32);
+        //                        let field_access = self.mtx
+        //                            .stx
+        //                            .builder
+        //                            .in_bounds_access_chain(spirv_ty_ptr.word, None, var.word, &[index])
+        //                            .expect("access chain");
+        //                        let spirv_ptr = self.mtx.from_ty(ty);
+        //                        //let load = self.ctx.builder.load(spirv_ptr.word, None, field_access, None, &[]).expect("load");
+        //                        self.mtx
+        //                            .stx
+        //                            .builder
+        //                            .store(field_access, expr.0, None, &[])
+        //                            .expect("store");
+        //                    }
+        //                    rest => unimplemented!("{:?}", rest),
+        //                },
+        //                rest => unimplemented!("{:?}", rest),
+        //            },
+        //            rest => unimplemented!("{:?}", rest),
+        //        };
     }
 
     fn visit_lvalue(

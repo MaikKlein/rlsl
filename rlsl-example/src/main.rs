@@ -51,8 +51,9 @@ fn vert() {
     let v = Vec2 { x: 1.0f32, y: 2.0 };
     let f1 = v.x;
     //let f1 = v.dot(v1);
-    let b = Bar{t: Test{v: v}};
+    let mut b = Bar{t: Test{v: v}};
     let f2 = b.t.v.x;
+    b.t.v.x = 1.0;
 //    let f3 = b.t.v.y;
 }
 fn main() {
