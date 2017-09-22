@@ -14,6 +14,7 @@
 //#[doc(no_inline)] pub use iter::{DoubleEndedIterator, ExactSizeIterator};
 #[doc(no_inline)] pub use option::Option::{self, Some, None};
 #[doc(no_inline)] pub use result::Result::{self, Ok, Err};
+pub use vec::*;
 //#[doc(no_inline)] pub use slice::SliceConcatExt;
 //#[doc(no_inline)] pub use string::{String, ToString};
 //#[doc(no_inline)] pub use vec::Vec;

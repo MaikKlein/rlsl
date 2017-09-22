@@ -6,6 +6,7 @@
 #![feature(unwind_attributes)]
 #![feature(core_panic)]
 #![feature(prelude_import)]
+#![feature(custom_attribute, attr_literals)]
 
 #[macro_reexport(assert, assert_eq, assert_ne, debug_assert, debug_assert_eq,
 debug_assert_ne, unreachable, unimplemented, write, writeln, try)]
@@ -32,4 +33,43 @@ pub use prelude::v1::*;
 
 #[lang = "eh_personality"] pub extern fn eh_personality() {}
 
+pub mod vec{
+    use ops::Add;
+    #[spirv(Vec2)]
+    #[repr(C)]
+    #[derive(Copy, Clone)]
+    pub struct Vec2<T: Copy> {
+        pub x: T,
+        pub y: T,
+    }
+    //impl<T: Copy> Add for Vec2<T>
+    //where
+    //    T: Add<Output = T>,
+    //{
+    //    type Output = Vec2<T>;
+    //    fn add(self, other: Vec2<T>) -> Vec2<T> {
+    //        Vec2 {
+    //            x: self.x + other.x,
+    //            y: self.y + other.y,
+    //        }
+    //    }
+    //}
+    impl Add for Vec2<f32>
+    {
+        type Output = Vec2<f32>;
+        fn add(self, other: Vec2<f32>) -> Vec2<f32> {
+            Vec2 {
+                x: self.x + other.x,
+                y: self.y + other.y,
+            }
+        }
+    }
 
+    impl Vec2<f32>{
+        #[spirv(dot)]
+        #[inline(never)]
+        pub fn dot(self, other: Vec2<f32>) -> f32{
+            self.x * other.x + self.y * other.y
+        }
+    }
+}

@@ -261,9 +261,13 @@ impl<'a> CompilerCalls<'a> for RlslCompilerCalls {
                 &[],
                 tcx.sess,
             );
+            let crate_types = &tcx.sess.crate_types;
+            println!("crate_types = {:?}", crate_types);
+
             rustc_mir::transform::dump_mir::emit_mir(*tcx, &f);
             let (shared_ccx, items) =
                 rlsl::trans::spirv::trans_items(*tcx, s.analysis.unwrap().clone(), &f);
+            let items = rlsl::trans::spirv::trans_all_items(*tcx, &shared_ccx, &items);
             rlsl::trans::spirv::trans_spirv(*tcx, shared_ccx, &items);
         };
         controller

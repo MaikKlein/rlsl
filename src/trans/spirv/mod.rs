@@ -19,6 +19,22 @@ use rustc_trans::back::symbol_export::ExportedSymbols;
 use rustc::session::config::OutputFilenames;
 use rspirv::mr::Builder;
 use syntax;
+use self::hir::def_id::DefId;
+pub enum IntrinsicFn {
+    Dot,
+}
+
+fn intrinsic_fn(attrs: &[syntax::ast::Attribute]) -> Option<IntrinsicFn> {
+    attrs
+        .iter()
+        .filter_map(|attr| {
+            extract_spirv_attr(attr, &[], |s| match s {
+                "dot" => Some(IntrinsicFn::Dot),
+                _ => None,
+            })
+        })
+        .nth(0)
+}
 pub fn trans_items<'a, 'tcx>(
     tcx: ty::TyCtxt<'a, 'tcx, 'tcx>,
     analysis: ty::CrateAnalysis,
@@ -33,7 +49,7 @@ pub fn trans_items<'a, 'tcx>(
     let (items, _) = rustc_trans::collector::collect_crate_translation_items(
         &shared_ccx,
         &exported_symbols,
-        rustc_trans::collector::TransItemCollectionMode::Lazy,
+        rustc_trans::collector::TransItemCollectionMode::Eager,
     );
     (shared_ccx, items)
 }
@@ -161,6 +177,15 @@ impl<'tcx> SpirvOperand<'tcx> {
 
 use syntax_pos::symbol::InternedString;
 impl<'a, 'tcx> SpirvCtx<'a, 'tcx> {
+    fn attrs_from_def_id(&self, def_id: DefId) -> Option<&[syntax::ast::Attribute]> {
+        let node_id = self.tcx.hir.as_local_node_id(def_id);
+        let node = node_id.and_then(|id| self.tcx.hir.find(id));
+        let item = node.and_then(|node| match node {
+            hir::map::Node::NodeItem(item) => Some(item),
+            _ => None,
+        });
+        item.map(|item| &*item.attrs)
+    }
     pub fn name_from_def_id(&mut self, def_id: hir::def_id::DefId, id: spirv::Word) {
         let name = self.tcx
             .hir
@@ -336,14 +361,6 @@ impl<'b, 'a, 'tcx> MirContext<'b, 'a, 'tcx> {
         use std::hash::Hash;
         use std::hash::Hasher;
         let ty = self.monomorphize(&ty);
-        //        {
-        //            let mut hasher = DefaultHasher::new();
-        //            ty.hash(&mut hasher);
-        //
-        //            println!("ty = {:?}", ty);
-        //            println!("ty = {:?}", hasher.finish());
-        //            //println!("ty = {:#?}", self.stx.ty_cache);
-        //        }
         let ty = match ty.sty {
             TypeVariants::TyRef(_, type_and_mut) => {
                 let t = ty::TypeAndMut {
@@ -464,47 +481,76 @@ impl<'b, 'a, 'tcx> MirContext<'b, 'a, 'tcx> {
 }
 
 
-//pub struct CollectMirContext<'a, 'tcx: 'a> {
-//    tcx: ty::TyCtxt<'a, 'tcx, 'tcx>,
-//    contexts: Vec<MirContext<'a, 'tcx>>,
-//}
-//pub fn collect_mir_context<'a, 'tcx>(
-//    tcx: ty::TyCtxt<'a, 'tcx, 'tcx>,
-//    mir: &'a mir::Mir<'tcx>,
-//) -> Vec<MirContext<'a, 'tcx>> {
-//    let mut collector = CollectMirContext {
-//        tcx,
-//        contexts: Vec::new(),
-//    };
-//    collector.visit_mir(mir);
-//    collector.contexts
-//}
-//impl<'a, 'tcx> rustc::mir::visit::Visitor<'tcx> for CollectMirContext<'a, 'tcx> {
-//    fn visit_terminator_kind(
-//        &mut self,
-//        block: mir::BasicBlock,
-//        kind: &mir::TerminatorKind<'tcx>,
-//        location: mir::Location,
-//    ) {
-//        self.super_terminator_kind(block, kind, location);
-//        if let &mir::TerminatorKind::Call { ref func, .. } = kind {
-//            if let &mir::Operand::Constant(ref constant) = func {
-//                if let mir::Literal::Value { ref value } = constant.literal {
-//                    use rustc::middle::const_val::ConstVal;
-//                    if let &ConstVal::Function(def_id, substs) = value {
-//                        let resolve_def_id = resolve_fn_call(self.tcx, def_id, substs);
-//                        let mir = self.tcx.maybe_optimized_mir(resolve_def_id);
-//                        self.contexts.push(MirContext {
-//                            tcx: self.tcx,
-//                            mir: mir.expect("mir"),
-//                            substs,
-//                        });
-//                    }
-//                }
-//            }
-//        }
-//    }
-//}
+pub struct CollectCrateItems<'a, 'tcx: 'a> {
+    mir: &'a mir::Mir<'tcx>,
+    ccx: &'a SharedCrateContext<'a, 'tcx>,
+    items: Vec<TransItem<'tcx>>,
+}
+pub fn collect_crate_items<'a, 'b, 'tcx>(
+    mir: &'a mir::Mir<'tcx>,
+    ccx: &'a SharedCrateContext<'a, 'tcx>,
+) -> Vec<TransItem<'tcx>> {
+    let mut collector = CollectCrateItems {
+        mir,
+        ccx,
+        items: Vec::new(),
+    };
+    collector.visit_mir(mir);
+    collector.items
+}
+impl<'a, 'tcx> rustc::mir::visit::Visitor<'tcx> for CollectCrateItems<'a, 'tcx> {
+    fn visit_terminator_kind(
+        &mut self,
+        block: mir::BasicBlock,
+        kind: &mir::TerminatorKind<'tcx>,
+        location: mir::Location,
+    ) {
+        self.super_terminator_kind(block, kind, location);
+        if let &mir::TerminatorKind::Call { ref func, .. } = kind {
+            if let &mir::Operand::Constant(ref constant) = func {
+                if let mir::Literal::Value { ref value } = constant.literal {
+                    use rustc::middle::const_val::ConstVal;
+                    if let &ConstVal::Function(def_id, ref substs) = value {
+                        //let mono_substs = self.mtx.monomorphize(substs);
+                        let instance = rustc_trans::resolve(&self.ccx, def_id, substs);
+                        self.items.push(TransItem::Fn(instance));
+                        //let mir = self.ccx.tcx().maybe_optimized_mir(resolve_def_id);
+                        //                        self.contexts.push(MirContext {
+                        //                            tcx: self.tcx,
+                        //                            mir: mir.expect("mir"),
+                        //                            substs,
+                        //                        });
+                    }
+                }
+            }
+        }
+    }
+}
+
+pub fn trans_all_items<'a, 'tcx>(
+    tcx: ty::TyCtxt<'a, 'tcx, 'tcx>,
+    shared_ccx: &'a SharedCrateContext<'a, 'tcx>,
+    start_items: &'a FxHashSet<TransItem<'tcx>>,
+) -> FxHashSet<TransItem<'tcx>> {
+    let mut hash_set = FxHashSet();
+    let mut uncollected_items: Vec<Vec<TransItem<'tcx>>> = Vec::new();
+    uncollected_items.push(start_items.iter().cloned().collect());
+    while let Some(items) = uncollected_items.pop() {
+        for item in &items {
+            if let &TransItem::Fn(ref instance) = item {
+                let mir = tcx.maybe_optimized_mir(instance.def_id());
+                if let Some(mir) = mir {
+                    let new_items = collect_crate_items(mir, shared_ccx);
+                    if !new_items.is_empty() {
+                        uncollected_items.push(new_items)
+                    }
+                    hash_set.insert(*item);
+                }
+            }
+        }
+    }
+    hash_set
+}
 
 pub fn trans_spirv<'a, 'tcx>(
     tcx: ty::TyCtxt<'a, 'tcx, 'tcx>,
@@ -518,45 +564,11 @@ pub fn trans_spirv<'a, 'tcx>(
             println!("instace = {:?}", instance.def_id());
             ctx.forward_fns
                 .insert(instance.def_id(), SpirvFn(ctx.builder.id()));
+            let has_mir = tcx.maybe_optimized_mir(instance.def_id()).is_some();
+            println!("has_mir = {:?}", has_mir);
         }
     }
-    //    let entry_points = items
-    //        .iter()
-    //        .filter_map(|item| {
-    //            if let &TransItem::Fn(ref instance) = item {
-    //                let mir = tcx.maybe_optimized_mir(instance.def_id()).expect("mir");
-    //                let map: &Map = &tcx.hir;
-    //                if let Some( node_id ) = map.as_local_node_id(instance.def_id()){
-    //                    let name = map.name(node_id);
-    //                    let node = map.find(node_id).expect("node");
-    //                    if let rustc::hir::map::Node::NodeItem(ref item) = node {
-    //                        let intrinsic = item.attrs
-    //                            .iter()
-    //                            .filter_map(|attr| {
-    //                                extract_spirv_attr(attr, &[], |s| match s {
-    //                                    "vertex" => Some(IntrinsicEntry::Vertex),
-    //                                    "fragment" => Some(IntrinsicEntry::Fragment),
-    //                                    _ => None,
-    //                                })
-    //                            })
-    //                            .nth(0);
-    //                        if let Some(intrinsic) = intrinsic {
-    //                            return Some(mir);
-    //                        }
-    //                    }
-    //                }
-    //            }
-    //            None
-    //        })
-    //        .nth(0)
-    //        .expect("enty point");
-    //    let contexts = collect_mir_context(tcx, entry_points);
-    //    for context in &contexts{
-    //        let ty = context.mir.return_ty;
-    //        let mono_ty = context.monomorphize(&ty);
-    //        println!("ty = {:?}", ty);
-    //        println!("mono_ty = {:?}", mono_ty);
-    //    }
+    println!("ctx.forward_fns = {:?}", ctx.forward_fns);
     for item in items {
         if let &TransItem::Fn(ref instance) = item {
             //let resolved_def_id = resolve_fn_call(tcx, )
@@ -656,6 +668,13 @@ impl<'b, 'a, 'tcx: 'a> RlslVisitor<'b, 'a, 'tcx> {
                     }
                     &mir::Lvalue::Projection(_) => self.trans_lvalue(&proj.base),
                     rest => unimplemented!("{:?}", rest),
+                },
+                &mir::ProjectionElem::Deref => match &proj.base {
+                    &mir::Lvalue::Local(local) => {
+                        let var = self.vars.get(&local).expect("local");
+                        SpirvOperand::Consume(*var)
+                    }
+                    ref rest => unimplemented!("{:?}", rest),
                 },
                 ref rest => unimplemented!("{:?}", rest),
             },
@@ -785,6 +804,20 @@ impl<'b, 'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'b, 'a, 
         self.super_statement(block, statement, location);
     }
     fn visit_mir(&mut self, mir: &mir::Mir<'tcx>) {
+        //        let inrinsic_fn = self.mtx
+        //            .stx
+        //            .attrs_from_def_id(self.mtx.def_id)
+        //            .and_then(intrinsic_fn);
+        //        match intrinsic_fn {
+        //            IntrinsicFn::Dot => {
+        //                let spirv_ret_ty = self.mtx.from_ty(mir.return_ty);
+        //                let first_arg_local = mir.args_iter().nth(0).expect("arg");
+        //                let local_decl = &mir.local_decls[first_arg_local];
+        //                let spirv_arg_ty = self.mtx.from_ty(local_decl.ty);
+        //
+        //                //self.mtx.stx.builder.dot
+        //            }
+        //        }
         for (block, _) in mir.basic_blocks().iter_enumerated() {
             self.label_blocks
                 .insert(block, SpirvLabel(self.mtx.stx.builder.id()));
@@ -864,8 +897,8 @@ impl<'b, 'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'b, 'a, 
             let local_arg = mir::Local::new(index + 1);
             let local_decl = &mir.local_decls[local_arg];
             let lvalue_ty = local_decl.ty;
-            let is_ptr = lvalue_ty.is_unsafe_ptr() || lvalue_ty.is_mutable_pointer() ||
-                lvalue_ty.is_region_ptr();
+            let is_ptr = lvalue_ty.is_unsafe_ptr() || lvalue_ty.is_mutable_pointer()
+                || lvalue_ty.is_region_ptr();
             let spirv_var_ty = self.mtx.from_ty_as_ptr(local_decl.ty);
             let spirv_var = self.mtx.stx.builder.variable(
                 spirv_var_ty.word,
@@ -880,8 +913,8 @@ impl<'b, 'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'b, 'a, 
         for local_var in mir.vars_and_temps_iter() {
             let local_decl = &mir.local_decls[local_var];
             let lvalue_ty = local_decl.ty;
-            let is_ptr = lvalue_ty.is_unsafe_ptr() || lvalue_ty.is_mutable_pointer() ||
-                lvalue_ty.is_region_ptr();
+            let is_ptr = lvalue_ty.is_unsafe_ptr() || lvalue_ty.is_mutable_pointer()
+                || lvalue_ty.is_region_ptr();
             let spirv_var_ty = self.mtx.from_ty_as_ptr(local_decl.ty);
             let spirv_var = self.mtx.stx.builder.variable(
                 spirv_var_ty.word,
@@ -924,7 +957,12 @@ impl<'b, 'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'b, 'a, 
                 spirv_function,
                 "main",
                 &[],
-            )
+            );
+            self.mtx.stx.builder.execution_mode(
+                spirv_function,
+                spirv::ExecutionMode::OriginUpperLeft,
+                &[],
+            );
         }
     }
     fn visit_assign(
@@ -952,6 +990,14 @@ impl<'b, 'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'b, 'a, 
                 let r_load = self.load_operand(r).load_raw(&mut self.mtx.stx, spirv_ty);
                 // TODO: Impl ops
                 match op {
+                    mir::BinOp::Mul => {
+                        let add = self.mtx
+                            .stx
+                            .builder
+                            .fmul(spirv_ty.word, None, l_load, r_load)
+                            .expect("fmul");
+                        SpirvExpr(add)
+                    }
                     mir::BinOp::Add => {
                         let add = self.mtx
                             .stx
@@ -972,8 +1018,8 @@ impl<'b, 'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'b, 'a, 
                 }
             }
             &mir::Rvalue::Use(ref operand) => {
-                let is_ptr = lvalue_ty.is_unsafe_ptr() || lvalue_ty.is_mutable_pointer() ||
-                    lvalue_ty.is_region_ptr();
+                let is_ptr = lvalue_ty.is_unsafe_ptr() || lvalue_ty.is_mutable_pointer()
+                    || lvalue_ty.is_region_ptr();
 
                 let operand = self.load_operand(operand);
                 if is_ptr && operand.is_param() {
@@ -994,8 +1040,8 @@ impl<'b, 'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'b, 'a, 
                 unimplemented!()
             }
             &mir::Rvalue::Ref(_, _, ref lvalue) => {
-                let is_ptr = lvalue_ty.is_unsafe_ptr() || lvalue_ty.is_mutable_pointer() ||
-                    lvalue_ty.is_region_ptr();
+                let is_ptr = lvalue_ty.is_unsafe_ptr() || lvalue_ty.is_mutable_pointer()
+                    || lvalue_ty.is_region_ptr();
                 match lvalue {
                     &mir::Lvalue::Local(local) => {
                         let var = self.vars.get(&local).expect("no local");
