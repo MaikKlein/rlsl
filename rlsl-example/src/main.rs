@@ -38,12 +38,22 @@
 //    }
 //}
 
+struct Bar{
+    t: Test
+}
+struct Test{
+    v: Vec2<f32>
+}
 #[spirv(vertex)]
 fn vert() {
-    let f: f32 = 2.0;
-    let v = Vec2 { x: f, y: f };
-    let v1 = Vec2 { x: f, y: f };
-    let f1 = v.dot(v1);
+//    let f: f32 = 2.0;
+//    let v = Vec2 { x: f, y: f };
+    let v = Vec2 { x: 1.0f32, y: 2.0 };
+    let f1 = v.x;
+    //let f1 = v.dot(v1);
+    let b = Bar{t: Test{v: v}};
+    let f2 = b.t.v.x;
+//    let f3 = b.t.v.y;
 }
 fn main() {
 }

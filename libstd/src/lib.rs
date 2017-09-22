@@ -35,9 +35,9 @@ pub use prelude::v1::*;
 
 pub mod vec{
     use ops::Add;
-    #[spirv(Vec2)]
     #[repr(C)]
     #[derive(Copy, Clone)]
+    #[spirv(Vec2)]
     pub struct Vec2<T: Copy> {
         pub x: T,
         pub y: T,

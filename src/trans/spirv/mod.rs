@@ -416,23 +416,16 @@ impl<'b, 'a, 'tcx> MirContext<'b, 'a, 'tcx> {
             TypeVariants::TyParam(ref param) => panic!("TyParam should have been monomorphized"),
             TypeVariants::TyAdt(adt, substs) => match adt.adt_kind() {
                 ty::AdtKind::Struct => {
-                    let node_id = self.tcx.hir.as_local_node_id(adt.did);
-                    let node = node_id.and_then(|id| self.tcx.hir.find(id));
-                    let item = node.and_then(|node| match node {
-                        hir::map::Node::NodeItem(item) => Some(item),
-                        _ => None,
-                    });
-                    let intrinsic = item.and_then(|item| {
-                        item.attrs
-                            .iter()
-                            .filter_map(|attr| {
-                                extract_spirv_attr(attr, &[], |s| match s {
-                                    "Vec2" => Some(IntrinsicType::Vec(2)),
-                                    _ => None,
-                                })
+                    let attrs = self.tcx.get_attrs(adt.did);
+                    let intrinsic = attrs
+                        .iter()
+                        .filter_map(|attr| {
+                            extract_spirv_attr(attr, &[], |s| match s {
+                                "Vec2" => Some(IntrinsicType::Vec(2)),
+                                _ => None,
                             })
-                            .nth(0)
-                    });
+                        })
+                        .nth(0);
 
                     if let Some(intrinsic) = intrinsic {
                         let intrinsic_spirv = match intrinsic {
@@ -607,36 +600,34 @@ pub fn trans_spirv<'a, 'tcx>(
     }
     ctx.build_module();
 }
-
-pub fn resolve_fn_call<'a, 'tcx>(
-    tcx: ty::TyCtxt<'a, 'tcx, 'tcx>,
-    def_id: hir::def_id::DefId,
-    substs: &'tcx ty::subst::Substs<'tcx>,
-) -> hir::def_id::DefId {
-    if let Some(trait_id) = tcx.opt_associated_item(def_id).and_then(
-        |associated_item| match associated_item.container {
-            ty::TraitContainer(def_id) => Some(def_id),
-            ty::ImplContainer(_) => None,
-        },
-    ) {
-        let tref = ty::TraitRef::from_method(tcx, trait_id, substs);
-        let assoc_item = tcx.associated_items(trait_id)
-            .find(|a| a.def_id == def_id)
-            .unwrap();
-        let vtable = tcx.trans_fulfill_obligation(syntax::codemap::DUMMY_SP, ty::Binder(tref));
-        use rustc::traits::Vtable;
-        return match vtable {
-            Vtable::VtableImpl(ref data) => {
-                let (def_id, substs) =
-                    rustc::traits::find_associated_item(tcx, &assoc_item, substs, data);
-                def_id
-            }
-            _ => unimplemented!(),
-        };
-    }
-    def_id
+#[derive(Debug)]
+struct AccessChain<'a, 'tcx: 'a> {
+    base: &'a mir::Lvalue<'tcx>,
+    indices: Vec<usize>,
 }
 impl<'b, 'a, 'tcx: 'a> RlslVisitor<'b, 'a, 'tcx> {
+    fn access_chain<'r>(&mut self, lvalue: &'r mir::Lvalue<'tcx>) -> AccessChain<'r, 'tcx> {
+        let mut indices = Vec::new();
+        let lvalue = self.access_chain_indices(lvalue, &mut indices);
+        AccessChain {
+            base: lvalue,
+            indices,
+        }
+    }
+    fn access_chain_indices<'r>(
+        &self,
+        lvalue: &'r mir::Lvalue<'tcx>,
+        indices: &mut Vec<usize>,
+    ) -> &'r mir::Lvalue<'tcx> {
+        if let &mir::Lvalue::Projection(ref proj) = lvalue {
+            if let mir::ProjectionElem::Field(field, _) = proj.elem {
+                let inner = self.access_chain_indices(&proj.base, indices);
+                indices.push(field.index());
+                return inner;
+            }
+        }
+        lvalue
+    }
     fn trans_lvalue(&mut self, lvalue: &mir::Lvalue<'tcx>) -> SpirvOperand<'tcx> {
         let local_decls = &self.mtx.mir.local_decls;
         match lvalue {
@@ -647,28 +638,31 @@ impl<'b, 'a, 'tcx: 'a> RlslVisitor<'b, 'a, 'tcx> {
                 SpirvOperand::Consume(*spirv_var)
             }
             &mir::Lvalue::Projection(ref proj) => match &proj.elem {
-                &mir::ProjectionElem::Field(field, ty) => match &proj.base {
-                    &mir::Lvalue::Local(local) => {
-                        let var = self.vars.get(&local).expect("local");
-                        let spirv_ty_ptr = self.mtx.from_ty_as_ptr(ty);
-                        let index_ty = self.mtx.stx.tcx.mk_mach_uint(syntax::ast::UintTy::U32);
-                        let spirv_index_ty = self.mtx.from_ty(index_ty);
-                        let index = self.mtx
-                            .stx
-                            .builder
-                            .constant_u32(spirv_index_ty.word, field.index() as u32);
-                        let field_access = self.mtx
-                            .stx
-                            .builder
-                            .in_bounds_access_chain(spirv_ty_ptr.word, None, var.word, &[index])
-                            .expect("access chain");
+                &mir::ProjectionElem::Field(field, ty) => {
+                    println!("{:?} field = {:?}", lvalue, field);
+                    match &proj.base {
+                        &mir::Lvalue::Local(local) => {
+                            let var = self.vars.get(&local).expect("local");
+                            let spirv_ty_ptr = self.mtx.from_ty_as_ptr(ty);
+                            let index_ty = self.mtx.stx.tcx.mk_mach_uint(syntax::ast::UintTy::U32);
+                            let spirv_index_ty = self.mtx.from_ty(index_ty);
+                            let index = self.mtx
+                                .stx
+                                .builder
+                                .constant_u32(spirv_index_ty.word, field.index() as u32);
+                            let field_access = self.mtx
+                                .stx
+                                .builder
+                                .in_bounds_access_chain(spirv_ty_ptr.word, None, var.word, &[index])
+                                .expect("access chain");
 
-                        let spirv_var = SpirvVar::new(field_access, false, ty);
-                        SpirvOperand::Consume(spirv_var)
+                            let spirv_var = SpirvVar::new(field_access, false, ty);
+                            SpirvOperand::Consume(spirv_var)
+                        }
+                        &mir::Lvalue::Projection(_) => self.trans_lvalue(&proj.base),
+                        rest => unimplemented!("{:?}", rest),
                     }
-                    &mir::Lvalue::Projection(_) => self.trans_lvalue(&proj.base),
-                    rest => unimplemented!("{:?}", rest),
-                },
+                }
                 &mir::ProjectionElem::Deref => match &proj.base {
                     &mir::Lvalue::Local(local) => {
                         let var = self.vars.get(&local).expect("local");
@@ -681,13 +675,51 @@ impl<'b, 'a, 'tcx: 'a> RlslVisitor<'b, 'a, 'tcx> {
             ref rest => unimplemented!("{:?}", rest),
         }
     }
-    pub fn load_operand(&mut self, operand: &mir::Operand<'tcx>) -> SpirvOperand<'tcx> {
+    pub fn load_operand<'r>(&mut self, operand: &'r mir::Operand<'tcx>) -> SpirvOperand<'tcx> {
         let mir = self.mtx.mir;
         let local_decls = &mir.local_decls;
         let ty = operand.ty(local_decls, self.mtx.stx.tcx);
         let spirv_ty = self.mtx.from_ty(ty);
         match operand {
-            &mir::Operand::Consume(ref lvalue) => self.trans_lvalue(lvalue),
+            &mir::Operand::Consume(ref lvalue) => {
+                let access_chain = self.access_chain(lvalue);
+                println!("access_chain = {:?}", access_chain);
+                let spirv_var = match access_chain.base {
+                    &mir::Lvalue::Local(local) => *self.vars.get(&local).expect("Local"),
+                    _ => panic!("Should be local"),
+                };
+                if access_chain.indices.is_empty() {
+                    SpirvOperand::Consume(spirv_var)
+                } else {
+                    let spirv_ty_ptr = self.mtx.from_ty_as_ptr(ty);
+                    let index_ty = self.mtx.stx.tcx.mk_mach_uint(syntax::ast::UintTy::U32);
+                    let spirv_index_ty = self.mtx.from_ty(index_ty);
+                    let indices: Vec<_> = access_chain
+                        .indices
+                        .iter()
+                        .map(|&i| {
+                            self.mtx
+                                .stx
+                                .builder
+                                .constant_u32(spirv_index_ty.word, i as u32)
+                        })
+                        .collect();
+                    let access = self.mtx
+                        .stx
+                        .builder
+                        .access_chain(spirv_ty_ptr.word, None, spirv_var.word, &indices)
+                        .expect("access_chain");
+                    let load = self.mtx
+                        .stx
+                        .builder
+                        .load(spirv_ty.word, None, access, None, &[])
+                        .expect("load");
+
+                    SpirvOperand::ConstVal(SpirvExpr(load))
+                }
+                //                println!("access_chain = {:?}", access_chain);
+                //                self.trans_lvalue(lvalue)
+            }
             //            &mir::Operand::Consume(ref lvalue) => match lvalue {
             //                &mir::Lvalue::Local(local) => {
             //                    let local_decl = &local_decls[local];
@@ -818,6 +850,9 @@ impl<'b, 'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'b, 'a, 
         //                //self.mtx.stx.builder.dot
         //            }
         //        }
+        //let attr = self.mtx.tcx.get_attrs(self.mtx.def_id);
+
+        //println!("attr = {:?}", attr);
         for (block, _) in mir.basic_blocks().iter_enumerated() {
             self.label_blocks
                 .insert(block, SpirvLabel(self.mtx.stx.builder.id()));
