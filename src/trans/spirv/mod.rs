@@ -618,25 +618,22 @@ struct AccessChain<'a, 'tcx: 'a> {
 impl<'b, 'a, 'tcx: 'a> RlslVisitor<'b, 'a, 'tcx> {
     fn access_chain<'r>(&mut self, lvalue: &'r mir::Lvalue<'tcx>) -> AccessChain<'r, 'tcx> {
         let mut indices = Vec::new();
-        let lvalue = self.access_chain_indices(lvalue, &mut indices);
-        AccessChain {
-            base: lvalue,
-            indices,
-        }
+        let (base, indices) = self.access_chain_indices(lvalue, indices);
+        AccessChain { base, indices }
     }
     fn access_chain_indices<'r>(
         &self,
         lvalue: &'r mir::Lvalue<'tcx>,
-        indices: &mut Vec<usize>,
-    ) -> &'r mir::Lvalue<'tcx> {
+        indices: Vec<usize>,
+    ) -> (&'r mir::Lvalue<'tcx>, Vec<usize>) {
         if let &mir::Lvalue::Projection(ref proj) = lvalue {
             if let mir::ProjectionElem::Field(field, _) = proj.elem {
-                let inner = self.access_chain_indices(&proj.base, indices);
+                let (inner_lvalue, mut indices) = self.access_chain_indices(&proj.base, indices);
                 indices.push(field.index());
-                return inner;
+                return (inner_lvalue, indices);
             }
         }
-        lvalue
+        (lvalue, indices)
     }
     fn trans_lvalue(&mut self, lvalue: &mir::Lvalue<'tcx>) -> SpirvOperand<'tcx> {
         let local_decls = &self.mtx.mir.local_decls;
