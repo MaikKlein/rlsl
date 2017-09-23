@@ -487,13 +487,16 @@ impl<'b, 'a, 'tcx> MirContext<'b, 'a, 'tcx> {
 pub struct CollectCrateItems<'a, 'tcx: 'a> {
     mir: &'a mir::Mir<'tcx>,
     ccx: &'a SharedCrateContext<'a, 'tcx>,
+    substs: &'tcx ty::subst::Substs<'tcx>,
     items: Vec<TransItem<'tcx>>,
 }
 pub fn collect_crate_items<'a, 'b, 'tcx>(
     mir: &'a mir::Mir<'tcx>,
     ccx: &'a SharedCrateContext<'a, 'tcx>,
+    substs: &'tcx ty::subst::Substs<'tcx>,
 ) -> Vec<TransItem<'tcx>> {
     let mut collector = CollectCrateItems {
+        substs,
         mir,
         ccx,
         items: Vec::new(),
@@ -514,15 +517,9 @@ impl<'a, 'tcx> rustc::mir::visit::Visitor<'tcx> for CollectCrateItems<'a, 'tcx> 
                 if let mir::Literal::Value { ref value } = constant.literal {
                     use rustc::middle::const_val::ConstVal;
                     if let &ConstVal::Function(def_id, ref substs) = value {
-                        //let mono_substs = self.mtx.monomorphize(substs);
-                        let instance = rustc_trans::resolve(&self.ccx, def_id, substs);
+                        let mono_substs = self.ccx.tcx().trans_apply_param_substs(self.substs, substs);
+                        let instance = rustc_trans::resolve(&self.ccx, def_id, &mono_substs);
                         self.items.push(TransItem::Fn(instance));
-                        //let mir = self.ccx.tcx().maybe_optimized_mir(resolve_def_id);
-                        //                        self.contexts.push(MirContext {
-                        //                            tcx: self.tcx,
-                        //                            mir: mir.expect("mir"),
-                        //                            substs,
-                        //                        });
                     }
                 }
             }
@@ -543,7 +540,7 @@ pub fn trans_all_items<'a, 'tcx>(
             if let &TransItem::Fn(ref instance) = item {
                 let mir = tcx.maybe_optimized_mir(instance.def_id());
                 if let Some(mir) = mir {
-                    let new_items = collect_crate_items(mir, shared_ccx);
+                    let new_items = collect_crate_items(mir, shared_ccx, instance.substs);
                     if !new_items.is_empty() {
                         uncollected_items.push(new_items)
                     }
@@ -1126,8 +1123,12 @@ impl<'b, 'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'b, 'a, 
         kind: &mir::TerminatorKind<'tcx>,
         location: mir::Location,
     ) {
+        use rustc_data_structures::control_flow_graph::ControlFlowGraph;
+        use rustc_data_structures::control_flow_graph::iterate::post_order_from;
+        use rustc_data_structures::control_flow_graph::dominators::dominators;
         self.super_terminator_kind(block, kind, location);
         let mir = self.mtx.mir;
+        println!("{:?}", post_order_from(mir, block));
         let successors = kind.successors();
         match kind {
             &mir::TerminatorKind::Return => {
@@ -1192,13 +1193,15 @@ impl<'b, 'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'b, 'a, 
                 ..
             } => {
                 let local_decls = &self.mtx.mir.local_decls;
+                println!("func = {:?}", func);
                 match func {
                     &mir::Operand::Constant(ref constant) => {
                         let ret_ty_binder = constant.ty.fn_sig(self.mtx.stx.tcx).output();
-                        //                        let ret_ty = self.mtx.stx
-                        //                            .tcx
-                        //                            .erase_late_bound_regions_and_normalize(&ret_ty_binder);
+//                                                let ret_ty = self.mtx.stx
+//                                                    .tcx
+//                                                    .erase_late_bound_regions_and_normalize(&ret_ty_binder);
                         let ret_ty = ret_ty_binder.skip_binder();
+                        //let ret_ty = self.mtx.monomorphize(&ret_ty);
                         let spirv_ty = self.mtx.from_ty(ret_ty);
                         if let mir::Literal::Value { ref value } = constant.literal {
                             use rustc::middle::const_val::ConstVal;
