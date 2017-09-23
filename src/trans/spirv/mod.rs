@@ -564,14 +564,14 @@ pub fn trans_spirv<'a, 'tcx>(
     let mut ctx = SpirvCtx::new(tcx, shared_ccx);
     for item in items {
         if let &TransItem::Fn(ref instance) = item {
-            println!("instace = {:?}", instance.def_id());
+            //println!("instace = {:?}", instance.def_id());
             ctx.forward_fns
                 .insert(instance.def_id(), SpirvFn(ctx.builder.id()));
             let has_mir = tcx.maybe_optimized_mir(instance.def_id()).is_some();
-            println!("has_mir = {:?}", has_mir);
+            //println!("has_mir = {:?}", has_mir);
         }
     }
-    println!("ctx.forward_fns = {:?}", ctx.forward_fns);
+    //println!("ctx.forward_fns = {:?}", ctx.forward_fns);
     for item in items {
         if let &TransItem::Fn(ref instance) = item {
             //let resolved_def_id = resolve_fn_call(tcx, )
@@ -630,7 +630,7 @@ fn access_chain_indices<'r, 'tcx>(
     if let &mir::Lvalue::Projection(ref proj) = lvalue {
         if let mir::ProjectionElem::Field(field, _) = proj.elem {
             indices.push(field.index());
-            return access_chain_indices(&proj.base, indices)
+            return access_chain_indices(&proj.base, indices);
         }
     }
     (lvalue, indices)
@@ -645,7 +645,7 @@ impl<'b, 'a, 'tcx: 'a> RlslVisitor<'b, 'a, 'tcx> {
         match operand {
             &mir::Operand::Consume(ref lvalue) => {
                 let access_chain = access_chain(lvalue);
-                println!("access_chain = {:?}", access_chain);
+                //println!("access_chain = {:?}", access_chain);
                 let spirv_var = match access_chain.base {
                     &mir::Lvalue::Local(local) => *self.vars.get(&local).expect("Local"),
                     _ => panic!("Should be local"),
@@ -727,10 +727,26 @@ impl<'b, 'a, 'tcx: 'a> RlslVisitor<'b, 'a, 'tcx> {
 fn is_ptr(ty: ty::Ty) -> bool {
     ty.is_unsafe_ptr() || ty.is_mutable_pointer() || ty.is_region_ptr()
 }
-
+pub fn find_merge_block(
+    mir: &mir::Mir,
+    root: mir::BasicBlock,
+    targets: &[mir::BasicBlock],
+) -> Option<mir::BasicBlock> {
+    use rustc_data_structures::control_flow_graph::ControlFlowGraph;
+    use rustc_data_structures::control_flow_graph::iterate::post_order_from;
+    use rustc_data_structures::control_flow_graph::dominators::dominators;
+    use std::collections::HashSet;
+    let dominators = dominators(mir);
+    let true_order: HashSet<_> = post_order_from(mir, targets[0]).into_iter().collect();
+    let false_order: HashSet<_> = post_order_from(mir, targets[1]).into_iter().collect();
+    true_order
+        .intersection(&false_order)
+        .filter(|&&target| dominators.is_dominated_by(target, root))
+        .nth(0).map(|b| *b)
+}
 impl<'b, 'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'b, 'a, 'tcx> {
     fn visit_basic_block_data(&mut self, block: mir::BasicBlock, data: &mir::BasicBlockData<'tcx>) {
-        println!("basic block");
+        //println!("basic block");
 
         {
             let spirv_label = self.label_blocks.get(&block).expect("no spirv label");
@@ -803,7 +819,7 @@ impl<'b, 'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'b, 'a, 
             syntax::abi::Abi::Rust,
         );
         let fn_ty = self.mtx.stx.tcx.mk_fn_ptr(ty::Binder(fn_sig));
-        println!("fn_ty = {:?}", fn_ty);
+        //println!("fn_ty = {:?}", fn_ty);
         let fn_ty_spirv = self.mtx.from_ty(fn_ty);
 
         let def_id = self.mtx.def_id;
@@ -987,7 +1003,7 @@ impl<'b, 'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'b, 'a, 
             //            &mir::Rvalue::Discriminant(..) => {}
             &mir::Rvalue::Aggregate(ref kind, ref operand) => {
                 // TODO Aggregate
-                println!("kind = {:?} {:?}", kind, operand);
+                //println!("kind = {:?} {:?}", kind, operand);
                 unimplemented!()
             }
             &mir::Rvalue::Ref(_, _, ref lvalue) => {
@@ -1112,6 +1128,7 @@ impl<'b, 'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'b, 'a, 
     ) {
         self.super_terminator_kind(block, kind, location);
         let mir = self.mtx.mir;
+        let successors = kind.successors();
         match kind {
             &mir::TerminatorKind::Return => {
                 match mir.return_ty.sty {
@@ -1143,16 +1160,16 @@ impl<'b, 'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'b, 'a, 
                 ..
             } => {
                 use rustc_data_structures::control_flow_graph::ControlFlowGraph;
+                use rustc_data_structures::control_flow_graph::iterate::post_order_from;
+                use rustc_data_structures::control_flow_graph::dominators::dominators;
+                use std::collections::HashSet;
                 let mir = self.mtx.mir;
-                println!("targets = {:?}", targets);
                 let spirv_operand = { self.load_operand(discr).into_raw_word() };
                 let collector = self.merge_collector.as_ref().unwrap();
-                let merge_block = collector
-                    .get(&location)
-                    .expect("Unable to find a merge block");
-                let merge_block_label = self.label_blocks.get(merge_block).expect("no label");
-                println!("merge_block = {:?}", merge_block);
-                println!("switch_ty = {:?}", switch_ty);
+                let merge_block = find_merge_block(mir, block, targets).expect("no merge block");
+                let merge_block_label = self.label_blocks.get(&merge_block).expect("no label");
+                //println!("merge_block = {:?}", merge_block);
+                //println!("switch_ty = {:?}", switch_ty);
                 let spirv_ty = self.mtx.from_ty(switch_ty);
                 let b = self.mtx.stx.builder.constant_true(spirv_ty.word);
                 self.mtx
@@ -1187,7 +1204,7 @@ impl<'b, 'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'b, 'a, 
                             use rustc::middle::const_val::ConstVal;
                             if let &ConstVal::Function(def_id, ref substs) = value {
                                 //let resolve_fn_id = resolve_fn_call(self.mtx.tcx, def_id, substs);
-                                println!("fn call def_id = {:?}", def_id);
+                                //println!("fn call def_id = {:?}", def_id);
                                 let mono_substs = self.mtx.monomorphize(substs);
                                 let resolve_fn_id =
                                     rustc_trans::resolve(&self.mtx.stx.ccx, def_id, &mono_substs)
