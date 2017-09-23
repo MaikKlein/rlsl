@@ -611,30 +611,32 @@ pub fn trans_spirv<'a, 'tcx>(
     ctx.build_module();
 }
 #[derive(Debug)]
-struct AccessChain<'a, 'tcx: 'a> {
-    base: &'a mir::Lvalue<'tcx>,
-    indices: Vec<usize>,
+pub struct AccessChain<'a, 'tcx: 'a> {
+    pub base: &'a mir::Lvalue<'tcx>,
+    pub indices: Vec<usize>,
 }
-impl<'b, 'a, 'tcx: 'a> RlslVisitor<'b, 'a, 'tcx> {
-    fn access_chain<'r>(&mut self, lvalue: &'r mir::Lvalue<'tcx>) -> AccessChain<'r, 'tcx> {
-        let mut indices = Vec::new();
-        let (base, indices) = self.access_chain_indices(lvalue, indices);
-        AccessChain { base, indices }
-    }
-    fn access_chain_indices<'r>(
-        &self,
-        lvalue: &'r mir::Lvalue<'tcx>,
-        indices: Vec<usize>,
-    ) -> (&'r mir::Lvalue<'tcx>, Vec<usize>) {
-        if let &mir::Lvalue::Projection(ref proj) = lvalue {
-            if let mir::ProjectionElem::Field(field, _) = proj.elem {
-                let (inner_lvalue, mut indices) = self.access_chain_indices(&proj.base, indices);
-                indices.push(field.index());
-                return (inner_lvalue, indices);
-            }
+
+pub fn access_chain<'r, 'tcx>(lvalue: &'r mir::Lvalue<'tcx>) -> AccessChain<'r, 'tcx> {
+    let mut indices = Vec::new();
+    let (base, indices) = access_chain_indices(lvalue, indices);
+    AccessChain { base, indices }
+}
+
+fn access_chain_indices<'r,'tcx>(
+    lvalue: &'r mir::Lvalue<'tcx>,
+    indices: Vec<usize>,
+) -> (&'r mir::Lvalue<'tcx>, Vec<usize>) {
+    if let &mir::Lvalue::Projection(ref proj) = lvalue {
+        if let mir::ProjectionElem::Field(field, _) = proj.elem {
+            let (inner_lvalue, mut indices) = access_chain_indices(&proj.base, indices);
+            indices.push(field.index());
+            return (inner_lvalue, indices);
         }
-        (lvalue, indices)
     }
+    (lvalue, indices)
+}
+
+impl<'b, 'a, 'tcx: 'a> RlslVisitor<'b, 'a, 'tcx> {
     fn trans_lvalue(&mut self, lvalue: &mir::Lvalue<'tcx>) -> SpirvOperand<'tcx> {
         let local_decls = &self.mtx.mir.local_decls;
         match lvalue {
@@ -689,7 +691,7 @@ impl<'b, 'a, 'tcx: 'a> RlslVisitor<'b, 'a, 'tcx> {
         let spirv_ty = self.mtx.from_ty(ty);
         match operand {
             &mir::Operand::Consume(ref lvalue) => {
-                let access_chain = self.access_chain(lvalue);
+                let access_chain = access_chain(lvalue);
                 println!("access_chain = {:?}", access_chain);
                 let spirv_var = match access_chain.base {
                     &mir::Lvalue::Local(local) => *self.vars.get(&local).expect("Local"),
@@ -1056,7 +1058,7 @@ impl<'b, 'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'b, 'a, 
             rest => unimplemented!("{:?}", rest),
         };
 
-        let access_chain = self.access_chain(lvalue);
+        let access_chain = access_chain(lvalue);
         let spirv_var = match access_chain.base {
             &mir::Lvalue::Local(local) => *self.vars.get(&local).expect("Local"),
             _ => panic!("Should be local"),
