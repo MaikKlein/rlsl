@@ -52,7 +52,7 @@ fn vert() {
     let f1 = v.x;
     //let f1 = v.dot(v1);
     let mut b = Bar{t: Test{v: v}};
-    let f2 = b.t.v.x;
+    let f2 = b.t.v.y;
     b.t.v.x = 1.0;
 //    let f3 = b.t.v.y;
 }

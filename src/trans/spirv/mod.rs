@@ -618,72 +618,25 @@ pub struct AccessChain<'a, 'tcx: 'a> {
 
 pub fn access_chain<'r, 'tcx>(lvalue: &'r mir::Lvalue<'tcx>) -> AccessChain<'r, 'tcx> {
     let mut indices = Vec::new();
-    let (base, indices) = access_chain_indices(lvalue, indices);
+    let (base, mut indices) = access_chain_indices(lvalue, indices);
+    indices.reverse();
     AccessChain { base, indices }
 }
 
-fn access_chain_indices<'r,'tcx>(
+fn access_chain_indices<'r, 'tcx>(
     lvalue: &'r mir::Lvalue<'tcx>,
-    indices: Vec<usize>,
+    mut indices: Vec<usize>,
 ) -> (&'r mir::Lvalue<'tcx>, Vec<usize>) {
     if let &mir::Lvalue::Projection(ref proj) = lvalue {
         if let mir::ProjectionElem::Field(field, _) = proj.elem {
-            let (inner_lvalue, mut indices) = access_chain_indices(&proj.base, indices);
             indices.push(field.index());
-            return (inner_lvalue, indices);
+            return access_chain_indices(&proj.base, indices)
         }
     }
     (lvalue, indices)
 }
 
 impl<'b, 'a, 'tcx: 'a> RlslVisitor<'b, 'a, 'tcx> {
-    fn trans_lvalue(&mut self, lvalue: &mir::Lvalue<'tcx>) -> SpirvOperand<'tcx> {
-        let local_decls = &self.mtx.mir.local_decls;
-        match lvalue {
-            &mir::Lvalue::Local(local) => {
-                let local_decl = &local_decls[local];
-                let spirv_ty = self.mtx.from_ty(local_decl.ty);
-                let spirv_var = self.vars.get(&local).expect("local");
-                SpirvOperand::Consume(*spirv_var)
-            }
-            &mir::Lvalue::Projection(ref proj) => match &proj.elem {
-                &mir::ProjectionElem::Field(field, ty) => {
-                    println!("{:?} field = {:?}", lvalue, field);
-                    match &proj.base {
-                        &mir::Lvalue::Local(local) => {
-                            let var = self.vars.get(&local).expect("local");
-                            let spirv_ty_ptr = self.mtx.from_ty_as_ptr(ty);
-                            let index_ty = self.mtx.stx.tcx.mk_mach_uint(syntax::ast::UintTy::U32);
-                            let spirv_index_ty = self.mtx.from_ty(index_ty);
-                            let index = self.mtx
-                                .stx
-                                .builder
-                                .constant_u32(spirv_index_ty.word, field.index() as u32);
-                            let field_access = self.mtx
-                                .stx
-                                .builder
-                                .in_bounds_access_chain(spirv_ty_ptr.word, None, var.word, &[index])
-                                .expect("access chain");
-
-                            let spirv_var = SpirvVar::new(field_access, false, ty);
-                            SpirvOperand::Consume(spirv_var)
-                        }
-                        &mir::Lvalue::Projection(_) => self.trans_lvalue(&proj.base),
-                        rest => unimplemented!("{:?}", rest),
-                    }
-                }
-                &mir::ProjectionElem::Deref => match &proj.base {
-                    &mir::Lvalue::Local(local) => {
-                        let var = self.vars.get(&local).expect("local");
-                        SpirvOperand::Consume(*var)
-                    }
-                    ref rest => unimplemented!("{:?}", rest),
-                },
-                ref rest => unimplemented!("{:?}", rest),
-            },
-            ref rest => unimplemented!("{:?}", rest),
-        }
-    }
     pub fn load_operand<'r>(&mut self, operand: &'r mir::Operand<'tcx>) -> SpirvOperand<'tcx> {
         let mir = self.mtx.mir;
         let local_decls = &mir.local_decls;
