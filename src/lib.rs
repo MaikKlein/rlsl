@@ -9,6 +9,7 @@ extern crate log;
 extern crate rspirv;
 extern crate rustc;
 extern crate rustc_borrowck;
+extern crate rustc_const_math;
 extern crate rustc_data_structures;
 extern crate rustc_driver;
 extern crate rustc_errors;

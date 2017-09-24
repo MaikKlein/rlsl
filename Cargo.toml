@@ -19,6 +19,7 @@ rustc_errors = {path = "compiler/rust/src/librustc_errors"}
 rustc_incremental = {path = "compiler/rust/src/librustc_incremental"}
 rustc_resolve = {path = "compiler/rust/src/librustc_resolve"}
 rustc_data_structures = {path = "compiler/rust/src/librustc_data_structures"}
+rustc_const_math = {path = "compiler/rust/src/librustc_const_math"}
 getopts = "0.2.14"
 env_logger = "0.4.3"
 
