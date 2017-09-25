@@ -1167,6 +1167,43 @@ impl<'b, 'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'b, 'a, 
                     rest => unimplemented!("{:?}", rest),
                 }
             }
+            &mir::Rvalue::Discriminant(ref lvalue) => {
+                let local = match lvalue {
+                    &mir::Lvalue::Local(local) => local,
+                    _ => panic!("Should be local"),
+                };
+                let var = self.vars.get(&local).expect("local");
+                let ty = self.mtx.mir.local_decls[local].ty;
+                let layout = self.mtx.stx.ccx.layout_of(ty);
+                let discr_ty = if let &Layout::General { discr, .. } = layout.layout {
+                    discr.to_ty(&self.mtx.tcx, false)
+                } else {
+                    panic!("No enum layout")
+                };
+                let discr_ty_spirv = self.mtx.from_ty(discr_ty);
+                let discr_ty_spirv_ptr = self.mtx.from_ty_as_ptr(discr_ty);
+                let adt = ty.ty_adt_def().expect("Should be an enum");
+                let discr_index = adt.variants.len();
+                let index = self.mtx.constant_u32(discr_index as u32).0;
+                let access = self.mtx
+                    .stx
+                    .builder
+                    .access_chain(discr_ty_spirv_ptr.word, None, var.word, &[index])
+                    .expect("access");
+                let load = self.mtx
+                    .stx
+                    .builder
+                    .load(discr_ty_spirv.word, None, access, None, &[])
+                    .expect("load");
+                let target_ty_spirv = self.mtx.from_ty(lvalue_ty);
+                let cast = self.mtx
+                    .stx
+                    .builder
+                    .bitcast(target_ty_spirv.word, None, load)
+                    .expect("bitcast");
+
+                SpirvValue(cast)
+            }
 
             rest => unimplemented!("{:?}", rest),
         };
@@ -1297,31 +1334,36 @@ impl<'b, 'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'b, 'a, 
                 ref targets,
                 ..
             } => {
-                use rustc_data_structures::control_flow_graph::ControlFlowGraph;
-                use rustc_data_structures::control_flow_graph::iterate::post_order_from;
-                use rustc_data_structures::control_flow_graph::dominators::dominators;
-                use std::collections::HashSet;
                 let mir = self.mtx.mir;
-                let spirv_operand = { self.load_operand(discr).into_raw_word() };
-                let collector = self.merge_collector.as_ref().unwrap();
-                let merge_block = find_merge_block(mir, block, targets).expect("no merge block");
-                let merge_block_label = self.label_blocks.get(&merge_block).expect("no label");
-                //println!("merge_block = {:?}", merge_block);
-                //println!("switch_ty = {:?}", switch_ty);
                 let spirv_ty = self.mtx.from_ty(switch_ty);
-                let b = self.mtx.stx.builder.constant_true(spirv_ty.word);
+                let selector = { self.load_operand(discr).load_raw(self.mtx.stx, spirv_ty) };
+                let default_label = *self.label_blocks
+                    .get(targets.last().unwrap())
+                    .expect("default label");
+                let labels: Vec<_> = targets
+                    .iter()
+                    .take(targets.len() - 1)
+                    .enumerate()
+                    .map(|(index, target)| {
+                        let label = self.label_blocks.get(&target).expect("label");
+                        (index as u32, label.0)
+                    })
+                    .collect();
+                {
+                    let merge_block =
+                        find_merge_block(mir, block, targets).expect("no merge block");
+                    let merge_block_label = self.label_blocks.get(&merge_block).expect("no label");
+                    self.mtx
+                        .stx
+                        .builder
+                        .selection_merge(merge_block_label.0, spirv::SelectionControl::empty())
+                        .expect("selection merge");
+                }
                 self.mtx
                     .stx
                     .builder
-                    .selection_merge(merge_block_label.0, spirv::SelectionControl::empty());
-                let true_label = self.label_blocks.get(&targets[0]).expect("true label");
-                let false_label = self.label_blocks.get(&targets[1]).expect("false label");
-                self.mtx.stx.builder.branch_conditional(
-                    spirv_operand,
-                    true_label.0,
-                    false_label.0,
-                    &[],
-                );
+                    .switch(selector, default_label.0, &labels)
+                    .expect("switch");
             }
             &mir::TerminatorKind::Call {
                 ref func,
