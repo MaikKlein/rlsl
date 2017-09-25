@@ -40,16 +40,16 @@
 
 
 
-enum Test{
+enum Test {
     A(f32),
     B(u32, u32),
-    C
+    C,
 }
 #[spirv(vertex)]
 fn vert() {
     //let t = Test::A(1.0f32);
     let t1 = Test::A(1.0f32);
-    let t: i32 = -1;
+    if let Test::A(f) = t1 {}
     //let i = Some(1.0f32);
     //    let v = Vec2 { x: 1.0f32, y: 2.0 };
     //    let v1 = v;

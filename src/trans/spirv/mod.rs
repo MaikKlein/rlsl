@@ -2,7 +2,7 @@ pub mod terminator;
 pub mod rvalue;
 
 use rustc::ty::layout::LayoutTyper;
-use self::ty::layout::{ Layout, Integer };
+use self::ty::layout::{Integer, Layout};
 use rustc_const_math::{ConstFloat, ConstInt};
 use rustc::middle::const_val::ConstVal;
 use rustc_data_structures::indexed_vec::Idx;
@@ -412,6 +412,7 @@ impl<'b, 'a, 'tcx> MirContext<'b, 'a, 'tcx> {
         use std::hash::Hash;
         use std::hash::Hasher;
         let ty = self.monomorphize(&ty);
+        println!("ty = {:?}", ty);
         let ty = match ty.sty {
             TypeVariants::TyRef(_, type_and_mut) => {
                 let t = ty::TypeAndMut {
@@ -429,17 +430,17 @@ impl<'b, 'a, 'tcx> MirContext<'b, 'a, 'tcx> {
             TypeVariants::TyBool => self.stx.builder.type_bool().into(),
             TypeVariants::TyInt(int_ty) => self.stx
                 .builder
-                .type_int(int_ty.bit_width().unwrap() as u32, 1)
+                .type_int(int_ty.bit_width().unwrap_or(32) as u32, 1)
                 .into(),
             TypeVariants::TyUint(uint_ty) => self.stx
                 .builder
-                .type_int(uint_ty.bit_width().unwrap() as u32, 0)
+                .type_int(uint_ty.bit_width().unwrap_or(32) as u32, 0)
                 .into(),
             TypeVariants::TyFloat(f_ty) => {
                 use syntax::ast::FloatTy;
                 match f_ty {
                     FloatTy::F32 => self.stx.builder.type_float(32).into(),
-                    FloatTy::F64 => self.stx.builder.type_float(64).into(),
+                    FloatTy::F64 => panic!("f64 is not supported"),
                 }
             }
             TypeVariants::TyTuple(slice, _) if slice.len() == 0 => {
@@ -893,9 +894,9 @@ impl<'b, 'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'b, 'a, 
             let discr_index = adt.variants.len();
             let index = self.mtx.constant_u32(discr_index as u32).0;
 
-            let variant_const_val = match discr_ty_int{
+            let variant_const_val = match discr_ty_int {
                 Integer::I32 => SpirvConstVal::Integer(ConstInt::U32(variant_index as u32)),
-                _ => panic!("")
+                _ => panic!(""),
             };
             let variant = self.mtx.constant(variant_const_val).0;
             let access = self.mtx

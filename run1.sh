@@ -1,1 +1,1 @@
-cargo build && ./target/debug/rlsl --crate-name rlsl_example rlsl-example/src/main.rs
+RUSTFLAGS="$RUSTFLAGS -A dead-code" cargo run --bin rlsl --release -- rlsl-example/src/main.rs --extern core=libcore.rlib --extern std=libstd.rlib -L . -A warnings -Z mir-opt-level=3 -Z always-encode-mir
