@@ -1,5 +1,6 @@
 #![feature(rustc_private)]
 #![feature(box_syntax)]
+#![feature(try_from)]
 
 extern crate arena;
 extern crate env_logger;

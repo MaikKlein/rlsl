@@ -48,7 +48,7 @@ enum Test{
 #[spirv(vertex)]
 fn vert() {
     //let t = Test::A(1.0f32);
-    let t1 = Test::B(1, 2);
+    let t1 = Test::A(1.0f32);
     //let i = Some(1.0f32);
     //    let v = Vec2 { x: 1.0f32, y: 2.0 };
     //    let v1 = v;

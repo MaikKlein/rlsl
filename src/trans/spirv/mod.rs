@@ -1,7 +1,8 @@
 pub mod terminator;
 pub mod rvalue;
 
-use rustc_const_math::ConstInt;
+use rustc_const_math::{ConstFloat, ConstInt};
+use rustc::middle::const_val::ConstVal;
 use rustc_data_structures::indexed_vec::Idx;
 use rustc_data_structures::control_flow_graph::ControlFlowGraph;
 use rustc::mir::visit::Visitor;
@@ -54,14 +55,10 @@ pub fn trans_items<'a, 'tcx>(
     );
     (shared_ccx, items)
 }
-
-pub struct SpirvCtx<'a, 'tcx: 'a> {
-    pub tcx: ty::TyCtxt<'a, 'tcx, 'tcx>,
-    pub ccx: SharedCrateContext<'a, 'tcx>,
-    pub builder: Builder,
-    pub ty_cache: HashMap<ty::Ty<'tcx>, SpirvTy>,
-    pub forward_fns: HashMap<hir::def_id::DefId, SpirvFn>,
-    pub debug_symbols: bool,
+#[derive(Copy, Clone, Debug, Hash, Eq, PartialEq)]
+pub enum SpirvConstVal {
+    Float(ConstFloat),
+    Integer(ConstInt),
 }
 
 pub type MergeCollector = HashMap<mir::Location, mir::BasicBlock>;
@@ -177,6 +174,17 @@ impl<'tcx> SpirvOperand<'tcx> {
 }
 
 use syntax_pos::symbol::InternedString;
+
+pub struct SpirvCtx<'a, 'tcx: 'a> {
+    pub tcx: ty::TyCtxt<'a, 'tcx, 'tcx>,
+    pub ccx: SharedCrateContext<'a, 'tcx>,
+    pub builder: Builder,
+    pub ty_cache: HashMap<ty::Ty<'tcx>, SpirvTy>,
+    pub const_cache: HashMap<SpirvConstVal, SpirvExpr>,
+    pub forward_fns: HashMap<hir::def_id::DefId, SpirvFn>,
+    pub debug_symbols: bool,
+}
+
 impl<'a, 'tcx> SpirvCtx<'a, 'tcx> {
     fn attrs_from_def_id(&self, def_id: DefId) -> Option<&[syntax::ast::Attribute]> {
         let node_id = self.tcx.hir.as_local_node_id(def_id);
@@ -236,6 +244,7 @@ impl<'a, 'tcx> SpirvCtx<'a, 'tcx> {
             debug_symbols: true,
             builder,
             ty_cache: HashMap::new(),
+            const_cache: HashMap::new(),
             forward_fns: HashMap::new(),
             tcx,
             ccx,
@@ -356,6 +365,44 @@ impl<'b, 'a, 'tcx> MirContext<'b, 'a, 'tcx> {
     {
         self.tcx.trans_apply_param_substs(self.substs, value)
     }
+    pub fn constant_f32(&mut self, value: f32) -> SpirvExpr {
+        use std::convert::TryFrom;
+        let val = SpirvConstVal::Float(ConstFloat::from_u128(
+            TryFrom::try_from(value.to_bits()).expect("Could not convert from f32 to u128"),
+            syntax::ast::FloatTy::F32,
+        ));
+        self.constant(val)
+    }
+
+    pub fn constant_u32(&mut self, value: u32) -> SpirvExpr {
+        let val = SpirvConstVal::Integer(ConstInt::U32(value));
+        self.constant(val)
+    }
+
+    pub fn constant(&mut self, val: SpirvConstVal) -> SpirvExpr {
+        if let Some(val) = self.stx.const_cache.get(&val) {
+            return *val;
+        }
+        let spirv_val = match val {
+            SpirvConstVal::Integer(const_int) => {
+                use rustc::ty::util::IntTypeExt;
+                let ty = const_int.int_type().to_ty(self.tcx);
+                let spirv_ty = self.from_ty(ty);
+                let value = const_int.to_u32().expect("Only < u32 is supported");
+                self.stx.builder.constant_u32(spirv_ty.word, value)
+            }
+            SpirvConstVal::Float(const_float) => {
+                use rustc::infer::unify_key::ToType;
+                let value = const_float.to_i128(32).expect("Only f32 is supported") as f32;
+                let ty = const_float.ty.to_type(self.tcx);
+                let spirv_ty = self.from_ty(ty);
+                self.stx.builder.constant_f32(spirv_ty.word, value)
+            }
+        };
+        let spirv_expr = SpirvExpr(spirv_val);
+        self.stx.const_cache.insert(val, spirv_expr);
+        spirv_expr
+    }
     pub fn from_ty(&mut self, ty: rustc::ty::Ty<'tcx>) -> SpirvTy {
         use rustc::ty::TypeVariants;
         use std::collections::hash_map::DefaultHasher;
@@ -416,9 +463,13 @@ impl<'b, 'a, 'tcx> MirContext<'b, 'a, 'tcx> {
             }
             TypeVariants::TyParam(ref param) => panic!("TyParam should have been monomorphized"),
             TypeVariants::TyAdt(adt, substs) => {
+                use rustc::ty::layout::LayoutTyper;
                 let mono_substs = self.monomorphize(&substs);
                 match adt.adt_kind() {
                     ty::AdtKind::Enum => {
+                        let layout = self.stx.ccx.layout_of(ty);
+                        println!("layout = {:#?}", layout);
+                        //println!("desc = {:?}", adt.);
                         let mut field_ty_spirv: Vec<_> = adt.variants
                             .iter()
                             .map(|variant| {
@@ -704,17 +755,10 @@ impl<'b, 'a, 'tcx: 'a> RlslVisitor<'b, 'a, 'tcx> {
                     SpirvOperand::Consume(spirv_var)
                 } else {
                     let spirv_ty_ptr = self.mtx.from_ty_as_ptr(ty);
-                    let index_ty = self.mtx.stx.tcx.mk_mach_uint(syntax::ast::UintTy::U32);
-                    let spirv_index_ty = self.mtx.from_ty(index_ty);
                     let indices: Vec<_> = access_chain
                         .indices
                         .iter()
-                        .map(|&i| {
-                            self.mtx
-                                .stx
-                                .builder
-                                .constant_u32(spirv_index_ty.word, i as u32)
-                        })
+                        .map(|&i| self.mtx.constant_u32(i as u32).0)
                         .collect();
                     let access = self.mtx
                         .stx
@@ -732,31 +776,14 @@ impl<'b, 'a, 'tcx: 'a> RlslVisitor<'b, 'a, 'tcx> {
             }
             &mir::Operand::Constant(ref constant) => match constant.literal {
                 mir::Literal::Value { ref value } => {
-                    use rustc::middle::const_val::ConstVal;
                     let expr = match value {
                         &ConstVal::Float(f) => {
-                            use syntax::ast::FloatTy;
-                            match f.ty {
-                                FloatTy::F32 => {
-                                    let val: f32 = unsafe { ::std::mem::transmute(f.bits as u32) };
-                                    let expr = SpirvExpr(
-                                        self.mtx.stx.builder.constant_f32(spirv_ty.word, val),
-                                    );
-                                    expr
-                                }
-                                _ => panic!("f64 not supported"),
-                            }
+                            let val = SpirvConstVal::Float(f);
+                            self.mtx.constant(val)
                         }
-                        &ConstVal::Integral(int) => match int {
-                            ConstInt::U32(uint) => {
-                                let index_ty =
-                                    self.mtx.stx.tcx.mk_mach_uint(syntax::ast::UintTy::U32);
-                                let spirv_index_ty = self.mtx.from_ty(index_ty);
-                                let i =
-                                    self.mtx.stx.builder.constant_u32(spirv_index_ty.word, uint);
-                                SpirvExpr(i)
-                            }
-                            ref rest => unimplemented!("{:?}", rest),
+                        &ConstVal::Integral(int) => {
+                            let val = SpirvConstVal::Integer(int);
+                            self.mtx.constant(val)
                         },
                         ref rest => unimplemented!("{:?}", rest),
                     };
@@ -847,9 +874,7 @@ impl<'b, 'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'b, 'a, 
             };
 
             let index = self.mtx
-                .stx
-                .builder
-                .constant_u32(spirv_index_ty.word, desc_index as u32);
+                .constant_u32(desc_index as u32).0;
 
             let variant = self.mtx
                 .stx
