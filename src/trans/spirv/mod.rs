@@ -388,7 +388,7 @@ impl<'b, 'a, 'tcx> MirContext<'b, 'a, 'tcx> {
                 use rustc::ty::util::IntTypeExt;
                 let ty = const_int.int_type().to_ty(self.tcx);
                 let spirv_ty = self.from_ty(ty);
-                let value = const_int.to_u32().expect("Only < u32 is supported");
+                let value = const_int.to_u128_unchecked() as u32;
                 self.stx.builder.constant_u32(spirv_ty.word, value)
             }
             SpirvConstVal::Float(const_float) => {
@@ -424,6 +424,9 @@ impl<'b, 'a, 'tcx> MirContext<'b, 'a, 'tcx> {
         }
         let spirv_type: SpirvTy = match ty.sty {
             TypeVariants::TyBool => self.stx.builder.type_bool().into(),
+            TypeVariants::TyInt(int_ty) => {
+                self.stx.builder.type_int(int_ty.bit_width().unwrap() as u32, 1).into()
+            }
             TypeVariants::TyUint(uint_ty) => self.stx
                 .builder
                 .type_int(uint_ty.bit_width().unwrap() as u32, 0)
@@ -784,7 +787,7 @@ impl<'b, 'a, 'tcx: 'a> RlslVisitor<'b, 'a, 'tcx> {
                         &ConstVal::Integral(int) => {
                             let val = SpirvConstVal::Integer(int);
                             self.mtx.constant(val)
-                        },
+                        }
                         ref rest => unimplemented!("{:?}", rest),
                     };
                     SpirvOperand::ConstVal(expr)
@@ -873,13 +876,9 @@ impl<'b, 'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'b, 'a, 
                 _ => panic!("Should be local"),
             };
 
-            let index = self.mtx
-                .constant_u32(desc_index as u32).0;
+            let index = self.mtx.constant_u32(desc_index as u32).0;
 
-            let variant = self.mtx
-                .stx
-                .builder
-                .constant_u32(spirv_index_ty.word, variant_index as u32);
+            let variant = self.mtx.constant_u32(variant_index as u32).0;
 
             let access = self.mtx
                 .stx
@@ -1163,17 +1162,10 @@ impl<'b, 'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'b, 'a, 
             spirv_var.word
         } else {
             let spirv_ty_ptr = self.mtx.from_ty_as_ptr(ty);
-            let index_ty = self.mtx.stx.tcx.mk_mach_uint(syntax::ast::UintTy::U32);
-            let spirv_index_ty = self.mtx.from_ty(index_ty);
             let indices: Vec<_> = access_chain
                 .indices
                 .iter()
-                .map(|&i| {
-                    self.mtx
-                        .stx
-                        .builder
-                        .constant_u32(spirv_index_ty.word, i as u32)
-                })
+                .map(|&i| self.mtx.constant_u32(i as u32).0)
                 .collect();
             let access = self.mtx
                 .stx
