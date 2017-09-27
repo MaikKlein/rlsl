@@ -18,8 +18,8 @@ pub use core::marker;
 pub use core::ops;
 pub use core::fmt;
 pub use core::panicking;
-#[lang = "panic_fmt"]
-pub use core::panicking::panic_fmt;
+//#[lang = "panic_fmt"]
+//pub use core::panicking::panic_fmt;
 pub use core::result;
 pub use core::option;
 pub use core::cmp;
@@ -27,12 +27,19 @@ pub use core::convert;
 pub use core::slice;
 pub use core::borrow;
 pub use core::mem;
+pub use core::intrinsics;
 pub mod prelude;
 #[prelude_import]
 pub use prelude::v1::*;
 
 #[lang = "eh_personality"] pub extern fn eh_personality() {}
-
+#[lang = "panic_fmt"] pub extern fn rust_begin_panic() -> ! { unsafe { intrinsics::abort() } }
+#[macro_export]
+macro_rules! panic {
+    () => {
+        $crate::rust_begin_panic()
+    }
+}
 pub mod vec{
     use ops::Add;
     #[repr(C)]

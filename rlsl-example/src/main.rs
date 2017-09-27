@@ -46,10 +46,15 @@ enum Test {
     C,
 }
 #[spirv(vertex)]
-fn vert() {
+fn vert2(v: Vec2<f32>, u: u32) {}
+#[spirv(vertex)]
+fn vert(v: Vec2<f32>, f: f32) {
     //let t = Test::A(1.0f32);
     let t1 = Test::A(1.0f32);
-    if let Test::A(f) = t1 {}
+    //if let Test::A(f) = t1 {}
+    if 1.0f32 > 1.0{
+        let i = 4.0f32;
+    }
     //let i = Some(1.0f32);
     //    let v = Vec2 { x: 1.0f32, y: 2.0 };
     //    let v1 = v;
