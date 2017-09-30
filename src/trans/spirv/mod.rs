@@ -948,6 +948,9 @@ pub fn find_merge_block(
         .last()
         .map(|b| *b)
 }
+//pub fn enum_discr(ty: ty::Ty) -> Option<ty::Ty>{
+//
+//}
 impl<'b, 'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'b, 'a, 'tcx> {
     fn visit_basic_block_data(&mut self, block: mir::BasicBlock, data: &mir::BasicBlockData<'tcx>) {
         //println!("basic block");
