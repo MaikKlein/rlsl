@@ -16,7 +16,7 @@ rustup override set rlsl_rust
 # Features
 
 
-## `struct` and `enum
+## `struct` and `enum`
 
 Structs map 1:1 to SPIR-V
 
@@ -51,7 +51,7 @@ struct Test{
 
 It is advised to keep variants that contain data to a minimum.
 
-## function definition / calls
+## Function definition / calls
 Functions translate 1:1 to SPIR-V
 ```
 fn foo(a: u32) -> u32;
