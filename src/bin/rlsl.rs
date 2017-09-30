@@ -217,7 +217,6 @@ impl<'a> CompilerCalls<'a> for RlslCompilerCalls {
         _: &errors::registry::Registry,
         _: ErrorOutputType,
     ) -> Compilation {
-        println!("early");
         Compilation::Continue
     }
     fn late_callback(

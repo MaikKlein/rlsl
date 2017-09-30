@@ -1,4 +1,4 @@
 max_width = 100
 error_on_line_overflow = false
 multiline_closure_forces_block = true
-multiline_match_arm_forces_block = true;
+multiline_match_arm_forces_block = true
