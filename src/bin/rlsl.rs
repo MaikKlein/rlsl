@@ -7,7 +7,6 @@
 extern crate arena;
 extern crate env_logger;
 extern crate getopts;
-#[macro_use]
 extern crate log;
 extern crate rlsl;
 //extern crate rspirv;
@@ -22,50 +21,11 @@ extern crate rustc_passes;
 extern crate rustc_plugin;
 extern crate rustc_resolve;
 extern crate rustc_trans;
-//extern crate spirv_headers as spirv;
-#[macro_use]
 extern crate syntax;
 extern crate syntax_pos;
-use rustc_data_structures::fx::FxHashSet;
-use rustc_resolve::MakeGlobMap;
-use rustc_incremental::{compute_incremental_hashes_map, IncrementalHashesMap};
-use rustc_trans::SharedCrateContext;
-
-//use rustc_borrowck::borrowck;
-use rustc_passes::*;
-use rustc_passes::loops;
-use rustc_passes::static_recursion;
-use rustc_plugin as plugin;
-use rustc::middle;
-//use rustc_passes::mir_stats;
-//use rustc_driver::derive_registrar;
-use rustc::middle::stability;
-use rustc::util::common::time;
-use rustc::mir;
-//use rspirv::mr::{Builder, Operand};
-//use rspirv::binary::Disassemble;
-
-//use rspirv::binary::Assemble;
-use std::mem;
-use rustc::hir::intravisit as hir_visit;
-use rustc::hir::intravisit::*;
-use rustc::hir::*;
-use syntax_pos::Span;
-use syntax::ast::NodeId;
-use rustc::hir;
-use syntax_pos::symbol::Symbol;
-use std::path::Path;
-use rustc_trans::collector::collect_roots;
 use rustc_driver::{get_args, run, run_compiler, Compilation, CompilerCalls};
 use rustc_driver::driver::{CompileController, CompileState};
-use rustc::mir::visit::Visitor;
-
-
-use rustc::session::CompileIncomplete;
-use arena::DroplessArena;
-use rustc::ty::{GlobalArenas, Resolutions};
-use rustc::session::{CompileResult, Session};
-use rustc::ty;
+use rustc::session::Session;
 
 
 //impl<'a, 'v: 'a> rustc::hir::intravisit::Visitor<'v> for RlslVisitor<'a, 'v> {
@@ -223,6 +183,7 @@ impl<'a> CompilerCalls<'a> for RlslCompilerCalls {
         &mut self,
         matches: &getopts::Matches,
         sess: &Session,
+        _: &rustc::middle::cstore::CrateStore,
         input: &Input,
         odir: &Option<PathBuf>,
         ofile: &Option<PathBuf>,
@@ -264,16 +225,17 @@ impl<'a> CompilerCalls<'a> for RlslCompilerCalls {
             println!("crate_types = {:?}", crate_types);
 
             rustc_mir::transform::dump_mir::emit_mir(*tcx, &f);
-            let (shared_ccx, items) =
-                rlsl::trans::spirv::trans_items(*tcx, s.analysis.unwrap().clone(), &f);
-            let items = rlsl::trans::spirv::trans_all_items(*tcx, &shared_ccx, &items);
-            rlsl::trans::spirv::trans_spirv(*tcx, shared_ccx, &items);
+            let (items, _) = rustc_trans::collect_crate_translation_items(
+                *tcx,
+                rustc_trans::TransItemCollectionMode::Eager,
+            );
+            let items = rlsl::trans::spirv::trans_all_items(*tcx, &items);
+            rlsl::trans::spirv::trans_spirv(*tcx, &items);
         };
         controller
     }
 }
 fn main() {
-    env_logger::init();
     let mut calls = RlslCompilerCalls;
     let result = run(move || {
         let (a, b) = run_compiler(&get_args(), &mut calls, None, Some(box std::io::stdout()));

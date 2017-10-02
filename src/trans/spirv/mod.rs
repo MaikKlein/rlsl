@@ -15,11 +15,12 @@ use rustc;
 use rustc::{hir, mir};
 use spirv;
 use rustc_data_structures::fx::FxHashSet;
-use rustc_trans::{SharedCrateContext, TransItem};
+//use rustc_trans::{SharedCrateContext, TransItem};
+use rustc::middle::trans::TransItem;
 use rustc::ty;
 use rustc_trans;
-use rustc_trans::find_exported_symbols;
-use rustc_trans::back::symbol_export::ExportedSymbols;
+//use rustc_trans::find_exported_symbols;
+//use rustc_trans::back::symbol_export::ExportedSymbols;
 use rustc::session::config::OutputFilenames;
 use rspirv::mr::Builder;
 use syntax;
@@ -72,24 +73,24 @@ fn intrinsic_fn(attrs: &[syntax::ast::Attribute]) -> Option<IntrinsicFn> {
         })
         .nth(0)
 }
-pub fn trans_items<'a, 'tcx>(
-    tcx: ty::TyCtxt<'a, 'tcx, 'tcx>,
-    analysis: ty::CrateAnalysis,
-    output_filenames: &'a OutputFilenames,
-) -> (SharedCrateContext<'a, 'tcx>, FxHashSet<TransItem<'tcx>>) {
-    let ty::CrateAnalysis { reachable, .. } = analysis;
-    let check_overflow = tcx.sess.overflow_checks();
-    //let link_meta = link::build_link_meta(&incremental_hashes_map);
-    let exported_symbol_node_ids = find_exported_symbols(tcx, &reachable);
-    let shared_ccx = SharedCrateContext::new(tcx, check_overflow, output_filenames);
-    let exported_symbols = ExportedSymbols::compute(tcx, &exported_symbol_node_ids);
-    let (items, _) = rustc_trans::collector::collect_crate_translation_items(
-        &shared_ccx,
-        &exported_symbols,
-        rustc_trans::collector::TransItemCollectionMode::Eager,
-    );
-    (shared_ccx, items)
-}
+//pub fn trans_items<'a, 'tcx>(
+//    tcx: ty::TyCtxt<'a, 'tcx, 'tcx>,
+//    analysis: ty::CrateAnalysis,
+//    output_filenames: &'a OutputFilenames,
+//) -> (SharedCrateContext<'a, 'tcx>, FxHashSet<TransItem<'tcx>>) {
+//    let ty::CrateAnalysis { reachable, .. } = analysis;
+//    let check_overflow = tcx.sess.overflow_checks();
+//    //let link_meta = link::build_link_meta(&incremental_hashes_map);
+//    let exported_symbol_node_ids = find_exported_symbols(tcx, &reachable);
+//    let shared_ccx = SharedCrateContext::new(tcx, check_overflow, output_filenames);
+//    let exported_symbols = ExportedSymbols::compute(tcx, &exported_symbol_node_ids);
+//    let (items, _) = rustc_trans::collector::collect_crate_translation_items(
+//        &shared_ccx,
+//        &exported_symbols,
+//        rustc_trans::collector::TransItemCollectionMode::Eager,
+//    );
+//    (shared_ccx, items)
+//}
 #[derive(Copy, Clone, Debug, Hash, Eq, PartialEq)]
 pub enum SpirvConstVal {
     Float(ConstFloat),
@@ -219,7 +220,6 @@ use syntax_pos::symbol::InternedString;
 
 pub struct SpirvCtx<'a, 'tcx: 'a> {
     pub tcx: ty::TyCtxt<'a, 'tcx, 'tcx>,
-    pub ccx: SharedCrateContext<'a, 'tcx>,
     pub builder: Builder,
     pub ty_cache: HashMap<ty::Ty<'tcx>, SpirvTy>,
     pub const_cache: HashMap<SpirvConstVal, SpirvValue>,
@@ -331,8 +331,11 @@ impl<'a, 'tcx> SpirvCtx<'a, 'tcx> {
                 let mono_substs = mtx.monomorphize(&substs);
                 match adt.adt_kind() {
                     ty::AdtKind::Enum => {
-                        let layout = self.ccx.layout_of(ty);
-                        let discr_ty = if let &Layout::General { discr, .. } = layout.layout {
+                        let layout = ty.layout(
+                            self.tcx,
+                            ty::ParamEnv::empty(rustc::traits::Reveal::All),
+                        ).expect("layout");
+                        let discr_ty = if let &Layout::General { discr, .. } = layout{
                             discr.to_ty(&self.tcx, false)
                         } else {
                             panic!("No enum layout")
@@ -495,10 +498,7 @@ impl<'a, 'tcx> SpirvCtx<'a, 'tcx> {
         println!("{}", loader.module().disassemble());
         f.write_all(&bytes);
     }
-    pub fn new(
-        tcx: ty::TyCtxt<'a, 'tcx, 'tcx>,
-        ccx: SharedCrateContext<'a, 'tcx>,
-    ) -> SpirvCtx<'a, 'tcx> {
+    pub fn new(tcx: ty::TyCtxt<'a, 'tcx, 'tcx>) -> SpirvCtx<'a, 'tcx> {
         let mut builder = Builder::new();
         builder.capability(spirv::Capability::Shader);
         builder.ext_inst_import("GLSL.std.450");
@@ -510,7 +510,6 @@ impl<'a, 'tcx> SpirvCtx<'a, 'tcx> {
             const_cache: HashMap::new(),
             forward_fns: HashMap::new(),
             tcx,
-            ccx,
         }
     }
 }
@@ -639,23 +638,17 @@ impl<'a, 'tcx> MirContext<'a, 'tcx> {
 
 
 pub struct CollectCrateItems<'a, 'tcx: 'a> {
-    mir: &'a mir::Mir<'tcx>,
-    ccx: &'a SharedCrateContext<'a, 'tcx>,
-    substs: &'tcx ty::subst::Substs<'tcx>,
+    mtx: MirContext<'a, 'tcx>,
     items: Vec<TransItem<'tcx>>,
 }
-pub fn collect_crate_items<'a, 'b, 'tcx>(
-    mir: &'a mir::Mir<'tcx>,
-    ccx: &'a SharedCrateContext<'a, 'tcx>,
-    substs: &'tcx ty::subst::Substs<'tcx>,
+pub fn collect_crate_items<'a, 'tcx>(
+   mtx: MirContext<'a, 'tcx>
 ) -> Vec<TransItem<'tcx>> {
     let mut collector = CollectCrateItems {
-        substs,
-        mir,
-        ccx,
-        items: Vec::new(),
+        mtx,
+        items: Vec::new()
     };
-    collector.visit_mir(mir);
+    collector.visit_mir(&mtx.mir);
     collector.items
 }
 impl<'a, 'tcx> rustc::mir::visit::Visitor<'tcx> for CollectCrateItems<'a, 'tcx> {
@@ -670,10 +663,10 @@ impl<'a, 'tcx> rustc::mir::visit::Visitor<'tcx> for CollectCrateItems<'a, 'tcx> 
             if let &mir::Operand::Constant(ref constant) = func {
                 if let mir::Literal::Value { ref value } = constant.literal {
                     use rustc::middle::const_val::ConstVal;
-                    if let &ConstVal::Function(def_id, ref substs) = value {
+                    if let ConstVal::Function(def_id, ref substs) = value.val {
                         let mono_substs =
-                            self.ccx.tcx().trans_apply_param_substs(self.substs, substs);
-                        let instance = rustc_trans::resolve(&self.ccx, def_id, &mono_substs);
+                            self.mtx.tcx.trans_apply_param_substs(self.mtx.substs, substs);
+                        let instance = rustc_trans::resolve(self.mtx.tcx, def_id, &mono_substs);
                         self.items.push(TransItem::Fn(instance));
                     }
                 }
@@ -684,7 +677,6 @@ impl<'a, 'tcx> rustc::mir::visit::Visitor<'tcx> for CollectCrateItems<'a, 'tcx> 
 
 pub fn trans_all_items<'a, 'tcx>(
     tcx: ty::TyCtxt<'a, 'tcx, 'tcx>,
-    shared_ccx: &'a SharedCrateContext<'a, 'tcx>,
     start_items: &'a FxHashSet<TransItem<'tcx>>,
 ) -> FxHashSet<TransItem<'tcx>> {
     let mut hash_set = FxHashSet();
@@ -695,7 +687,13 @@ pub fn trans_all_items<'a, 'tcx>(
             if let &TransItem::Fn(ref instance) = item {
                 let mir = tcx.maybe_optimized_mir(instance.def_id());
                 if let Some(mir) = mir {
-                    let new_items = collect_crate_items(mir, shared_ccx, instance.substs);
+                    let mtx = MirContext{
+                        tcx,
+                        mir,
+                        substs: instance.substs,
+                        def_id: instance.def_id(),
+                    };
+                    let new_items = collect_crate_items(mtx);
                     if !new_items.is_empty() {
                         uncollected_items.push(new_items)
                     }
@@ -709,11 +707,10 @@ pub fn trans_all_items<'a, 'tcx>(
 
 pub fn trans_spirv<'a, 'tcx>(
     tcx: ty::TyCtxt<'a, 'tcx, 'tcx>,
-    shared_ccx: SharedCrateContext<'a, 'tcx>,
     items: &'a FxHashSet<TransItem<'tcx>>,
 ) {
     use rustc::mir::visit::Visitor;
-    let mut ctx = SpirvCtx::new(tcx, shared_ccx);
+    let mut ctx = SpirvCtx::new(tcx);
     for item in items {
         if let &TransItem::Fn(ref instance) = item {
             ctx.forward_fns
@@ -883,12 +880,12 @@ impl<'b, 'a, 'tcx: 'a> RlslVisitor<'b, 'a, 'tcx> {
             &mir::Operand::Constant(ref constant) => {
                 match constant.literal {
                     mir::Literal::Value { ref value } => {
-                        let expr = match value {
-                            &ConstVal::Float(f) => {
+                        let expr = match value.val {
+                            ConstVal::Float(f) => {
                                 let val = SpirvConstVal::Float(f);
                                 self.constant(val)
                             }
-                            &ConstVal::Integral(int) => {
+                            ConstVal::Integral(int) => {
                                 let val = SpirvConstVal::Integer(int);
                                 self.constant(val)
                             }
@@ -911,7 +908,7 @@ impl<'b, 'a, 'tcx: 'a> RlslVisitor<'b, 'a, 'tcx> {
         entry_point: &'b Entry,
         stx: &'b mut SpirvCtx<'a, 'tcx>,
     ) -> Self {
-        let mut visitor = RlslVisitor {
+        let visitor = RlslVisitor {
             stx,
             entry_point,
             map: &tcx.hir,
@@ -981,9 +978,11 @@ impl<'b, 'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'b, 'a, 
                 .ty(&self.mtx.mir.local_decls, self.mtx.tcx)
                 .to_ty(self.mtx.tcx);
             let adt = ty.ty_adt_def().expect("Should be an enum");
-
-            let layout = self.stx.ccx.layout_of(ty);
-            let discr_ty_int = if let &Layout::General { discr, .. } = layout.layout {
+            let layout = ty.layout(
+                self.stx.tcx,
+                ty::ParamEnv::empty(rustc::traits::Reveal::All),
+            ).expect("layout");
+            let discr_ty_int = if let &Layout::General { discr, .. } = layout{
                 discr
             } else {
                 panic!("No enum layout")
@@ -1197,7 +1196,7 @@ impl<'b, 'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'b, 'a, 
             self.stx.builder.entry_point(
                 spirv::ExecutionModel::Vertex,
                 spirv_function,
-                name.as_str().as_ref(),
+                name.as_ref(),
                 &inputs,
             );
             self.stx.builder.execution_mode(
@@ -1317,8 +1316,11 @@ impl<'b, 'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'b, 'a, 
 
                 let var = *self.vars.get(&local).expect("local");
                 let ty = self.mtx.mir.local_decls[local].ty;
-                let layout = self.stx.ccx.layout_of(ty);
-                let discr_ty = if let &Layout::General { discr, .. } = layout.layout {
+                let layout = ty.layout(
+                    self.stx.tcx,
+                    ty::ParamEnv::empty(rustc::traits::Reveal::All),
+                ).expect("layout");
+                let discr_ty = if let &Layout::General { discr, .. } = layout{
                     discr.to_ty(&self.mtx.tcx, false)
                 } else {
                     panic!("No enum layout")
@@ -1525,16 +1527,17 @@ impl<'b, 'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'b, 'a, 
                         //                                                    .tcx
                         //                                                    .erase_late_bound_regions_and_normalize(&ret_ty_binder);
                         let ret_ty = ret_ty_binder.skip_binder();
+                        
                         //let ret_ty = self.mtx.monomorphize(&ret_ty);
                         let spirv_ty = self.from_ty(ret_ty);
                         if let mir::Literal::Value { ref value } = constant.literal {
                             use rustc::middle::const_val::ConstVal;
-                            if let &ConstVal::Function(def_id, ref substs) = value {
+                            if let ConstVal::Function(def_id, ref substs) = value.val {
                                 //let resolve_fn_id = resolve_fn_call(self.mtx.tcx, def_id, substs);
                                 //println!("fn call def_id = {:?}", def_id);
                                 let mono_substs = self.mtx.monomorphize(substs);
                                 let resolve_fn_id =
-                                    rustc_trans::resolve(&self.stx.ccx, def_id, &mono_substs)
+                                    rustc_trans::resolve(self.stx.tcx, def_id, &mono_substs)
                                         .def_id();
                                 //                                let resolve_fn_id =
                                 //                                    rustc_trans::resolve(&self.mtx.stx.ccx, def_id, self.mtx.substs)
