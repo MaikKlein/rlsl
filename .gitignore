@@ -1,4 +1,5 @@
 /target/
 rlsl-example/target/
+tools/target/
 libstd/target/
 **/*.rs.bk
