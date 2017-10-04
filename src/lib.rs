@@ -25,4 +25,3 @@ extern crate spirv_headers as spirv;
 extern crate syntax;
 extern crate syntax_pos;
 pub mod trans;
-
