@@ -40,6 +40,7 @@
 
 
 
+#[cfg(spirv)]
 enum Test {
     A(Option<f32>),
     B(u32, u32),

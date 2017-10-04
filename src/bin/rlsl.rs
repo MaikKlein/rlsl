@@ -25,6 +25,7 @@ extern crate syntax;
 extern crate syntax_pos;
 use rustc_driver::{get_args, run, run_compiler, Compilation, CompilerCalls};
 use rustc_driver::driver::{CompileController, CompileState};
+use rustc_driver::RustcDefaultCalls;
 use rustc::session::Session;
 
 struct RlslCompilerCalls;
@@ -42,19 +43,20 @@ impl<'a> CompilerCalls<'a> for RlslCompilerCalls {
         _: &errors::registry::Registry,
         _: ErrorOutputType,
     ) -> Compilation {
-        println!(" matches = {:?}", matches.free);
+        //println!(" matches = {:?}", matches.free);
         Compilation::Continue
     }
     fn late_callback(
         &mut self,
         matches: &getopts::Matches,
         sess: &Session,
-        _: &rustc::middle::cstore::CrateStore,
+        cstore: &rustc::middle::cstore::CrateStore,
         input: &Input,
         odir: &Option<PathBuf>,
         ofile: &Option<PathBuf>,
     ) -> Compilation {
-        Compilation::Continue
+        RustcDefaultCalls::print_crate_info(sess, Some(input), odir, ofile)
+            .and_then(|| RustcDefaultCalls::list_metadata(sess, cstore, matches, input))
     }
     fn no_input(
         &mut self,
@@ -65,8 +67,8 @@ impl<'a> CompilerCalls<'a> for RlslCompilerCalls {
         _: &Option<PathBuf>,
         _: &errors::registry::Registry,
     ) -> Option<(Input, Option<PathBuf>)> {
-        println!("no input");
-        println!("matches = {:?}", matches.free);
+//        println!("no input");
+//        println!("matches = {:?}", matches.free);
         None
     }
     fn build_controller<'tcx>(
@@ -78,18 +80,15 @@ impl<'a> CompilerCalls<'a> for RlslCompilerCalls {
         controller.after_analysis.stop = Compilation::Stop;
         controller.after_analysis.callback = box |s: &mut CompileState| {
             let tcx = &s.tcx.unwrap();
-            let time_passes = tcx.sess.time_passes();
-            let f = rustc_driver::driver::build_output_filenames(
-                s.input,
-                &s.out_dir.map(|p| p.into()),
-                &s.out_file.map(|p| p.into()),
-                &[],
-                tcx.sess,
-            );
-            let crate_types = &tcx.sess.crate_types;
-            println!("crate_types = {:?}", crate_types);
-
-            rustc_mir::transform::dump_mir::emit_mir(*tcx, &f);
+            //            let time_passes = tcx.sess.time_passes();
+            //            let f = rustc_driver::driver::build_output_filenames(
+            //                s.input,
+            //                &s.out_dir.map(|p| p.into()),
+            //                &s.out_file.map(|p| p.into()),
+            //                &[],
+            //                tcx.sess,
+            //            );
+            //            rustc_mir::transform::dump_mir::emit_mir(*tcx, &f);
             let (items, _) = rustc_trans::collect_crate_translation_items(
                 *tcx,
                 rustc_trans::TransItemCollectionMode::Eager,
@@ -114,6 +113,8 @@ fn main() {
         args.extend_from_slice(&["--extern".into(), core_path]);
         args.extend_from_slice(&["--extern".into(), std_path]);
         args.extend_from_slice(&["-L".into(), l]);
+        args.extend_from_slice(&["--cfg".into(), "spirv".into()]);
+        //println!("args = {:?}", args);
         let (a, b) = run_compiler(&args, &mut calls, None, None);
         (a, b)
     });
