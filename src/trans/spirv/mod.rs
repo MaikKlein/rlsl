@@ -22,6 +22,7 @@ use rustc::session::config::OutputFilenames;
 use rspirv::mr::Builder;
 use syntax;
 use self::hir::def_id::DefId;
+
 pub enum IntrinsicFn {
     Dot,
 }
@@ -534,7 +535,6 @@ pub struct SpirvValue(pub spirv::Word);
 pub struct SpirvTy {
     pub word: spirv::Word,
 }
-
 impl From<spirv::Word> for SpirvTy {
     fn from(word: spirv::Word) -> SpirvTy {
         SpirvTy { word }
@@ -649,7 +649,12 @@ impl<'a, 'tcx> rustc::mir::visit::Visitor<'tcx> for CollectCrateItems<'a, 'tcx> 
                         let mono_substs = self.mtx
                             .tcx
                             .trans_apply_param_substs(self.mtx.substs, substs);
-                        let instance = rustc_trans::resolve(self.mtx.tcx, def_id, &mono_substs);
+                        let instance = ty::Instance::resolve(
+                            self.mtx.tcx,
+                            ty::ParamEnv::empty(rustc::traits::Reveal::All),
+                            def_id,
+                            &mono_substs,
+                        ).unwrap();
                         self.items.push(TransItem::Fn(instance));
                     }
                 }
@@ -1281,14 +1286,14 @@ impl<'b, 'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'b, 'a, 
             //            &mir::Rvalue::NullaryOp(..) => {}
             //            &mir::Rvalue::CheckedBinaryOp(..) => {}
             //            &mir::Rvalue::Discriminant(..) => {}
-            &mir::Rvalue::Aggregate(ref kind, ref operand) => {
-                //                if let &mir::AggregateKind::Adt(_, size, ..) = kind.as_ref() {
-                //                    if size == 0{
-                //                        // Empty struct, no need to construct it nor assign it.
-                //                        return;
-                //                    }
-                //                }
-                let spirv_operands: Vec<_> = operand
+            &mir::Rvalue::Aggregate(ref kind, ref operands) => {
+                // If there are no operands, then it should be 0 sized and we can
+                // abort.
+                if operands.is_empty() {
+                    return;
+                }
+
+                let spirv_operands: Vec<_> = operands
                     .iter()
                     .map(|op| {
                         let ty = op.ty(&self.mcx.mir.local_decls, self.mcx.tcx);
@@ -1530,9 +1535,13 @@ impl<'b, 'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'b, 'a, 
                             use rustc::middle::const_val::ConstVal;
                             if let ConstVal::Function(def_id, ref substs) = value.val {
                                 let mono_substs = self.mcx.monomorphize(substs);
-                                let resolve_fn_id =
-                                    rustc_trans::resolve(self.scx.tcx, def_id, &mono_substs)
-                                        .def_id();
+                                let resolve_fn_id = ty::Instance::resolve(
+                                    self.scx.tcx,
+                                    ty::ParamEnv::empty(rustc::traits::Reveal::All),
+                                    def_id,
+                                    &mono_substs,
+                                ).unwrap()
+                                    .def_id();
                                 let spirv_fn = self.scx
                                     .forward_fns
                                     .get(&resolve_fn_id)

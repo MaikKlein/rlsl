@@ -34,6 +34,11 @@ pub use prelude::v1::*;
 
 #[lang = "eh_personality"] pub extern fn eh_personality() {}
 #[lang = "panic_fmt"] pub extern fn rust_begin_panic() -> ! { unsafe { intrinsics::abort() } }
+#[lang = "start"]
+fn lang_start(main: fn(), argc: isize, argv: *const *const u8) -> isize {
+    0
+}
+
 #[macro_export]
 macro_rules! panic {
     () => {

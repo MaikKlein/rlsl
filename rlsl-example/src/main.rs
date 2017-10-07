@@ -40,30 +40,27 @@
 
 
 
-#[cfg(spirv)]
-enum Test {
-    A(Option<f32>),
-    B(u32, u32),
-    C
-}
-struct Foo {
-    f: f32,
-}
-struct Bar {
-    x: f32,
-    y: f32,
-}
+//#[cfg(spirv)]
 
-#[spirv(Vec2)]
-type Bar1 = Bar;
-
-trait A {}
-impl A for Bar {}
-
-struct Foo1;
+//struct Foo {
+//    f: f32,
+//}
+//struct Bar {
+//    x: f32,
+//    y: f32,
+//}
+//
+//#[spirv(Vec2)]
+//type Bar1 = Bar;
+//
+//trait A {}
+//impl A for Bar {}
+//
+//struct Foo1;
+struct Test;
 #[spirv(vertex)]
-fn vert(v: &Vec2<f32>, f: f32) {
-    let t = Test::B(1, 2);
+fn vert() {
+    let t = Test;
     //let f = Foo1{};
 //    let b = if 1.0f32 > 1.0 {
 //        Test::B(1, 2)

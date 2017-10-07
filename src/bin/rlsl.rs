@@ -20,6 +20,7 @@ extern crate rustc_mir;
 extern crate rustc_passes;
 extern crate rustc_plugin;
 extern crate rustc_resolve;
+extern crate rustc_save_analysis as save;
 extern crate rustc_trans;
 extern crate syntax;
 extern crate syntax_pos;
@@ -28,7 +29,9 @@ use rustc_driver::driver::{CompileController, CompileState};
 use rustc_driver::RustcDefaultCalls;
 use rustc::session::Session;
 
-struct RlslCompilerCalls;
+struct RlslCompilerCalls{
+    args: Vec<String>
+}
 
 use rustc::session::config::{self, ErrorOutputType, Input};
 use std::path::PathBuf;
@@ -43,7 +46,6 @@ impl<'a> CompilerCalls<'a> for RlslCompilerCalls {
         _: &errors::registry::Registry,
         _: ErrorOutputType,
     ) -> Compilation {
-        //println!(" matches = {:?}", matches.free);
         Compilation::Continue
     }
     fn late_callback(
@@ -55,8 +57,9 @@ impl<'a> CompilerCalls<'a> for RlslCompilerCalls {
         odir: &Option<PathBuf>,
         ofile: &Option<PathBuf>,
     ) -> Compilation {
-        RustcDefaultCalls::print_crate_info(sess, Some(input), odir, ofile)
-            .and_then(|| RustcDefaultCalls::list_metadata(sess, cstore, matches, input))
+        RustcDefaultCalls::print_crate_info(sess, Some(input), odir, ofile).and_then(|| {
+            RustcDefaultCalls::list_metadata(sess, cstore, matches, input)
+        })
     }
     fn no_input(
         &mut self,
@@ -67,55 +70,62 @@ impl<'a> CompilerCalls<'a> for RlslCompilerCalls {
         _: &Option<PathBuf>,
         _: &errors::registry::Registry,
     ) -> Option<(Input, Option<PathBuf>)> {
-//        println!("no input");
-//        println!("matches = {:?}", matches.free);
+        panic!("input");
+        //        println!("matches = {:?}", matches.free);
         None
     }
     fn build_controller<'tcx>(
         &'tcx mut self,
-        _: &rustc::session::Session,
-        _: &getopts::Matches,
+        session: &rustc::session::Session,
+        matches: &getopts::Matches,
     ) -> CompileController<'a> {
         let mut controller = CompileController::basic();
-        controller.after_analysis.stop = Compilation::Stop;
-        controller.after_analysis.callback = box |s: &mut CompileState| {
-            let tcx = &s.tcx.unwrap();
-            //            let time_passes = tcx.sess.time_passes();
-            //            let f = rustc_driver::driver::build_output_filenames(
-            //                s.input,
-            //                &s.out_dir.map(|p| p.into()),
-            //                &s.out_file.map(|p| p.into()),
-            //                &[],
-            //                tcx.sess,
-            //            );
-            //            rustc_mir::transform::dump_mir::emit_mir(*tcx, &f);
-            let (items, _) = rustc_trans::collect_crate_translation_items(
-                *tcx,
-                rustc_trans::TransItemCollectionMode::Eager,
-            );
-            let items = rlsl::trans::spirv::trans_all_items(*tcx, &items);
-            rlsl::trans::spirv::trans_spirv(*tcx, &items);
-        };
+        session.abort_if_errors();
+        if let Some(ref crate_type) = matches.opt_str("crate-type") {
+            if crate_type == "bin" {
+                controller.after_analysis.stop = Compilation::Stop;
+                controller.keep_ast = true;
+                controller.make_glob_map = rustc_resolve::MakeGlobMap::Yes;
+                controller.after_analysis.callback = box |state: &mut CompileState| {
+                    let tcx = &state.tcx.unwrap();
+                    let f = rustc_driver::driver::build_output_filenames(
+                        state.input,
+                        &state.out_dir.map(|p| p.into()),
+                        &state.out_file.map(|p| p.into()),
+                        &[],
+                        tcx.sess,
+                    );
+                    rustc_mir::transform::dump_mir::emit_mir(*tcx, &f);
+                    let (items, _) = rustc_trans::collect_crate_translation_items(
+                        *tcx,
+                        rustc_trans::TransItemCollectionMode::Eager,
+                    );
+                    let items = rlsl::trans::spirv::trans_all_items(*tcx, &items);
+                    rlsl::trans::spirv::trans_spirv(*tcx, &items);
+                };
+            }
+        }
         controller
     }
 }
 fn main() {
-    let mut calls = RlslCompilerCalls;
+    let mut args = get_args();
+    let home_dir = std::env::home_dir().expect("home_dir");
+    let lib_search_path = home_dir.join(".rlsl").join("lib");
+    let l = format!("{}", lib_search_path.as_path().display());
+    let core = lib_search_path.join("libcore.rlib");
+    let std = lib_search_path.join("libstd.rlib");
+    let core_path = format!("core={}", core.display());
+    let std_path = format!("std={}", std.display());
+    args.extend_from_slice(&["--extern".into(), core_path]);
+    args.extend_from_slice(&["--extern".into(), std_path]);
+    args.extend_from_slice(&["-L".into(), l]);
+    args.extend_from_slice(&["--cfg".into(), "spirv".into()]);
+    args.extend_from_slice(&["-Z".into(), "always-encode-mir".into()]);
+    let mut calls = RlslCompilerCalls{
+        args: args.clone()
+    };
     let result = run(move || {
-        let mut args = get_args();
-        let home_dir = std::env::home_dir().expect("home_dir");
-        let lib_search_path = home_dir.join(".rlsl").join("lib");
-        let l = format!("{}", lib_search_path.as_path().display());
-        let core = lib_search_path.join("libcore.rlib");
-        let std = lib_search_path.join("libstd.rlib");
-        let core_path = format!("core={}", core.display());
-        let std_path = format!("std={}", std.display());
-        args.extend_from_slice(&["--extern".into(), core_path]);
-        args.extend_from_slice(&["--extern".into(), std_path]);
-        args.extend_from_slice(&["-L".into(), l]);
-        args.extend_from_slice(&["--cfg".into(), "spirv".into()]);
-        //println!("args = {:?}", args);
-        let (a, b) = run_compiler(&args, &mut calls, None, None);
-        (a, b)
+        run_compiler(&args, &mut calls, None, None)
     });
 }
