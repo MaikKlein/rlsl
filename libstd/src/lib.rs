@@ -38,8 +38,6 @@ pub mod intrinsics {
         pub fn abort() -> !;
         /// Returns the square root of an `f32`
         pub fn sqrtf32(x: f32) -> f32;
-        /// Returns the square root of an `f64`
-        pub fn sqrtf64(x: f64) -> f64;
     }
 }
 

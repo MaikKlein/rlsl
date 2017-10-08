@@ -214,14 +214,14 @@ pub struct SpirvCtx<'a, 'tcx: 'a> {
 impl<'a, 'tcx> SpirvCtx<'a, 'tcx> {
     /// Tries to get a function id, if it fails it looks for an intrinsic id
     pub fn get_function_call(&self, def_id: DefId) -> Option<SpirvFunctionCall> {
-        match self.forward_fns.get(&def_id) {
-            Some(&spirv_fn) => Some(SpirvFunctionCall::Function(spirv_fn)),
-            None => {
+        self.forward_fns
+            .get(&def_id)
+            .map(|&spirv_fn| SpirvFunctionCall::Function(spirv_fn))
+            .or(
                 self.intrinsic_fns
                     .get(&def_id)
-                    .map(|&id| SpirvFunctionCall::Intrinsic(id))
-            }
-        }
+                    .map(|&id| SpirvFunctionCall::Intrinsic(id)),
+            )
     }
     pub fn constant_f32(&mut self, value: f32, mtx: MirContext<'a, 'tcx>) -> SpirvValue {
         use std::convert::TryFrom;
@@ -699,10 +699,8 @@ pub fn trans_all_items<'a, 'tcx>(
                     if !new_items.is_empty() {
                         uncollected_items.push(new_items)
                     }
-                    hash_set.insert(*item);
-                } else {
-                    hash_set.insert(*item);
                 }
+                hash_set.insert(*item);
             }
         }
     }
