@@ -1,5 +1,7 @@
 # RLSL - Rust Like Shading Langauge (Highly experimental)
 
+[![Join the chat at https://gitter.im/MaikKlein/rlsl](https://badges.gitter.im/MaikKlein/rlsl.svg)](https://gitter.im/MaikKlein/rlsl?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge&utm_content=badge)
+
 Experimental rust compiler from `mir` -> `spirv`.
 
 
