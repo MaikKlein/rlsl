@@ -677,6 +677,8 @@ impl<'a, 'tcx> rustc::mir::visit::Visitor<'tcx> for CollectCrateItems<'a, 'tcx> 
     }
 }
 
+/// The collector only collects items for the current crate, but we need to access
+/// items in all crates (rlibs) so we need to manually find them.
 pub fn trans_all_items<'a, 'tcx>(
     tcx: ty::TyCtxt<'a, 'tcx, 'tcx>,
     start_items: &'a FxHashSet<TransItem<'tcx>>,
@@ -706,6 +708,7 @@ pub fn trans_all_items<'a, 'tcx>(
     }
     hash_set
 }
+
 #[repr(u32)]
 pub enum GlslExtId {
     Round = 1,

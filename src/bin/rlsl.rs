@@ -100,6 +100,7 @@ impl<'a> CompilerCalls<'a> for RlslCompilerCalls {
                         *tcx,
                         rustc_trans::TransItemCollectionMode::Eager,
                     );
+                    println!("{:?}", items);
                     let items = rlsl::trans::spirv::trans_all_items(*tcx, &items);
                     rlsl::trans::spirv::trans_spirv(*tcx, &items);
                 };
