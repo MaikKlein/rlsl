@@ -713,6 +713,8 @@ pub fn trans_all_items<'a, 'tcx>(
 pub enum GlslExtId {
     Round = 1,
     Sqrt = 31,
+    Sin = 13,
+    Cos = 14
 }
 
 pub enum SpirvFunctionCall {
@@ -739,6 +741,8 @@ pub fn trans_spirv<'a, 'tcx>(
             if tcx.is_foreign_item(instance.def_id()) {
                 let id = match &*tcx.item_name(instance.def_id()) {
                     "sqrtf32" => GlslExtId::Sqrt,
+                    "sinf32" => GlslExtId::Sin,
+                    "cosf32" => GlslExtId::Cos,
                     ref rest => unimplemented!("{:?}", rest),
                 };
                 ctx.intrinsic_fns.insert(instance.def_id(), id as u32);

@@ -38,6 +38,8 @@ pub mod intrinsics {
         pub fn abort() -> !;
         /// Returns the square root of an `f32`
         pub fn sqrtf32(x: f32) -> f32;
+        pub fn cosf32(x: f32) -> f32;
+        pub fn sinf32(x: f32) -> f32;
     }
 }
 
@@ -48,6 +50,16 @@ pub mod f32 {
         #[inline]
         pub fn sqrt(self) -> f32 {
             unsafe { intrinsics::sqrtf32(self) }
+        }
+
+        #[inline]
+        pub fn sin(self) -> f32 {
+            unsafe { intrinsics::sinf32(self) }
+        }
+
+        #[inline]
+        pub fn cos(self) -> f32 {
+            unsafe { intrinsics::cosf32(self) }
         }
     }
 }

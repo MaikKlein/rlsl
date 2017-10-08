@@ -71,6 +71,8 @@ fn vert() {
         y: 2.0
     };
     let f = 1.0f32.sqrt();
+    let f = 1.0f32.cos();
+    let f = 1.0f32.sin();
     //let f = unsafe { sqrt(1.0) };
     //let f = Foo1{};
     //    let b = if 1.0f32 > 1.0 {
