@@ -29,8 +29,8 @@ use rustc_driver::driver::{CompileController, CompileState};
 use rustc_driver::RustcDefaultCalls;
 use rustc::session::Session;
 
-struct RlslCompilerCalls{
-    args: Vec<String>
+struct RlslCompilerCalls {
+    args: Vec<String>,
 }
 
 use rustc::session::config::{self, ErrorOutputType, Input};
@@ -88,14 +88,14 @@ impl<'a> CompilerCalls<'a> for RlslCompilerCalls {
                 controller.make_glob_map = rustc_resolve::MakeGlobMap::Yes;
                 controller.after_analysis.callback = box |state: &mut CompileState| {
                     let tcx = &state.tcx.unwrap();
-                    let f = rustc_driver::driver::build_output_filenames(
-                        state.input,
-                        &state.out_dir.map(|p| p.into()),
-                        &state.out_file.map(|p| p.into()),
-                        &[],
-                        tcx.sess,
-                    );
-                    rustc_mir::transform::dump_mir::emit_mir(*tcx, &f);
+                    //                    let f = rustc_driver::driver::build_output_filenames(
+                    //                        state.input,
+                    //                        &state.out_dir.map(|p| p.into()),
+                    //                        &state.out_file.map(|p| p.into()),
+                    //                        &[],
+                    //                        tcx.sess,
+                    //                    );
+                    //rustc_mir::transform::dump_mir::emit_mir(*tcx, &f);
                     let (items, _) = rustc_trans::collect_crate_translation_items(
                         *tcx,
                         rustc_trans::TransItemCollectionMode::Eager,
@@ -122,10 +122,6 @@ fn main() {
     args.extend_from_slice(&["-L".into(), l]);
     args.extend_from_slice(&["--cfg".into(), "spirv".into()]);
     args.extend_from_slice(&["-Z".into(), "always-encode-mir".into()]);
-    let mut calls = RlslCompilerCalls{
-        args: args.clone()
-    };
-    let result = run(move || {
-        run_compiler(&args, &mut calls, None, None)
-    });
+    let mut calls = RlslCompilerCalls { args: args.clone() };
+    let result = run(move || run_compiler(&args, &mut calls, None, None));
 }

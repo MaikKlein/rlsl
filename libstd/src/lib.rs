@@ -8,8 +8,8 @@
 #![feature(prelude_import)]
 #![feature(custom_attribute, attr_literals)]
 
-#[macro_reexport(assert, assert_eq, assert_ne, debug_assert, debug_assert_eq,
-debug_assert_ne, unreachable, unimplemented, write, writeln, try)]
+#[macro_reexport(assert, assert_eq, assert_ne, debug_assert, debug_assert_eq, debug_assert_ne,
+                 unreachable, unimplemented, write, writeln, try)]
 extern crate core as __core;
 
 pub use core::iter;
@@ -27,13 +27,38 @@ pub use core::convert;
 pub use core::slice;
 pub use core::borrow;
 pub use core::mem;
-pub use core::intrinsics;
+//pub use core::intrinsics;
+
 pub mod prelude;
 #[prelude_import]
 pub use prelude::v1::*;
 
-#[lang = "eh_personality"] pub extern fn eh_personality() {}
-#[lang = "panic_fmt"] pub extern fn rust_begin_panic() -> ! { unsafe { intrinsics::abort() } }
+pub mod intrinsics {
+    extern "C" {
+        pub fn abort() -> !;
+        /// Returns the square root of an `f32`
+        pub fn sqrtf32(x: f32) -> f32;
+        /// Returns the square root of an `f64`
+        pub fn sqrtf64(x: f64) -> f64;
+    }
+}
+
+pub mod f32 {
+    use intrinsics;
+    #[lang = "f32"]
+    impl f32 {
+        #[inline]
+        pub fn sqrt(self) -> f32 {
+            unsafe { intrinsics::sqrtf32(self) }
+        }
+    }
+}
+#[lang = "eh_personality"]
+pub extern "C" fn eh_personality() {}
+#[lang = "panic_fmt"]
+pub extern "C" fn rust_begin_panic() -> ! {
+    unsafe { intrinsics::abort() }
+}
 #[lang = "start"]
 fn lang_start(main: fn(), argc: isize, argv: *const *const u8) -> isize {
     0
@@ -45,7 +70,7 @@ macro_rules! panic {
         $crate::rust_begin_panic()
     }
 }
-pub mod vec{
+pub mod vec {
     use ops::Add;
     #[repr(C)]
     #[derive(Copy, Clone)]
@@ -66,8 +91,7 @@ pub mod vec{
     //        }
     //    }
     //}
-    impl Add for Vec2<f32>
-    {
+    impl Add for Vec2<f32> {
         type Output = Vec2<f32>;
         fn add(self, other: Vec2<f32>) -> Vec2<f32> {
             Vec2 {
@@ -77,10 +101,10 @@ pub mod vec{
         }
     }
 
-    impl Vec2<f32>{
+    impl Vec2<f32> {
         #[spirv(dot)]
         #[inline(never)]
-        pub fn dot(self, other: Vec2<f32>) -> f32{
+        pub fn dot(self, other: Vec2<f32>) -> f32 {
             self.x * other.x + self.y * other.y
         }
     }

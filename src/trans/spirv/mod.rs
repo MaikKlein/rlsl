@@ -29,10 +29,11 @@ pub enum IntrinsicFn {
 
 #[derive(Debug)]
 pub struct Entry {
-    pub next_id: usize,
-    pub locations: HashMap<SpirvTy, usize>,
-    pub input_vars: HashMap<usize, spirv::Word>,
+    next_id: usize,
+    locations: HashMap<SpirvTy, usize>,
+    input_vars: HashMap<usize, spirv::Word>,
 }
+
 impl Entry {
     pub fn new() -> Self {
         Entry {
@@ -58,11 +59,12 @@ impl Entry {
             .map(|l| *l)
     }
 }
+
 fn intrinsic_fn(attrs: &[syntax::ast::Attribute]) -> Option<IntrinsicFn> {
     attrs
         .iter()
         .filter_map(|attr| {
-            extract_spirv_attr(attr, &[], |s| {
+            extract_attr(attr, &[], |s| {
                 match s {
                     "dot" => Some(IntrinsicFn::Dot),
                     _ => None,
@@ -204,10 +206,23 @@ pub struct SpirvCtx<'a, 'tcx: 'a> {
     pub ty_cache: HashMap<ty::Ty<'tcx>, SpirvTy>,
     pub const_cache: HashMap<SpirvConstVal, SpirvValue>,
     pub forward_fns: HashMap<hir::def_id::DefId, SpirvFn>,
+    pub intrinsic_fns: HashMap<hir::def_id::DefId, spirv::Word>,
     pub debug_symbols: bool,
+    pub glsl_ext_id: spirv::Word,
 }
 
 impl<'a, 'tcx> SpirvCtx<'a, 'tcx> {
+    /// Tries to get a function id, if it fails it looks for an intrinsic id
+    pub fn get_function_call(&self, def_id: DefId) -> Option<SpirvFunctionCall> {
+        match self.forward_fns.get(&def_id) {
+            Some(&spirv_fn) => Some(SpirvFunctionCall::Function(spirv_fn)),
+            None => {
+                self.intrinsic_fns
+                    .get(&def_id)
+                    .map(|&id| SpirvFunctionCall::Intrinsic(id))
+            }
+        }
+    }
     pub fn constant_f32(&mut self, value: f32, mtx: MirContext<'a, 'tcx>) -> SpirvValue {
         use std::convert::TryFrom;
         let val = SpirvConstVal::Float(ConstFloat::from_u128(
@@ -365,20 +380,9 @@ impl<'a, 'tcx> SpirvCtx<'a, 'tcx> {
                     }
                     ty::AdtKind::Struct => {
                         let attrs = self.tcx.get_attrs(adt.did);
-                        for attr in attrs.iter() {
-                            println!("attr.name() = {:?}", attr.name());
-                        }
-                        let intrinsic = attrs
-                            .iter()
-                            .filter_map(|attr| {
-                                extract_spirv_attr(attr, &[], |s| {
-                                    match s {
-                                        "Vec2" => Some(IntrinsicType::Vec(2)),
-                                        _ => None,
-                                    }
-                                })
-                            })
-                            .nth(0);
+                        for attr in attrs.iter() {}
+                        use std::ops::Deref;
+                        let intrinsic = IntrinsicType::from_attr(attrs.deref());
 
                         if let Some(intrinsic) = intrinsic {
                             let intrinsic_spirv = match intrinsic {
@@ -482,13 +486,12 @@ impl<'a, 'tcx> SpirvCtx<'a, 'tcx> {
         let mut loader = rspirv::mr::Loader::new();
         //let bytes = b.module().assemble_bytes();
         rspirv::binary::parse_bytes(&bytes, &mut loader);
-        println!("{}", loader.module().disassemble());
         f.write_all(&bytes);
     }
     pub fn new(tcx: ty::TyCtxt<'a, 'tcx, 'tcx>) -> SpirvCtx<'a, 'tcx> {
         let mut builder = Builder::new();
         builder.capability(spirv::Capability::Shader);
-        builder.ext_inst_import("GLSL.std.450");
+        let glsl_ext_id = builder.ext_inst_import("GLSL.std.450");
         builder.memory_model(spirv::AddressingModel::Logical, spirv::MemoryModel::GLSL450);
         SpirvCtx {
             debug_symbols: true,
@@ -496,7 +499,9 @@ impl<'a, 'tcx> SpirvCtx<'a, 'tcx> {
             ty_cache: HashMap::new(),
             const_cache: HashMap::new(),
             forward_fns: HashMap::new(),
+            intrinsic_fns: HashMap::new(),
             tcx,
+            glsl_ext_id,
         }
     }
 }
@@ -559,13 +564,48 @@ pub fn trans_function(mtx: MirContext) {}
 pub enum IntrinsicType {
     Vec(usize),
 }
+impl IntrinsicType {
+    pub fn from_attr(attrs: &[syntax::ast::Attribute]) -> Option<Self> {
+        attrs
+            .iter()
+            .filter_map(|attr| {
+                extract_attr(attr, &["spirv", "ty"], |s| {
+                    match s {
+                        "Vec2" => Some(IntrinsicType::Vec(2)),
+                        _ => None,
+                    }
+                })
+            })
+            .nth(0)
+    }
+}
 #[derive(Debug)]
 pub enum IntrinsicEntry {
     Vertex,
     Fragment,
 }
 
-pub fn extract_spirv_attr<'a, R, F>(
+
+pub fn extract_attr_impl<'a, R, F>(
+    meta_item: &'a syntax::ast::MetaItem,
+    keywords: &[&str],
+    f: F,
+) -> Option<R>
+where
+    F: Fn(&str) -> Option<R>,
+{
+    if keywords.is_empty() {
+        return f(&*meta_item.name().as_str());
+    }
+    let meta_item_list = &meta_item.meta_item_list()?[0];
+    if meta_item.name() == keywords[0] {
+        if let syntax::ast::NestedMetaItemKind::MetaItem(ref meta) = meta_item_list.node {
+            return extract_attr_impl(meta, &keywords[1..], f);
+        }
+    }
+    None
+}
+pub fn extract_attr<'a, R, F>(
     attr: &'a syntax::ast::Attribute,
     keywords: &[&str],
     f: F,
@@ -573,34 +613,8 @@ pub fn extract_spirv_attr<'a, R, F>(
 where
     F: Fn(&str) -> Option<R>,
 {
-    let meta_item_list = attr.name().and_then(|name| {
-        if name.as_str() == "spirv" {
-            attr.meta_item_list()
-        } else {
-            None
-        }
-    });
-    if let Some(meta_item_list) = meta_item_list {
-        let iter = keywords
-            .iter()
-            .zip(meta_item_list.iter())
-            .filter_map(|(keyword, meta_item)| {
-                if let syntax::ast::NestedMetaItemKind::MetaItem(ref meta) = meta_item.node {
-                    if &meta.name().as_str() == keyword {
-                        return Some(());
-                    }
-                }
-                None
-            });
-
-        if iter.count() == keywords.len() {
-            return meta_item_list.get(keywords.len()).and_then(|meta_item| {
-                if let syntax::ast::NestedMetaItemKind::MetaItem(ref meta) = meta_item.node {
-                    return f(&*meta.name().as_str());
-                }
-                None
-            });
-        }
+    if let Some(ref meta) = attr.meta() {
+        return extract_attr_impl(meta, keywords, f);
     }
     None
 }
@@ -686,11 +700,23 @@ pub fn trans_all_items<'a, 'tcx>(
                         uncollected_items.push(new_items)
                     }
                     hash_set.insert(*item);
+                } else {
+                    hash_set.insert(*item);
                 }
             }
         }
     }
     hash_set
+}
+#[repr(u32)]
+pub enum GlslExtId {
+    Round = 1,
+    Sqrt = 31,
+}
+
+pub enum SpirvFunctionCall {
+    Function(SpirvFn),
+    Intrinsic(spirv::Word),
 }
 
 pub fn trans_spirv<'a, 'tcx>(
@@ -699,12 +725,27 @@ pub fn trans_spirv<'a, 'tcx>(
 ) {
     use rustc::mir::visit::Visitor;
     let mut ctx = SpirvCtx::new(tcx);
-    for item in items {
-        if let &TransItem::Fn(ref instance) = item {
-            ctx.forward_fns
-                .insert(instance.def_id(), SpirvFn(ctx.builder.id()));
-        }
-    }
+    items
+        .iter()
+        .filter_map(|item| {
+            if let &TransItem::Fn(ref instance) = item {
+                Some(instance)
+            } else {
+                None
+            }
+        })
+        .for_each(|instance| {
+            if tcx.is_foreign_item(instance.def_id()) {
+                let id = match &*tcx.item_name(instance.def_id()) {
+                    "sqrtf32" => GlslExtId::Sqrt,
+                    ref rest => unimplemented!("{:?}", rest),
+                };
+                ctx.intrinsic_fns.insert(instance.def_id(), id as u32);
+            } else {
+                ctx.forward_fns
+                    .insert(instance.def_id(), SpirvFn(ctx.builder.id()));
+            }
+        });
     let instances: Vec<_> = items
         .iter()
         .filter_map(|item| {
@@ -725,7 +766,7 @@ pub fn trans_spirv<'a, 'tcx>(
         let intrinsic = tcx.get_attrs(mtx.def_id)
             .iter()
             .filter_map(|attr| {
-                extract_spirv_attr(attr, &[], |s| {
+                extract_attr(attr, &["spirv"], |s| {
                     match s {
                         "vertex" => Some(IntrinsicEntry::Vertex),
                         "fragment" => Some(IntrinsicEntry::Fragment),
@@ -740,7 +781,6 @@ pub fn trans_spirv<'a, 'tcx>(
     for &mtx in entry_instances {
         for arg in mtx.mir.args_iter() {
             let ty = mtx.mir.local_decls[arg].ty;
-            println!("ty.regions() = {:?}", ty.regions());
             let spirv_ty = ctx.to_ty_as_ptr(ty, mtx, spirv::StorageClass::Input);
             entry.insert(spirv_ty);
         }
@@ -758,7 +798,7 @@ pub fn trans_spirv<'a, 'tcx>(
         let intrinsic = tcx.get_attrs(mtx.def_id)
             .iter()
             .filter_map(|attr| {
-                extract_spirv_attr(attr, &[], |s| {
+                extract_attr(attr, &["spirv"], |s| {
                     match s {
                         "vertex" => Some(IntrinsicEntry::Vertex),
                         "fragment" => Some(IntrinsicEntry::Fragment),
@@ -1448,7 +1488,6 @@ impl<'b, 'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'b, 'a, 
         use rustc_data_structures::control_flow_graph::dominators::dominators;
         self.super_terminator_kind(block, kind, location);
         let mir = self.mcx.mir;
-        println!("{:?}", post_order_from(mir, block));
         let successors = kind.successors();
         match kind {
             &mir::TerminatorKind::Return => {
@@ -1525,7 +1564,6 @@ impl<'b, 'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'b, 'a, 
                 ..
             } => {
                 let local_decls = &self.mcx.mir.local_decls;
-                println!("func = {:?}", func);
                 match func {
                     &mir::Operand::Constant(ref constant) => {
                         let ret_ty_binder = constant.ty.fn_sig(self.scx.tcx).output();
@@ -1542,11 +1580,6 @@ impl<'b, 'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'b, 'a, 
                                     &mono_substs,
                                 ).unwrap()
                                     .def_id();
-                                let spirv_fn = self.scx
-                                    .forward_fns
-                                    .get(&resolve_fn_id)
-                                    .map(|v| *v)
-                                    .expect("forward fn call");
                                 let arg_operand_loads: Vec<_> = args.iter()
                                     .map(|arg| {
                                         let operand = self.load_operand(arg);
@@ -1555,15 +1588,39 @@ impl<'b, 'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'b, 'a, 
                                         operand.load_raw(&mut self.scx, arg_ty_spirv)
                                     })
                                     .collect();
-                                let spirv_fn_call = self.scx
-                                    .builder
-                                    .function_call(
-                                        spirv_ty.word,
-                                        None,
-                                        spirv_fn.0,
-                                        &arg_operand_loads,
-                                    )
-                                    .expect("fn call");
+                                let fn_call = self.scx
+                                    .get_function_call(resolve_fn_id)
+                                    .expect("function call");
+                                let spirv_fn_call = match fn_call {
+                                    SpirvFunctionCall::Function(spirv_fn) => {
+                                        let spirv_fn = self.scx
+                                            .forward_fns
+                                            .get(&resolve_fn_id)
+                                            .map(|v| *v)
+                                            .expect("forward fn call");
+                                        self.scx
+                                            .builder
+                                            .function_call(
+                                                spirv_ty.word,
+                                                None,
+                                                spirv_fn.0,
+                                                &arg_operand_loads,
+                                            )
+                                            .expect("fn call")
+                                    }
+                                    SpirvFunctionCall::Intrinsic(id) => {
+                                        self.scx
+                                            .builder
+                                            .ext_inst(
+                                                spirv_ty.word,
+                                                None,
+                                                self.scx.glsl_ext_id,
+                                                id,
+                                                &arg_operand_loads,
+                                            )
+                                            .expect("ext instr")
+                                    }
+                                };
                                 if let &Some(ref dest) = destination {
                                     let &(ref lvalue, _) = dest;
                                     match lvalue {

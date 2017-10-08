@@ -1,4 +1,5 @@
 #![feature(custom_attribute, attr_literals)]
+#![feature(platform_intrinsics)]
 
 //use std::ops::Add;
 ////#[spirv(Vec2)]
@@ -57,16 +58,26 @@
 //impl A for Bar {}
 //
 //struct Foo1;
-struct Test;
+
+#[spirv(ty(Vec2))]
+struct Test{
+    x: f32,
+    y: f32
+}
 #[spirv(vertex)]
 fn vert() {
-    let t = Test;
+    let t = Test{
+        x: 1.0,
+        y: 2.0
+    };
+    let f = 1.0f32.sqrt();
+    //let f = unsafe { sqrt(1.0) };
     //let f = Foo1{};
-//    let b = if 1.0f32 > 1.0 {
-//        Test::B(1, 2)
-//    } else {
-//        Test::C
-//    };
+    //    let b = if 1.0f32 > 1.0 {
+    //        Test::B(1, 2)
+    //    } else {
+    //        Test::C
+    //    };
 
     //    let f = if let Test::A(f) = t1 {
     //        if let Some(f) = f {
