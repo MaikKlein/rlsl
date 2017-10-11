@@ -81,6 +81,9 @@ impl<'a> CompilerCalls<'a> for RlslCompilerCalls {
     ) -> CompileController<'a> {
         let mut controller = CompileController::basic();
         session.abort_if_errors();
+        controller.after_hir_lowering.callback = box |state: &mut CompileState| {
+            println!("state.tcx.is_some() = {:?}", state.tcx.is_some());
+        };
         if let Some(ref crate_type) = matches.opt_str("crate-type") {
             if crate_type == "bin" {
                 controller.after_analysis.stop = Compilation::Stop;
@@ -88,14 +91,14 @@ impl<'a> CompilerCalls<'a> for RlslCompilerCalls {
                 controller.make_glob_map = rustc_resolve::MakeGlobMap::Yes;
                 controller.after_analysis.callback = box |state: &mut CompileState| {
                     let tcx = &state.tcx.unwrap();
-                    //                    let f = rustc_driver::driver::build_output_filenames(
-                    //                        state.input,
-                    //                        &state.out_dir.map(|p| p.into()),
-                    //                        &state.out_file.map(|p| p.into()),
-                    //                        &[],
-                    //                        tcx.sess,
-                    //                    );
-                    //rustc_mir::transform::dump_mir::emit_mir(*tcx, &f);
+                    let f = rustc_driver::driver::build_output_filenames(
+                        state.input,
+                        &state.out_dir.map(|p| p.into()),
+                        &state.out_file.map(|p| p.into()),
+                        &[],
+                        tcx.sess,
+                    );
+                    rustc_mir::transform::dump_mir::emit_mir(*tcx, &f);
                     let (items, _) = rustc_trans::collect_crate_translation_items(
                         *tcx,
                         rustc_trans::TransItemCollectionMode::Eager,

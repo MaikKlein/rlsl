@@ -64,6 +64,15 @@ struct Test{
     x: f32,
     y: f32
 }
+
+pub trait Foo{
+    fn get(self) -> f32;
+}
+impl Foo for Test{
+    fn get(self) -> f32{
+        self.x
+    }
+}
 #[spirv(vertex)]
 fn vert() {
     let t = Test{
@@ -71,8 +80,7 @@ fn vert() {
         y: 2.0
     };
     let f = 1.0f32.sqrt();
-    let f = 1.0f32.cos();
-    let f = 1.0f32.sin();
+    let x = t.get();
     //let f = unsafe { sqrt(1.0) };
     //let f = Foo1{};
     //    let b = if 1.0f32 > 1.0 {

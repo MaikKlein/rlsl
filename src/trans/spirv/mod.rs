@@ -714,7 +714,7 @@ pub enum GlslExtId {
     Round = 1,
     Sqrt = 31,
     Sin = 13,
-    Cos = 14
+    Cos = 14,
 }
 
 pub enum SpirvFunctionCall {
@@ -751,6 +751,22 @@ pub fn trans_spirv<'a, 'tcx>(
                     .insert(instance.def_id(), SpirvFn(ctx.builder.id()));
             }
         });
+    let instances: Vec<_> = items
+        .iter()
+        .filter_map(|item| {
+            if let &TransItem::Fn(ref instance) = item {
+                if let Some(mir) = tcx.maybe_optimized_mir(instance.def_id()) {
+                    return Some(MirContext {
+                        mir,
+                        def_id: instance.def_id(),
+                        substs: instance.substs,
+                        tcx,
+                    });
+                }
+            }
+            None
+        })
+        .collect();
     let instances: Vec<_> = items
         .iter()
         .filter_map(|item| {
@@ -988,6 +1004,38 @@ pub struct Enum<'tcx> {
     pub discr_ty: ty::Ty<'tcx>,
     pub index: usize,
 }
+
+pub fn find_mir_return(mir: &mir::Mir) -> Option<usize> {
+    mir.basic_blocks()
+        .iter()
+        .position(|block| {
+            if let mir::TerminatorKind::Return = block.terminator().kind {
+                true
+            } else {
+                false
+            }
+        })
+}
+
+pub fn transform_mir_return<'a, 'tcx>(mir: &'a mut mir::Mir<'tcx>){
+    let ret_pos = find_mir_return(mir).expect("no return");
+    let last_pos = mir.basic_blocks().len() - 1;
+    if ret_pos != last_pos {
+        mir.basic_blocks_mut().swap(ret_pos, last_pos);
+    }
+}
+
+pub struct MirReturnPass;
+
+impl mir::transform::MirPass for MirReturnPass{
+    fn run_pass<'a, 'tcx>(&self,
+                          tcx: ty::TyCtxt<'a, 'tcx, 'tcx>,
+                          source: mir::transform::MirSource,
+                          mir: &mut mir::Mir<'tcx>){
+        println!("run mir pass");
+        transform_mir_return(mir);
+    }
+}
 impl<'tcx> Enum<'tcx> {
     pub fn from_ty<'a>(tcx: ty::TyCtxt<'a, 'tcx, 'tcx>, ty: ty::Ty<'tcx>) -> Option<Enum<'tcx>> {
         let discr_ty = ty.layout(tcx, ty::ParamEnv::empty(rustc::traits::Reveal::All))
@@ -1091,6 +1139,7 @@ impl<'b, 'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'b, 'a, 
         //let attr = self.mtx.tcx.get_attrs(self.mtx.def_id);
 
         //println!("attr = {:?}", attr);
+        use rustc_data_structures::control_flow_graph::iterate::{reverse_post_order, post_order_from };
         for (block, _) in mir.basic_blocks().iter_enumerated() {
             self.label_blocks
                 .insert(block, SpirvLabel(self.scx.builder.id()));
@@ -1239,7 +1288,27 @@ impl<'b, 'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'b, 'a, 
                 .expect("No first label");
             self.scx.builder.branch(spirv_label.0).expect("branch");
         }
-        self.super_mir(mir);
+        //self.super_mir(mir);
+        let order = reverse_post_order(mir, mir::BasicBlock::new(0));
+        for bb in order{
+            self.visit_basic_block_data(bb, &mir.basic_blocks()[bb]);
+        }
+
+        for scope in &mir.visibility_scopes {
+            self.visit_visibility_scope_data(scope);
+        }
+
+        let lookup = mir::visit::Lookup::Src(mir::SourceInfo {
+            span: mir.span,
+            scope: mir::ARGUMENT_VISIBILITY_SCOPE,
+        });
+        self.visit_ty(&mir.return_ty, lookup);
+
+        for local_decl in &mir.local_decls {
+            self.visit_local_decl(local_decl);
+        }
+
+        self.visit_span(&mir.span);
         self.scx.builder.end_function().expect("end fn");
         if self.entry.is_some() {
             let inputs: Vec<_> = mir.args_iter()
