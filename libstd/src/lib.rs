@@ -78,6 +78,30 @@ fn lang_start(main: fn(), argc: isize, argv: *const *const u8) -> isize {
 macro_rules! panic {
     () => {
         $crate::rust_begin_panic()
+    };
+    ($msg:expr) => {
+        panic!()
+    };
+}
+
+pub trait Pipeline{
+    type VertexInput;
+    type VertexOutput;
+}
+#[macro_export]
+macro_rules! pipeline {
+    ($name: ident, fn $vertex_name: ident ( $vertex_param: ident: $vertex_input: path) -> $vertex_output: path { $($vertex_body: tt)* }) => {
+        pub struct $name;
+        impl ::std::Pipeline for $name{
+            type VertexInput = $vertex_input;
+            type VertexOutput = $vertex_output;
+        }
+        #[spirv(vertex)]
+        fn concat_idents!(foo, bar) ($vertex_param: $vertex_input){
+            $(
+                $vertex_body
+            )*
+        }
     }
 }
 pub mod vec {

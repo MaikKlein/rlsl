@@ -199,14 +199,18 @@ impl<'tcx> SpirvOperand<'tcx> {
 }
 
 use syntax_pos::symbol::InternedString;
-
+#[derive(Debug, Copy, Clone)]
+pub enum Intrinsic {
+    GlslExt(spirv::Word),
+    Abort,
+}
 pub struct SpirvCtx<'a, 'tcx: 'a> {
     pub tcx: ty::TyCtxt<'a, 'tcx, 'tcx>,
     pub builder: Builder,
     pub ty_cache: HashMap<ty::Ty<'tcx>, SpirvTy>,
     pub const_cache: HashMap<SpirvConstVal, SpirvValue>,
     pub forward_fns: HashMap<hir::def_id::DefId, SpirvFn>,
-    pub intrinsic_fns: HashMap<hir::def_id::DefId, spirv::Word>,
+    pub intrinsic_fns: HashMap<hir::def_id::DefId, Intrinsic>,
     pub debug_symbols: bool,
     pub glsl_ext_id: spirv::Word,
 }
@@ -660,6 +664,11 @@ impl<'a, 'tcx> rustc::mir::visit::Visitor<'tcx> for CollectCrateItems<'a, 'tcx> 
                 if let mir::Literal::Value { ref value } = constant.literal {
                     use rustc::middle::const_val::ConstVal;
                     if let ConstVal::Function(def_id, ref substs) = value.val {
+                        let a = self.mtx
+                            .tcx
+                            .trait_of_item(def_id)
+                            .map(|_| self.mtx.tcx.associated_item(def_id));
+                        //println!("a = {:#?}", a);
                         let mono_substs = self.mtx
                             .tcx
                             .trans_apply_param_substs(self.mtx.substs, substs);
@@ -719,7 +728,7 @@ pub enum GlslExtId {
 
 pub enum SpirvFunctionCall {
     Function(SpirvFn),
-    Intrinsic(spirv::Word),
+    Intrinsic(Intrinsic),
 }
 
 pub fn trans_spirv<'a, 'tcx>(
@@ -738,14 +747,34 @@ pub fn trans_spirv<'a, 'tcx>(
             }
         })
         .for_each(|instance| {
+            let hir: &hir::map::Map = &tcx.hir;
+            //            let a = tcx.def_path(instance.def_id())
+            //                .data
+            //                .into_iter()
+            //                .map(|elem| elem.data.to_string())
+            //                .collect::<Vec<_>>();
+            let a = tcx.trait_of_item(instance.def_id());
+            //let a = hir.as_local_node_id(instance.def_id()).map(|n| tcx.node_path_str(n));
+            //println!("a = {:?}", a);
             if tcx.is_foreign_item(instance.def_id()) {
-                let id = match &*tcx.item_name(instance.def_id()) {
-                    "sqrtf32" => GlslExtId::Sqrt,
-                    "sinf32" => GlslExtId::Sin,
-                    "cosf32" => GlslExtId::Cos,
-                    ref rest => unimplemented!("{:?}", rest),
+                let intrinsic_name = &*tcx.item_name(instance.def_id());
+                let id = match intrinsic_name {
+                    "sqrtf32" => Some(GlslExtId::Sqrt),
+                    "sinf32" => Some(GlslExtId::Sin),
+                    "cosf32" => Some(GlslExtId::Cos),
+                    _ => None,
                 };
-                ctx.intrinsic_fns.insert(instance.def_id(), id as u32);
+                if let Some(id) = id {
+                    ctx.intrinsic_fns
+                        .insert(instance.def_id(), Intrinsic::GlslExt(id as u32));
+                }
+                let abort = match intrinsic_name {
+                    "abort" => Some(Intrinsic::Abort),
+                    _ => None,
+                };
+                if let Some(abort) = abort {
+                    ctx.intrinsic_fns.insert(instance.def_id(), abort);
+                }
             } else {
                 ctx.forward_fns
                     .insert(instance.def_id(), SpirvFn(ctx.builder.id()));
@@ -1006,18 +1035,16 @@ pub struct Enum<'tcx> {
 }
 
 pub fn find_mir_return(mir: &mir::Mir) -> Option<usize> {
-    mir.basic_blocks()
-        .iter()
-        .position(|block| {
-            if let mir::TerminatorKind::Return = block.terminator().kind {
-                true
-            } else {
-                false
-            }
-        })
+    mir.basic_blocks().iter().position(|block| {
+        if let mir::TerminatorKind::Return = block.terminator().kind {
+            true
+        } else {
+            false
+        }
+    })
 }
 
-pub fn transform_mir_return<'a, 'tcx>(mir: &'a mut mir::Mir<'tcx>){
+pub fn transform_mir_return<'a, 'tcx>(mir: &'a mut mir::Mir<'tcx>) {
     let ret_pos = find_mir_return(mir).expect("no return");
     let last_pos = mir.basic_blocks().len() - 1;
     if ret_pos != last_pos {
@@ -1027,11 +1054,13 @@ pub fn transform_mir_return<'a, 'tcx>(mir: &'a mut mir::Mir<'tcx>){
 
 pub struct MirReturnPass;
 
-impl mir::transform::MirPass for MirReturnPass{
-    fn run_pass<'a, 'tcx>(&self,
-                          tcx: ty::TyCtxt<'a, 'tcx, 'tcx>,
-                          source: mir::transform::MirSource,
-                          mir: &mut mir::Mir<'tcx>){
+impl mir::transform::MirPass for MirReturnPass {
+    fn run_pass<'a, 'tcx>(
+        &self,
+        tcx: ty::TyCtxt<'a, 'tcx, 'tcx>,
+        source: mir::transform::MirSource,
+        mir: &mut mir::Mir<'tcx>,
+    ) {
         println!("run mir pass");
         transform_mir_return(mir);
     }
@@ -1139,7 +1168,8 @@ impl<'b, 'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'b, 'a, 
         //let attr = self.mtx.tcx.get_attrs(self.mtx.def_id);
 
         //println!("attr = {:?}", attr);
-        use rustc_data_structures::control_flow_graph::iterate::{reverse_post_order, post_order_from };
+        use rustc_data_structures::control_flow_graph::iterate::{post_order_from,
+                                                                 reverse_post_order};
         for (block, _) in mir.basic_blocks().iter_enumerated() {
             self.label_blocks
                 .insert(block, SpirvLabel(self.scx.builder.id()));
@@ -1290,7 +1320,7 @@ impl<'b, 'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'b, 'a, 
         }
         //self.super_mir(mir);
         let order = reverse_post_order(mir, mir::BasicBlock::new(0));
-        for bb in order{
+        for bb in order {
             self.visit_basic_block_data(bb, &mir.basic_blocks()[bb]);
         }
 
@@ -1672,7 +1702,7 @@ impl<'b, 'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'b, 'a, 
                                             .get(&resolve_fn_id)
                                             .map(|v| *v)
                                             .expect("forward fn call");
-                                        self.scx
+                                        let fn_call = self.scx
                                             .builder
                                             .function_call(
                                                 spirv_ty.word,
@@ -1680,22 +1710,37 @@ impl<'b, 'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'b, 'a, 
                                                 spirv_fn.0,
                                                 &arg_operand_loads,
                                             )
-                                            .expect("fn call")
+                                            .expect("fn call");
+                                        Some(fn_call)
                                     }
-                                    SpirvFunctionCall::Intrinsic(id) => {
-                                        self.scx
-                                            .builder
-                                            .ext_inst(
-                                                spirv_ty.word,
-                                                None,
-                                                self.scx.glsl_ext_id,
-                                                id,
-                                                &arg_operand_loads,
-                                            )
-                                            .expect("ext instr")
+                                    SpirvFunctionCall::Intrinsic(intrinsic) => {
+                                        match intrinsic {
+                                            Intrinsic::GlslExt(id) => {
+                                                let ext_fn = self.scx
+                                                    .builder
+                                                    .ext_inst(
+                                                        spirv_ty.word,
+                                                        None,
+                                                        self.scx.glsl_ext_id,
+                                                        id,
+                                                        &arg_operand_loads,
+                                                    )
+                                                    .expect("ext instr");
+                                                Some(ext_fn)
+                                            }
+                                            Intrinsic::Abort => {
+                                                self.scx
+                                                    .builder
+                                                    .unreachable()
+                                                    .expect("unreachable");
+                                                None
+                                            }
+                                        }
                                     }
                                 };
-                                if let &Some(ref dest) = destination {
+                                if let (&Some(ref dest), Some(spirv_fn_call)) =
+                                    (destination, spirv_fn_call)
+                                {
                                     let &(ref lvalue, _) = dest;
                                     match lvalue {
                                         &mir::Lvalue::Local(local) => {

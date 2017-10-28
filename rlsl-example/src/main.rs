@@ -1,5 +1,8 @@
 #![feature(custom_attribute, attr_literals)]
 #![feature(platform_intrinsics)]
+#![feature(concat_idents)]
+extern crate rlsl_math;
+extern crate generic_array;
 
 //use std::ops::Add;
 ////#[spirv(Vec2)]
@@ -67,53 +70,73 @@ struct Test{
 
 pub trait Foo{
     fn get(self) -> f32;
+    fn get2(self) -> f32;
 }
 impl Foo for Test{
     fn get(self) -> f32{
         self.x
     }
+    fn get2(self) -> f32{
+        self.y
+    }
 }
 #[spirv(vertex)]
-fn vert() {
-    let t = Test{
-        x: 1.0,
-        y: 2.0
-    };
-    let f = 1.0f32.sqrt();
-    let x = t.get();
-    //let f = unsafe { sqrt(1.0) };
-    //let f = Foo1{};
-    //    let b = if 1.0f32 > 1.0 {
-    //        Test::B(1, 2)
-    //    } else {
-    //        Test::C
-    //    };
-
-    //    let f = if let Test::A(f) = t1 {
-    //        if let Some(f) = f {
-    //            f
-    //        }
-    //        else{
-    //            1.0
-    //        }
-    //    }
-    //    else{
-    //        3.0
-    //    };
-    //    if 1.0f32 > 1.0{
-    //        let i = 4.0f32;
-    //    }
-    //let i = Some(1.0f32);
-    //    let v = Vec2 { x: 1.0f32, y: 2.0 };
-    //    let v1 = v;
-    //    let t = Test{x: 1.0, y: 2};
-    //    let f1 = v.x;
-    //    //let f1 = v.dot(v1);
-    //    let mut b = Bar{t: Test{v: v}};
-    //    let f2 = b.t.v.y;
-    //    b.t.v.x = 1.0;
-    //let f4: f32 = if f1 > 1.0 { 1.0 } else { 2.0 };
-    //    let f3 = b.t.v.y;
-    //for i in (0u32 .. 100){}
+fn vertex(pos: Vec2<f32>){
+    use generic_array::GenericArray;
+    use generic_array::typenum::{U1, U3, U4, U97};
+    pos;
 }
+//pipeline!(
+    //Test1,
+    //fn fragment(color: Vec4<f32>) -> Vec4<f32>{
+        //color;
+    //}
+//);
+//#[spirv(vertex)]
+//fn vert() {
+//    let t = Test{
+//        x: 1.0,
+//        y: 2.0
+//    };
+//    let f = 1.0f32.sqrt();
+//    let x = t.get();
+//    let v = Vec2{
+//        x: 1.0f32,
+//        y: 2.0
+//    };
+//    //let f = unsafe { sqrt(1.0) };
+//    //let f = Foo1{};
+//    //    let b = if 1.0f32 > 1.0 {
+//    //        Test::B(1, 2)
+//    //    } else {
+//    //        Test::C
+//    //    };
+//
+//    //    let f = if let Test::A(f) = t1 {
+//    //        if let Some(f) = f {
+//    //            f
+//    //        }
+//    //        else{
+//    //            1.0
+//    //        }
+//    //    }
+//    //    else{
+//    //        3.0
+//    //    };
+//    //    if 1.0f32 > 1.0{
+//    //        let i = 4.0f32;
+//    //    }
+//    //let i = Some(1.0f32);
+//    //    let v = Vec2 { x: 1.0f32, y: 2.0 };
+//    //    let v1 = v;
+//    //    let t = Test{x: 1.0, y: 2};
+//    //    let f1 = v.x;
+//    //    //let f1 = v.dot(v1);
+//    //    let mut b = Bar{t: Test{v: v}};
+//    //    let f2 = b.t.v.y;
+//    //    b.t.v.x = 1.0;
+//    //let f4: f32 = if f1 > 1.0 { 1.0 } else { 2.0 };
+//    //    let f3 = b.t.v.y;
+//    //for i in (0u32 .. 100){}
+//}
 fn main() {}
