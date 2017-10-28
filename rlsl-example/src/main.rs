@@ -84,6 +84,8 @@ impl Foo for Test{
 fn vertex(pos: Vec2<f32>){
     use generic_array::GenericArray;
     use generic_array::typenum::{U1, U3, U4, U97};
+    use generic_array::typenum::Unsigned;
+    let i = U1::to_u8();
     pos;
 }
 //pipeline!(

@@ -311,6 +311,15 @@ impl<'a, 'tcx> SpirvCtx<'a, 'tcx> {
                 }
             }
             TypeVariants::TyTuple(slice, _) if slice.len() == 0 => self.builder.type_void().into(),
+            TypeVariants::TyTuple(slice, _) => {
+                let field_ty_spirv: Vec<_> = slice
+                    .iter()
+                    .map(|ty| self.to_ty(ty, mtx, storage_class).word)
+                    .collect();
+
+                let spirv_struct = self.builder.type_struct(&field_ty_spirv);
+                spirv_struct.into()
+            }
             TypeVariants::TyFnPtr(sig) => {
                 let ty = self.tcx
                     .erase_late_bound_regions_and_normalize(&sig.output());
@@ -1383,7 +1392,8 @@ impl<'b, 'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'b, 'a, 
             .to_ty(self.scx.tcx);
         let lvalue_ty_spirv = self.to_ty_fn(lvalue_ty);
         let expr = match rvalue {
-            &mir::Rvalue::BinaryOp(op, ref l, ref r) => {
+            &mir::Rvalue::BinaryOp(op, ref l, ref r) |
+            &mir::Rvalue::CheckedBinaryOp(op, ref l, ref r) => {
                 // TODO: Different types
                 let left = self.load_operand(l).load_raw(&mut self.scx, spirv_ty);
                 let right = self.load_operand(r).load_raw(&mut self.scx, spirv_ty);
@@ -1409,6 +1419,20 @@ impl<'b, 'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'b, 'a, 
                             .ugreater_than(spirv_ty.word, None, left, right)
                             .expect("g");
                         SpirvValue(gt)
+                    }
+                    mir::BinOp::Shl => {
+                        let shl = self.scx
+                            .builder
+                            .shift_left_logical(spirv_ty.word, None, left, right)
+                            .expect("shl");
+                        SpirvValue(shl)
+                    }
+                    mir::BinOp::BitOr => {
+                        let bit_or = self.scx
+                            .builder
+                            .bitwise_or(spirv_ty.word, None, left, right)
+                            .expect("bitwise or");
+                        SpirvValue(bit_or)
                     }
                     rest => unimplemented!("{:?}", rest),
                 }
@@ -1495,6 +1519,13 @@ impl<'b, 'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'b, 'a, 
                     .expect("bitcast");
 
                 SpirvValue(cast)
+            }
+            &mir::Rvalue::Cast(kind, ref op, ty) => {
+                println!("op = {:?}", op);
+                println!("ty = {:?}", ty);
+                let op_ty = op.ty(&self.mcx.mir.local_decls, self.mcx.tcx);
+                println!("op_ty = {:?}", op_ty);
+                unimplemented!("cast")
             }
 
             rest => unimplemented!("{:?}", rest),
@@ -1761,6 +1792,10 @@ impl<'b, 'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'b, 'a, 
                 let destination = destination.as_ref().expect("Fn call is diverging");
                 let &(_, target_block) = destination;
                 let target_label = self.label_blocks.get(&target_block).expect("no label");
+                self.scx.builder.branch(target_label.0).expect("label");
+            }
+            &mir::TerminatorKind::Assert { target, .. } => {
+                let target_label = self.label_blocks.get(&target).expect("no label");
                 self.scx.builder.branch(target_label.0).expect("label");
             }
             rest => unimplemented!("{:?}", rest),

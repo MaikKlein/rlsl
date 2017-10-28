@@ -95,6 +95,7 @@ impl<'a> CompilerCalls<'a> for RlslCompilerCalls {
                         &[],
                         tcx.sess,
                     );
+                    //eprintln!("err files: {:?}", f);
                     rustc_mir::transform::dump_mir::emit_mir(*tcx, &f);
                     let (items, _) = rustc_trans::collect_crate_translation_items(
                         *tcx,
@@ -117,7 +118,10 @@ fn main() {
         .is_some();
     if is_build_script {
         use std::process::Command;
-        Command::new("rustc").args(&args[1..]).status().expect("rustc");
+        Command::new("rustc")
+            .args(&args[1..])
+            .status()
+            .expect("rustc");
         return;
     }
     let home_dir = std::env::home_dir().expect("home_dir");
