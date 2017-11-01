@@ -2,7 +2,7 @@ pub mod terminator;
 pub mod rvalue;
 
 use rustc::ty::layout::{Integer, Layout};
-use rustc_const_math::{ConstFloat, ConstInt};
+use rustc_const_math::{ConstInt};
 use rustc::middle::const_val::ConstVal;
 use rustc_data_structures::indexed_vec::Idx;
 use rustc_data_structures::control_flow_graph::ControlFlowGraph;
@@ -13,11 +13,12 @@ use rustc::{hir, mir};
 use spirv;
 use rustc_data_structures::fx::FxHashSet;
 use rustc::middle::trans::TransItem;
-use rustc::ty::{subst, Binder, Instance, ParamEnv, Ty, TyCtxt, TypeckTables, TypeVariants};
+use rustc::ty::{Binder, Instance, ParamEnv, Ty, TyCtxt, TypeckTables, TypeVariants};
 use syntax;
 
 pub mod context;
 pub mod ty;
+pub mod collector;
 
 use self::context::{MirContext, SpirvCtx };
 use self::ty::*;
@@ -73,85 +74,6 @@ fn intrinsic_fn(attrs: &[syntax::ast::Attribute]) -> Option<IntrinsicFn> {
         .nth(0)
 }
 
-pub type MergeCollector = HashMap<mir::Location, mir::BasicBlock>;
-pub fn merge_collector(mir: &mir::Mir) -> MergeCollector {
-    let mut merge_collector = HashMap::new();
-    for (block, ref data) in mir.basic_blocks().iter_enumerated() {
-        let location = mir::Location {
-            block,
-            statement_index: data.statements.len(),
-        };
-        if let Some(merge_block) = merge_collector_impl(mir, block, data) {
-            merge_collector.insert(location, merge_block);
-        }
-    }
-    merge_collector
-}
-fn merge_collector_impl(
-    mir: &mir::Mir,
-    block: mir::BasicBlock,
-    block_data: &mir::BasicBlockData,
-) -> Option<mir::BasicBlock> {
-    if let mir::TerminatorKind::SwitchInt { ref targets, .. } = block_data.terminator().kind {
-        let target = targets
-            .iter()
-            .filter_map(|&block| {
-                let block_data = &mir.basic_blocks()[block];
-                match block_data.terminator().kind {
-                    mir::TerminatorKind::Goto { target } => Some(target),
-                    _ => {
-                        mir.successors(block)
-                            .filter_map(|successor_block| {
-                                let data = &mir.basic_blocks()[successor_block];
-                                merge_collector_impl(mir, successor_block, data)
-                            })
-                            .nth(0)
-                    }
-                }
-            })
-            .nth(0);
-        return target;
-    }
-    None
-}
-
-
-// Collects constants when they appear in function calls
-pub struct ConstantArgCollector<'tcx> {
-    constants: Vec<mir::Constant<'tcx>>,
-}
-impl<'tcx> rustc::mir::visit::Visitor<'tcx> for ConstantArgCollector<'tcx> {
-    fn visit_constant(&mut self, constant: &mir::Constant<'tcx>, location: mir::Location) {
-        self.constants.push(constant.clone());
-    }
-    fn visit_rvalue(&mut self, rvalue: &mir::Rvalue<'tcx>, location: mir::Location) {}
-    fn visit_terminator_kind(
-        &mut self,
-        block: mir::BasicBlock,
-        kind: &mir::TerminatorKind<'tcx>,
-        location: mir::Location,
-    ) {
-        //self.super_terminator_kind(block, kind, location);
-        match kind {
-            &mir::TerminatorKind::Call { ref args, .. } => {
-                for arg in args {
-                    self.visit_operand(arg, location);
-                }
-            }
-            _ => (),
-        };
-    }
-}
-
-pub fn collect_constants<'tcx>(mir: &mir::Mir<'tcx>) -> Vec<mir::Constant<'tcx>> {
-    let mut v = ConstantArgCollector {
-        constants: Vec::new(),
-    };
-    v.visit_mir(mir);
-    v.constants
-}
-
-use syntax_pos::symbol::InternedString;
 #[derive(Debug, Copy, Clone)]
 pub enum Intrinsic {
     GlslExt(spirv::Word),
@@ -163,7 +85,6 @@ pub struct RlslVisitor<'b, 'a: 'b, 'tcx: 'a> {
     pub mcx: MirContext<'a, 'tcx>,
     pub scx: &'b mut SpirvCtx<'a, 'tcx>,
     pub entry: Option<IntrinsicEntry>,
-    pub merge_collector: Option<MergeCollector>,
     pub constants: HashMap<mir::Constant<'tcx>, SpirvVar<'tcx>>,
     pub label_blocks: HashMap<mir::BasicBlock, SpirvLabel>,
     pub vars: HashMap<mir::Local, SpirvVar<'tcx>>,
@@ -232,84 +153,6 @@ where
 }
 
 
-pub struct CollectCrateItems<'a, 'tcx: 'a> {
-    mtx: MirContext<'a, 'tcx>,
-    items: Vec<TransItem<'tcx>>,
-}
-pub fn collect_crate_items<'a, 'tcx>(mtx: MirContext<'a, 'tcx>) -> Vec<TransItem<'tcx>> {
-    let mut collector = CollectCrateItems {
-        mtx,
-        items: Vec::new(),
-    };
-    collector.visit_mir(&mtx.mir);
-    collector.items
-}
-impl<'a, 'tcx> rustc::mir::visit::Visitor<'tcx> for CollectCrateItems<'a, 'tcx> {
-    fn visit_terminator_kind(
-        &mut self,
-        block: mir::BasicBlock,
-        kind: &mir::TerminatorKind<'tcx>,
-        location: mir::Location,
-    ) {
-        self.super_terminator_kind(block, kind, location);
-        if let &mir::TerminatorKind::Call { ref func, .. } = kind {
-            if let &mir::Operand::Constant(ref constant) = func {
-                if let mir::Literal::Value { ref value } = constant.literal {
-                    use rustc::middle::const_val::ConstVal;
-                    if let ConstVal::Function(def_id, ref substs) = value.val {
-                        let a = self.mtx
-                            .tcx
-                            .trait_of_item(def_id)
-                            .map(|_| self.mtx.tcx.associated_item(def_id));
-                        //println!("a = {:#?}", a);
-                        let mono_substs = self.mtx
-                            .tcx
-                            .trans_apply_param_substs(self.mtx.substs, substs);
-                        let instance = Instance::resolve(
-                            self.mtx.tcx,
-                            ParamEnv::empty(rustc::traits::Reveal::All),
-                            def_id,
-                            &mono_substs,
-                        ).unwrap();
-                        self.items.push(TransItem::Fn(instance));
-                    }
-                }
-            }
-        }
-    }
-}
-
-/// The collector only collects items for the current crate, but we need to access
-/// items in all crates (rlibs) so we need to manually find them.
-pub fn trans_all_items<'a, 'tcx>(
-    tcx: TyCtxt<'a, 'tcx, 'tcx>,
-    start_items: &'a FxHashSet<TransItem<'tcx>>,
-) -> FxHashSet<TransItem<'tcx>> {
-    let mut hash_set = FxHashSet();
-    let mut uncollected_items: Vec<Vec<TransItem<'tcx>>> = Vec::new();
-    uncollected_items.push(start_items.iter().cloned().collect());
-    while let Some(items) = uncollected_items.pop() {
-        for item in &items {
-            if let &TransItem::Fn(ref instance) = item {
-                let mir = tcx.maybe_optimized_mir(instance.def_id());
-                if let Some(mir) = mir {
-                    let mtx = MirContext {
-                        tcx,
-                        mir,
-                        substs: instance.substs,
-                        def_id: instance.def_id(),
-                    };
-                    let new_items = collect_crate_items(mtx);
-                    if !new_items.is_empty() {
-                        uncollected_items.push(new_items)
-                    }
-                }
-                hash_set.insert(*item);
-            }
-        }
-    }
-    hash_set
-}
 
 #[repr(u32)]
 pub enum GlslExtId {
@@ -448,7 +291,6 @@ pub fn trans_spirv<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, items: &'a FxHashSet<T
             })
             .nth(0);
         visitor.entry = intrinsic;
-        visitor.merge_collector = Some(merge_collector(mtx.mir));
         visitor.visit_mir(mtx.mir);
     }
     ctx.build_module();
@@ -585,7 +427,6 @@ impl<'b, 'a, 'tcx: 'a> RlslVisitor<'b, 'a, 'tcx> {
             current_table: Vec::new(),
             mcx: mir_ctx,
             entry: None,
-            merge_collector: None,
             constants: HashMap::new(),
             label_blocks: HashMap::new(),
             vars: HashMap::new(),

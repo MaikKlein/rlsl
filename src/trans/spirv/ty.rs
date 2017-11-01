@@ -1,17 +1,6 @@
-use self::ty::layout::{Integer, Layout};
 use rustc_const_math::{ConstFloat, ConstInt};
-use rustc::middle::const_val::ConstVal;
-use rustc_data_structures::indexed_vec::Idx;
-use rustc_data_structures::control_flow_graph::ControlFlowGraph;
-use rustc::mir::visit::Visitor;
-use std::collections::HashMap;
-use rustc;
-use rustc::{hir, mir};
 use spirv;
-use rustc_data_structures::fx::FxHashSet;
-use rustc::middle::trans::TransItem;
 use rustc::ty;
-use syntax;
 use trans::spirv::context::SpirvCtx;
 
 #[derive(Copy, Clone, Debug, Hash, Eq, PartialEq)]
