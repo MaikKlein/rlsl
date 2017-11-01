@@ -8,8 +8,11 @@ use spirv;
 use rustc::ty;
 use rspirv::mr::Builder;
 use syntax;
+use rustc::mir;
+use rustc::ty::{subst, TyCtxt };
 
-use trans::spirv::{Intrinsic, IntrinsicType, MirContext, SpirvConstVal, SpirvFn,
+
+use trans::spirv::{Intrinsic, IntrinsicType, SpirvConstVal, SpirvFn,
                    SpirvFunctionCall, SpirvTy, SpirvValue};
 use self::hir::def_id::DefId;
 pub struct SpirvCtx<'a, 'tcx: 'a> {
@@ -324,5 +327,21 @@ impl<'a, 'tcx> SpirvCtx<'a, 'tcx> {
             tcx,
             glsl_ext_id,
         }
+    }
+}
+
+#[derive(Copy, Clone)]
+pub struct MirContext<'a, 'tcx: 'a> {
+    pub def_id: hir::def_id::DefId,
+    pub tcx: TyCtxt<'a, 'tcx, 'tcx>,
+    pub mir: &'a mir::Mir<'tcx>,
+    pub substs: &'tcx subst::Substs<'tcx>,
+}
+impl<'a, 'tcx> MirContext<'a, 'tcx> {
+    pub fn monomorphize<T>(&self, value: &T) -> T
+        where
+        T: rustc::infer::TransNormalize<'tcx>,
+    {
+        self.tcx.trans_apply_param_substs(self.substs, value)
     }
 }

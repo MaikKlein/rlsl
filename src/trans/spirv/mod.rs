@@ -19,7 +19,7 @@ use syntax;
 pub mod context;
 pub mod ty;
 
-use self::context::SpirvCtx;
+use self::context::{MirContext, SpirvCtx };
 use self::ty::*;
 
 pub enum IntrinsicFn {
@@ -229,21 +229,6 @@ where
         return extract_attr_impl(meta, keywords, f);
     }
     None
-}
-#[derive(Copy, Clone)]
-pub struct MirContext<'a, 'tcx: 'a> {
-    def_id: hir::def_id::DefId,
-    tcx: TyCtxt<'a, 'tcx, 'tcx>,
-    mir: &'a mir::Mir<'tcx>,
-    substs: &'tcx subst::Substs<'tcx>,
-}
-impl<'a, 'tcx> MirContext<'a, 'tcx> {
-    pub fn monomorphize<T>(&self, value: &T) -> T
-    where
-        T: rustc::infer::TransNormalize<'tcx>,
-    {
-        self.tcx.trans_apply_param_substs(self.substs, value)
-    }
 }
 
 
