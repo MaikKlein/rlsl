@@ -9,11 +9,10 @@ use rustc::ty;
 use rspirv::mr::Builder;
 use syntax;
 use rustc::mir;
-use rustc::ty::{subst, TyCtxt };
+use rustc::ty::{subst, TyCtxt};
 
 
-use trans::spirv::{Intrinsic, IntrinsicType, SpirvConstVal, SpirvFn,
-                   SpirvFunctionCall, SpirvTy, SpirvValue};
+use {Intrinsic, IntrinsicType, SpirvConstVal, SpirvFn, SpirvFunctionCall, SpirvTy, SpirvValue};
 use self::hir::def_id::DefId;
 pub struct SpirvCtx<'a, 'tcx: 'a> {
     pub tcx: ty::TyCtxt<'a, 'tcx, 'tcx>,
@@ -83,9 +82,6 @@ impl<'a, 'tcx> SpirvCtx<'a, 'tcx> {
         storage_class: spirv::StorageClass,
     ) -> SpirvTy {
         use rustc::ty::TypeVariants;
-        use std::collections::hash_map::DefaultHasher;
-        use std::hash::Hash;
-        use std::hash::Hasher;
         let ty = mtx.monomorphize(&ty);
         let ty = match ty.sty {
             TypeVariants::TyRef(_, type_and_mut) => {
@@ -148,7 +144,7 @@ impl<'a, 'tcx> SpirvCtx<'a, 'tcx> {
                     .type_pointer(None, spirv::StorageClass::Function, inner.word)
                     .into()
             }
-            TypeVariants::TyParam(ref param) => panic!("TyParam should have been monomorphized"),
+            TypeVariants::TyParam(_) => panic!("TyParam should have been monomorphized"),
             TypeVariants::TyAdt(adt, substs) => {
                 let mono_substs = mtx.monomorphize(&substs);
                 match adt.adt_kind() {
@@ -204,7 +200,6 @@ impl<'a, 'tcx> SpirvCtx<'a, 'tcx> {
                     }
                     ty::AdtKind::Struct => {
                         let attrs = self.tcx.get_attrs(adt.did);
-                        for attr in attrs.iter() {}
                         use std::ops::Deref;
                         let intrinsic = IntrinsicType::from_attr(attrs.deref());
 
@@ -218,7 +213,6 @@ impl<'a, 'tcx> SpirvCtx<'a, 'tcx> {
                                     let spirv_ty = self.to_ty(field_ty, mtx, storage_class);
                                     self.builder.type_vector(spirv_ty.word, dim as u32).into()
                                 }
-                                ref r => unimplemented!("{:?}", r),
                             };
                             intrinsic_spirv
                         } else {
@@ -294,7 +288,6 @@ impl<'a, 'tcx> SpirvCtx<'a, 'tcx> {
     }
     pub fn build_module(self) {
         use rspirv::binary::Assemble;
-        use rspirv::binary::Disassemble;
         use std::mem::size_of;
         use std::fs::File;
         use std::io::Write;
@@ -309,8 +302,8 @@ impl<'a, 'tcx> SpirvCtx<'a, 'tcx> {
             .collect();
         let mut loader = rspirv::mr::Loader::new();
         //let bytes = b.module().assemble_bytes();
-        rspirv::binary::parse_bytes(&bytes, &mut loader);
-        f.write_all(&bytes);
+        rspirv::binary::parse_bytes(&bytes, &mut loader).expect("parse bytes");
+        f.write_all(&bytes).expect("write bytes");
     }
     pub fn new(tcx: ty::TyCtxt<'a, 'tcx, 'tcx>) -> SpirvCtx<'a, 'tcx> {
         let mut builder = Builder::new();
@@ -339,7 +332,7 @@ pub struct MirContext<'a, 'tcx: 'a> {
 }
 impl<'a, 'tcx> MirContext<'a, 'tcx> {
     pub fn monomorphize<T>(&self, value: &T) -> T
-        where
+    where
         T: rustc::infer::TransNormalize<'tcx>,
     {
         self.tcx.trans_apply_param_substs(self.substs, value)

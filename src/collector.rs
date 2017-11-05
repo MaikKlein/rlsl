@@ -4,7 +4,7 @@ use rustc::{mir};
 use rustc_data_structures::fx::FxHashSet;
 use rustc::middle::trans::TransItem;
 use rustc::ty::{Instance, ParamEnv, TyCtxt};
-use trans::spirv::context::MirContext;
+use context::MirContext;
 pub struct CollectCrateItems<'a, 'tcx: 'a> {
     mtx: MirContext<'a, 'tcx>,
     items: Vec<TransItem<'tcx>>,
@@ -30,11 +30,6 @@ impl<'a, 'tcx> rustc::mir::visit::Visitor<'tcx> for CollectCrateItems<'a, 'tcx> 
                 if let mir::Literal::Value { ref value } = constant.literal {
                     use rustc::middle::const_val::ConstVal;
                     if let ConstVal::Function(def_id, ref substs) = value.val {
-                        let a = self.mtx
-                            .tcx
-                            .trait_of_item(def_id)
-                            .map(|_| self.mtx.tcx.associated_item(def_id));
-                        //println!("a = {:#?}", a);
                         let mono_substs = self.mtx
                             .tcx
                             .trans_apply_param_substs(self.mtx.substs, substs);

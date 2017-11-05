@@ -29,9 +29,7 @@ use rustc_driver::driver::{CompileController, CompileState};
 use rustc_driver::RustcDefaultCalls;
 use rustc::session::Session;
 
-struct RlslCompilerCalls {
-    args: Vec<String>,
-}
+struct RlslCompilerCalls;
 
 use rustc::session::config::{self, ErrorOutputType, Input};
 use std::path::PathBuf;
@@ -40,7 +38,7 @@ use rustc_errors as errors;
 impl<'a> CompilerCalls<'a> for RlslCompilerCalls {
     fn early_callback(
         &mut self,
-        matches: &getopts::Matches,
+        _matches: &getopts::Matches,
         _: &config::Options,
         _: &ast::CrateConfig,
         _: &errors::registry::Registry,
@@ -63,15 +61,13 @@ impl<'a> CompilerCalls<'a> for RlslCompilerCalls {
     }
     fn no_input(
         &mut self,
-        matches: &getopts::Matches,
+        _matches: &getopts::Matches,
         _: &config::Options,
         _: &ast::CrateConfig,
         _: &Option<PathBuf>,
         _: &Option<PathBuf>,
         _: &errors::registry::Registry,
     ) -> Option<(Input, Option<PathBuf>)> {
-        panic!("input");
-        //        println!("matches = {:?}", matches.free);
         None
     }
     fn build_controller<'tcx>(
@@ -96,13 +92,13 @@ impl<'a> CompilerCalls<'a> for RlslCompilerCalls {
                         tcx.sess,
                     );
                     //eprintln!("err files: {:?}", f);
-                    rustc_mir::transform::dump_mir::emit_mir(*tcx, &f);
+                    let _ = rustc_mir::transform::dump_mir::emit_mir(*tcx, &f);
                     let (items, _) = rustc_trans::collect_crate_translation_items(
                         *tcx,
                         rustc_trans::TransItemCollectionMode::Eager,
                     );
-                    let items = rlsl::trans::spirv::collector::trans_all_items(*tcx, &items);
-                    rlsl::trans::spirv::trans_spirv(*tcx, &items);
+                    let items = rlsl::collector::trans_all_items(*tcx, &items);
+                    rlsl::trans_spirv(*tcx, &items);
                 };
             }
         }
@@ -136,6 +132,6 @@ fn main() {
     args.extend_from_slice(&["-L".into(), l]);
     args.extend_from_slice(&["--cfg".into(), "spirv".into()]);
     args.extend_from_slice(&["-Z".into(), "always-encode-mir".into()]);
-    let mut calls = RlslCompilerCalls { args: args.clone() };
-    let result = run(move || run_compiler(&args, &mut calls, None, None));
+    let mut calls = RlslCompilerCalls;
+    let _ = run(move || run_compiler(&args, &mut calls, None, None));
 }

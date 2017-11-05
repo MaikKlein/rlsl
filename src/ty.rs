@@ -1,7 +1,7 @@
 use rustc_const_math::{ConstFloat, ConstInt};
 use spirv;
 use rustc::ty;
-use trans::spirv::context::SpirvCtx;
+use context::SpirvCtx;
 
 #[derive(Copy, Clone, Debug, Hash, Eq, PartialEq)]
 pub enum SpirvConstVal {
