@@ -29,6 +29,3 @@ log = "*"
 debugit = "*"
 rspirv = {git = "https://github.com/google/rspirv.git", branch = "master" }
 spirv_headers = {git = "https://github.com/google/rspirv.git", branch = "master" }
-
-[features]
-llvm = ["rustc_driver/llvm"]

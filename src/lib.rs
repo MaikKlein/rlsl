@@ -24,9 +24,7 @@ extern crate syntax;
 extern crate syntax_pos;
 pub mod trans;
 
-use rustc::ty::layout::{Integer, Layout};
-use rustc_const_math::ConstInt;
-use rustc::middle::const_val::ConstVal;
+use rustc::ty::layout::Layout;
 use rustc_data_structures::indexed_vec::Idx;
 use std::collections::HashMap;
 use rustc::{hir, mir};
@@ -347,66 +345,15 @@ impl<'b, 'a, 'tcx: 'a> RlslVisitor<'b, 'a, 'tcx> {
             .to_ty_as_ptr(ty, self.mcx, spirv::StorageClass::Function)
     }
     pub fn constant(&mut self, val: SpirvConstVal) -> SpirvValue {
-        self.scx.constant(val, self.mcx)
+        self.scx.constant(self.mcx, val)
     }
     pub fn constant_f32(&mut self, value: f32) -> SpirvValue {
-        self.scx.constant_f32(value, self.mcx)
+        self.scx.constant_f32(self.mcx, value)
     }
     pub fn constant_u32(&mut self, value: u32) -> SpirvValue {
-        self.scx.constant_u32(value, self.mcx)
+        self.scx.constant_u32(self.mcx, value)
     }
 
-    pub fn load_operand<'r>(&mut self, operand: &'r mir::Operand<'tcx>) -> SpirvOperand<'tcx> {
-        let mir = self.mcx.mir;
-        let local_decls = &mir.local_decls;
-        let ty = operand.ty(local_decls, self.scx.tcx);
-        let spirv_ty = self.to_ty_fn(ty);
-        match operand {
-            &mir::Operand::Consume(ref lvalue) => {
-                let access_chain = AccessChain::compute(lvalue);
-                let spirv_var = *self.vars.get(&access_chain.base).expect("Local");
-                if access_chain.indices.is_empty() {
-                    SpirvOperand::Variable(spirv_var)
-                } else {
-                    let spirv_ty_ptr = self.to_ty_as_ptr_fn(ty);
-                    let indices: Vec<_> = access_chain
-                        .indices
-                        .iter()
-                        .map(|&i| self.constant_u32(i as u32).0)
-                        .collect();
-                    let access = self.scx
-                        .builder
-                        .access_chain(spirv_ty_ptr.word, None, spirv_var.word, &indices)
-                        .expect("access_chain");
-                    let load = self.scx
-                        .builder
-                        .load(spirv_ty.word, None, access, None, &[])
-                        .expect("load");
-
-                    SpirvOperand::Value(SpirvValue(load))
-                }
-            }
-            &mir::Operand::Constant(ref constant) => {
-                match constant.literal {
-                    mir::Literal::Value { ref value } => {
-                        let expr = match value.val {
-                            ConstVal::Float(f) => {
-                                let val = SpirvConstVal::Float(f);
-                                self.constant(val)
-                            }
-                            ConstVal::Integral(int) => {
-                                let val = SpirvConstVal::Integer(int);
-                                self.constant(val)
-                            }
-                            ref rest => unimplemented!("{:?}", rest),
-                        };
-                        SpirvOperand::Value(expr)
-                    }
-                    ref rest => unimplemented!("{:?}", rest),
-                }
-            }
-        }
-    }
     pub fn get_table(&self) -> &'a TypeckTables<'tcx> {
         self.current_table.last().expect("no table yet")
     }
@@ -476,6 +423,17 @@ impl<'tcx> Enum<'tcx> {
 }
 
 impl<'b, 'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'b, 'a, 'tcx> {
+    fn visit_basic_block_data(&mut self, block: mir::BasicBlock, data: &mir::BasicBlockData<'tcx>) {
+        {
+            let spirv_label = self.label_blocks.get(&block).expect("no spirv label");
+            let label = self.scx
+                .builder
+                .begin_basic_block(Some(spirv_label.0))
+                .expect("begin block");
+        }
+
+        self.super_basic_block_data(block, data);
+    }
     fn visit_statement(
         &mut self,
         block: mir::BasicBlock,
@@ -483,47 +441,7 @@ impl<'b, 'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'b, 'a, 
         location: mir::Location,
     ) {
         self.super_statement(block, statement, location);
-        if let mir::StatementKind::SetDiscriminant {
-            ref lvalue,
-            variant_index,
-        } = statement.kind
-        {
-            let ty = lvalue
-                .ty(&self.mcx.mir.local_decls, self.mcx.tcx)
-                .to_ty(self.mcx.tcx);
-            let adt = ty.ty_adt_def().expect("Should be an enum");
-            let layout = ty.layout(self.scx.tcx, ParamEnv::empty(rustc::traits::Reveal::All))
-                .expect("layout");
-            let discr_ty_int = if let &Layout::General { discr, .. } = layout {
-                discr
-            } else {
-                panic!("No enum layout")
-            };
-            let discr_ty = discr_ty_int.to_ty(&self.mcx.tcx, false);
-            let discr_ty_spirv_ptr = self.to_ty_as_ptr_fn(discr_ty);
-
-            let spirv_var = match lvalue {
-                &mir::Lvalue::Local(local) => *self.vars.get(&local).expect("Local"),
-                _ => panic!("Should be local"),
-            };
-
-            let discr_index = adt.variants.len();
-            let index = self.constant_u32(discr_index as u32).0;
-
-            let variant_const_val = match discr_ty_int {
-                Integer::I32 => SpirvConstVal::Integer(ConstInt::U32(variant_index as u32)),
-                _ => panic!(""),
-            };
-            let variant = self.constant(variant_const_val).0;
-            let access = self.scx
-                .builder
-                .access_chain(discr_ty_spirv_ptr.word, None, spirv_var.word, &[index])
-                .expect("access_chain");
-            self.scx
-                .builder
-                .store(access, variant, None, &[])
-                .expect("store");
-        }
+        trans::statement::trans_statement(self, block, statement, location);
     }
     fn visit_mir(&mut self, mir: &mir::Mir<'tcx>) {
         //        let inrinsic_fn = self.mtx
@@ -638,7 +556,10 @@ impl<'b, 'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'b, 'a, 
                     spirv::StorageClass::Function,
                     None,
                 );
-                self.scx.builder.store(spirv_var, param, None, &[]).expect("store");
+                self.scx
+                    .builder
+                    .store(spirv_var, param, None, &[])
+                    .expect("store");
                 self.vars
                     .insert(local_arg, SpirvVar::new(spirv_var, false, local_decl.ty));
             }
@@ -752,54 +673,13 @@ impl<'b, 'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'b, 'a, 
         let expr = match rvalue {
             &mir::Rvalue::BinaryOp(op, ref l, ref r) |
             &mir::Rvalue::CheckedBinaryOp(op, ref l, ref r) => {
-                // TODO: Different types
-                let left = self.load_operand(l).load_raw(&mut self.scx, spirv_ty);
-                let right = self.load_operand(r).load_raw(&mut self.scx, spirv_ty);
-                // TODO: Impl ops
-                match op {
-                    mir::BinOp::Mul => {
-                        let add = self.scx
-                            .builder
-                            .fmul(spirv_ty.word, None, left, right)
-                            .expect("fmul");
-                        SpirvValue(add)
-                    }
-                    mir::BinOp::Add => {
-                        let add = self.scx
-                            .builder
-                            .fadd(spirv_ty.word, None, left, right)
-                            .expect("fadd");
-                        SpirvValue(add)
-                    }
-                    mir::BinOp::Gt => {
-                        let gt = self.scx
-                            .builder
-                            .ugreater_than(spirv_ty.word, None, left, right)
-                            .expect("g");
-                        SpirvValue(gt)
-                    }
-                    mir::BinOp::Shl => {
-                        let shl = self.scx
-                            .builder
-                            .shift_left_logical(spirv_ty.word, None, left, right)
-                            .expect("shl");
-                        SpirvValue(shl)
-                    }
-                    mir::BinOp::BitOr => {
-                        let bit_or = self.scx
-                            .builder
-                            .bitwise_or(spirv_ty.word, None, left, right)
-                            .expect("bitwise or");
-                        SpirvValue(bit_or)
-                    }
-                    rest => unimplemented!("{:?}", rest),
-                }
+                self.scx.binary_op(self.mcx, &self.vars, spirv_ty, op, l, r)
             }
             &mir::Rvalue::Use(ref operand) => {
                 let is_ptr = lvalue_ty.is_unsafe_ptr() || lvalue_ty.is_mutable_pointer()
                     || lvalue_ty.is_region_ptr();
 
-                let operand = self.load_operand(operand);
+                let operand = self.scx.load_operand(self.mcx, &self.vars, operand);
                 if is_ptr && operand.is_param() {
                     SpirvValue(operand.expect_var().word)
                 } else {
@@ -824,7 +704,9 @@ impl<'b, 'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'b, 'a, 
                     .map(|op| {
                         let ty = op.ty(&self.mcx.mir.local_decls, self.mcx.tcx);
                         let spirv_ty = self.to_ty_fn(ty);
-                        self.load_operand(op).load_raw(self.scx, spirv_ty)
+                        self.scx
+                            .load_operand(self.mcx, &self.vars, op)
+                            .load_raw(self.scx, spirv_ty)
                     })
                     .collect();
                 SpirvValue(
@@ -1009,7 +891,9 @@ impl<'b, 'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'b, 'a, 
                 let mir = self.mcx.mir;
                 let spirv_ty = self.to_ty_fn(switch_ty);
                 let selector = if switch_ty.is_bool() {
-                    let load = self.load_operand(discr).load_raw(self.scx, spirv_ty);
+                    let load = self.scx
+                        .load_operand(self.mcx, &self.vars, discr)
+                        .load_raw(self.scx, spirv_ty);
                     let target_ty = self.mcx.tcx.mk_mach_uint(syntax::ast::UintTy::U32);
                     let target_ty_spirv = self.to_ty_fn(target_ty);
                     self.scx
@@ -1017,7 +901,9 @@ impl<'b, 'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'b, 'a, 
                         .bitcast(target_ty_spirv.word, None, load)
                         .expect("bitcast")
                 } else {
-                    self.load_operand(discr).load_raw(self.scx, spirv_ty)
+                    self.scx
+                        .load_operand(self.mcx, &self.vars, discr)
+                        .load_raw(self.scx, spirv_ty)
                 };
                 let default_label = *self.label_blocks
                     .get(targets.last().unwrap())
@@ -1070,7 +956,8 @@ impl<'b, 'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'b, 'a, 
                                     .def_id();
                                 let arg_operand_loads: Vec<_> = args.iter()
                                     .map(|arg| {
-                                        let operand = self.load_operand(arg);
+                                        let operand =
+                                            self.scx.load_operand(self.mcx, &self.vars, arg);
                                         let arg_ty = arg.ty(local_decls, self.scx.tcx);
                                         let arg_ty_spirv = self.to_ty_fn(arg_ty);
                                         operand.load_raw(&mut self.scx, arg_ty_spirv)

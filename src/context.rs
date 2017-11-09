@@ -1,5 +1,6 @@
 use self::ty::layout::Layout;
 use rustc_const_math::{ConstFloat, ConstInt};
+use rustc::middle::const_val::ConstVal;
 use rspirv;
 use std::collections::HashMap;
 use rustc;
@@ -10,9 +11,11 @@ use rspirv::mr::Builder;
 use syntax;
 use rustc::mir;
 use rustc::ty::{subst, TyCtxt};
+use {AccessChain, SpirvOperand, SpirvVar};
 
 
 use {Intrinsic, IntrinsicType, SpirvConstVal, SpirvFn, SpirvFunctionCall, SpirvTy, SpirvValue};
+use rustc::ty::Ty;
 use self::hir::def_id::DefId;
 pub struct SpirvCtx<'a, 'tcx: 'a> {
     pub tcx: ty::TyCtxt<'a, 'tcx, 'tcx>,
@@ -26,6 +29,66 @@ pub struct SpirvCtx<'a, 'tcx: 'a> {
 }
 
 impl<'a, 'tcx> SpirvCtx<'a, 'tcx> {
+    pub fn to_ty_fn(&mut self, mcx: MirContext<'a, 'tcx>, ty: Ty<'tcx>) -> SpirvTy {
+        self.to_ty(ty, mcx, spirv::StorageClass::Function)
+    }
+    pub fn to_ty_as_ptr_fn(&mut self, mcx: MirContext<'a, 'tcx>, ty: Ty<'tcx>) -> SpirvTy {
+        self.to_ty_as_ptr(ty, mcx, spirv::StorageClass::Function)
+    }
+    pub fn load_operand<'r>(
+        &mut self,
+        mcx: MirContext<'a, 'tcx>,
+        vars: &HashMap<mir::Local, SpirvVar<'tcx>>,
+        operand: &'r mir::Operand<'tcx>,
+    ) -> SpirvOperand<'tcx> {
+        let mir = mcx.mir;
+        let local_decls = &mir.local_decls;
+        let ty = operand.ty(local_decls, self.tcx);
+        let spirv_ty = self.to_ty_fn(mcx, ty);
+        match operand {
+            &mir::Operand::Consume(ref lvalue) => {
+                let access_chain = AccessChain::compute(lvalue);
+                let spirv_var = *vars.get(&access_chain.base).expect("Local");
+                if access_chain.indices.is_empty() {
+                    SpirvOperand::Variable(spirv_var)
+                } else {
+                    let spirv_ty_ptr = self.to_ty_as_ptr_fn(mcx, ty);
+                    let indices: Vec<_> = access_chain
+                        .indices
+                        .iter()
+                        .map(|&i| self.constant_u32(mcx, i as u32).0)
+                        .collect();
+                    let access = self.builder
+                        .access_chain(spirv_ty_ptr.word, None, spirv_var.word, &indices)
+                        .expect("access_chain");
+                    let load = self.builder
+                        .load(spirv_ty.word, None, access, None, &[])
+                        .expect("load");
+
+                    SpirvOperand::Value(SpirvValue(load))
+                }
+            }
+            &mir::Operand::Constant(ref constant) => {
+                match constant.literal {
+                    mir::Literal::Value { ref value } => {
+                        let expr = match value.val {
+                            ConstVal::Float(f) => {
+                                let val = SpirvConstVal::Float(f);
+                                self.constant(mcx, val)
+                            }
+                            ConstVal::Integral(int) => {
+                                let val = SpirvConstVal::Integer(int);
+                                self.constant(mcx, val)
+                            }
+                            ref rest => unimplemented!("{:?}", rest),
+                        };
+                        SpirvOperand::Value(expr)
+                    }
+                    ref rest => unimplemented!("{:?}", rest),
+                }
+            }
+        }
+    }
     /// Tries to get a function id, if it fails it looks for an intrinsic id
     pub fn get_function_call(&self, def_id: DefId) -> Option<SpirvFunctionCall> {
         self.forward_fns
@@ -37,21 +100,22 @@ impl<'a, 'tcx> SpirvCtx<'a, 'tcx> {
                     .map(|&id| SpirvFunctionCall::Intrinsic(id)),
             )
     }
-    pub fn constant_f32(&mut self, value: f32, mtx: MirContext<'a, 'tcx>) -> SpirvValue {
+
+    pub fn constant_f32(&mut self, mcx: MirContext<'a, 'tcx>, value: f32) -> SpirvValue {
         use std::convert::TryFrom;
         let val = SpirvConstVal::Float(ConstFloat::from_u128(
             TryFrom::try_from(value.to_bits()).expect("Could not convert from f32 to u128"),
             syntax::ast::FloatTy::F32,
         ));
-        self.constant(val, mtx)
+        self.constant(mcx, val)
     }
 
-    pub fn constant_u32(&mut self, value: u32, mtx: MirContext<'a, 'tcx>) -> SpirvValue {
+    pub fn constant_u32(&mut self, mcx: MirContext<'a, 'tcx>, value: u32) -> SpirvValue {
         let val = SpirvConstVal::Integer(ConstInt::U32(value));
-        self.constant(val, mtx)
+        self.constant(mcx, val)
     }
 
-    pub fn constant(&mut self, val: SpirvConstVal, mtx: MirContext<'a, 'tcx>) -> SpirvValue {
+    pub fn constant(&mut self, mcx: MirContext<'a, 'tcx>, val: SpirvConstVal) -> SpirvValue {
         if let Some(val) = self.const_cache.get(&val) {
             return *val;
         }
@@ -59,7 +123,7 @@ impl<'a, 'tcx> SpirvCtx<'a, 'tcx> {
             SpirvConstVal::Integer(const_int) => {
                 use rustc::ty::util::IntTypeExt;
                 let ty = const_int.int_type().to_ty(self.tcx);
-                let spirv_ty = self.to_ty(ty, mtx, spirv::StorageClass::Function);
+                let spirv_ty = self.to_ty(ty, mcx, spirv::StorageClass::Function);
                 let value = const_int.to_u128_unchecked() as u32;
                 self.builder.constant_u32(spirv_ty.word, value)
             }
@@ -67,7 +131,7 @@ impl<'a, 'tcx> SpirvCtx<'a, 'tcx> {
                 use rustc::infer::unify_key::ToType;
                 let value = const_float.to_i128(32).expect("Only f32 is supported") as f32;
                 let ty = const_float.ty.to_type(self.tcx);
-                let spirv_ty = self.to_ty(ty, mtx, spirv::StorageClass::Function);
+                let spirv_ty = self.to_ty(ty, mcx, spirv::StorageClass::Function);
                 self.builder.constant_f32(spirv_ty.word, value)
             }
         };
@@ -302,7 +366,7 @@ impl<'a, 'tcx> SpirvCtx<'a, 'tcx> {
             .collect();
         let mut loader = rspirv::mr::Loader::new();
         //let bytes = b.module().assemble_bytes();
-        rspirv::binary::parse_bytes(&bytes, &mut loader).expect("parse bytes");
+        rspirv::binary::parse_bytes(&bytes, &mut loader);
         f.write_all(&bytes).expect("write bytes");
     }
     pub fn new(tcx: ty::TyCtxt<'a, 'tcx, 'tcx>) -> SpirvCtx<'a, 'tcx> {
