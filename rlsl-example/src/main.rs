@@ -62,21 +62,23 @@ extern crate generic_array;
 //
 //struct Foo1;
 
-#[spirv(ty(Vec2))]
-struct Test{
-    x: f32,
-    y: f32
+#[derive(Copy, Clone)]
+struct Test<T: Copy + Clone>{
+    x: T,
+    y: T
 }
 
 pub trait Foo{
-    fn get(self) -> f32;
-    fn get2(self) -> f32;
+    type T;
+    fn get(self) -> Self::T;
+    fn get2(self) -> Self::T;
 }
-impl Foo for Test{
-    fn get(self) -> f32{
+impl<T: Copy + Clone> Foo for Test<T>{
+    type T = T;
+    fn get(self) -> T{
         self.x
     }
-    fn get2(self) -> f32{
+    fn get2(self) -> T{
         self.y
     }
 }
@@ -86,6 +88,11 @@ fn vertex(pos: Vec2<f32>){
     use generic_array::typenum::{U1, U3, U4, U97};
     use generic_array::typenum::Unsigned;
     let i = U1::to_u8();
+    let t = Test{
+        x: 1.0f32,
+        y: 2.0
+    };
+    let i = t.get();
     pos;
 }
 //pipeline!(

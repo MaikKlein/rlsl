@@ -30,9 +30,7 @@ impl<'a, 'tcx> rustc::mir::visit::Visitor<'tcx> for CollectCrateItems<'a, 'tcx> 
                 if let mir::Literal::Value { ref value } = constant.literal {
                     use rustc::middle::const_val::ConstVal;
                     if let ConstVal::Function(def_id, ref substs) = value.val {
-                        let mono_substs = self.mtx
-                            .tcx
-                            .trans_apply_param_substs(self.mtx.substs, substs);
+                        let mono_substs = self.mtx.monomorphize(substs);
                         let instance = Instance::resolve(
                             self.mtx.tcx,
                             ParamEnv::empty(rustc::traits::Reveal::All),
