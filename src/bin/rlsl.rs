@@ -28,7 +28,7 @@ use rustc_driver::{get_args, run, run_compiler, Compilation, CompilerCalls};
 use rustc_driver::driver::{CompileController, CompileState};
 use rustc_driver::RustcDefaultCalls;
 use rustc::session::Session;
-
+use rustc_mir::monomorphize::collector::{collect_crate_mono_items, MonoItemCollectionMode};
 struct RlslCompilerCalls;
 
 use rustc::session::config::{self, ErrorOutputType, Input};
@@ -93,10 +93,7 @@ impl<'a> CompilerCalls<'a> for RlslCompilerCalls {
                     );
                     //eprintln!("err files: {:?}", f);
                     let _ = rustc_mir::transform::dump_mir::emit_mir(*tcx, &f);
-                    let (items, _) = rustc_trans::collect_crate_translation_items(
-                        *tcx,
-                        rustc_trans::TransItemCollectionMode::Eager,
-                    );
+                    let (items, _) = collect_crate_mono_items(*tcx, MonoItemCollectionMode::Eager);
                     let items = rlsl::collector::trans_all_items(*tcx, &items);
                     rlsl::trans_spirv(*tcx, &items);
                 };

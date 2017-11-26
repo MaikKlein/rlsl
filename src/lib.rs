@@ -24,12 +24,12 @@ extern crate syntax;
 extern crate syntax_pos;
 pub mod trans;
 
-use rustc::ty::layout::Layout;
+use rustc::ty::layout::{HasDataLayout, LayoutOf, TargetDataLayout, TyLayout};
 use rustc_data_structures::indexed_vec::Idx;
 use std::collections::HashMap;
 use rustc::{hir, mir};
 use rustc_data_structures::fx::FxHashSet;
-use rustc::middle::trans::TransItem;
+use rustc::mir::mono::MonoItem;
 use rustc::ty::{Binder, Instance, ParamEnv, Ty, TyCtxt, TypeVariants, TypeckTables};
 
 pub mod context;
@@ -181,13 +181,13 @@ pub enum SpirvFunctionCall {
     Intrinsic(Intrinsic),
 }
 
-pub fn trans_spirv<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, items: &'a FxHashSet<TransItem<'tcx>>) {
+pub fn trans_spirv<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, items: &'a FxHashSet<MonoItem<'tcx>>) {
     use rustc::mir::visit::Visitor;
     let mut ctx = SpirvCtx::new(tcx);
     items
         .iter()
         .filter_map(|item| {
-            if let &TransItem::Fn(ref instance) = item {
+            if let &MonoItem::Fn(ref instance) = item {
                 Some(instance)
             } else {
                 None
@@ -228,7 +228,7 @@ pub fn trans_spirv<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, items: &'a FxHashSet<T
     let instances: Vec<_> = items
         .iter()
         .filter_map(|item| {
-            if let &TransItem::Fn(ref instance) = item {
+            if let &MonoItem::Fn(ref instance) = item {
                 if let Some(mir) = tcx.maybe_optimized_mir(instance.def_id()) {
                     return Some(MirContext {
                         mir,
@@ -404,17 +404,22 @@ pub struct Enum<'tcx> {
 
 impl<'tcx> Enum<'tcx> {
     pub fn from_ty<'a>(tcx: TyCtxt<'a, 'tcx, 'tcx>, ty: Ty<'tcx>) -> Option<Enum<'tcx>> {
-        let discr_ty = ty.layout(tcx, ParamEnv::empty(rustc::traits::Reveal::All))
+        use rustc::ty::layout::Variants;
+        let e = (tcx, ParamEnv::empty(rustc::traits::Reveal::All))
+            .layout_of(ty)
             .ok()
             .and_then(|layout| {
-                if let &Layout::General { discr, .. } = layout {
-                    Some(discr.to_ty(&tcx, false))
+                if let Variants::Tagged {
+                    ref discr,
+                    ref variants,
+                } = layout.variants
+                {
+                    Some((discr.value.to_ty(tcx), variants.len()))
                 } else {
                     None
                 }
             });
-        let index = ty.ty_adt_def().map(|adt| adt.variants.len());
-        if let (Some(discr_ty), Some(index)) = (discr_ty, index) {
+        if let Some((discr_ty, index)) = e {
             Some(Enum { discr_ty, index })
         } else {
             None
@@ -467,17 +472,17 @@ impl<'b, 'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'b, 'a, 
                 .insert(block, SpirvLabel(self.scx.builder.id()));
         }
         assert!(
-            !is_ptr(mir.return_ty),
+            !is_ptr(mir.return_ty()),
             "Functions are not allowed to return a ptr"
         );
         let def_id = self.mcx.def_id;
         let spirv_function = if !self.entry.is_some() {
-            let ret_ty_spirv = self.to_ty_fn(mir.return_ty);
+            let ret_ty_spirv = self.to_ty_fn(mir.return_ty());
             // If a param is not a ptr, we need to turn it into a ptr
             let args_ty: Vec<_> = mir.args_iter().map(|l| mir.local_decls[l].ty).collect();
             let fn_sig = self.scx.tcx.mk_fn_sig(
                 args_ty.into_iter(),
-                mir.return_ty,
+                mir.return_ty(),
                 false,
                 hir::Unsafety::Normal,
                 syntax::abi::Abi::Rust,
@@ -616,14 +621,14 @@ impl<'b, 'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'b, 'a, 
             self.visit_visibility_scope_data(scope);
         }
 
-        let lookup = mir::visit::Lookup::Src(mir::SourceInfo {
+        let lookup = mir::visit::TyContext::ReturnTy(mir::SourceInfo {
             span: mir.span,
             scope: mir::ARGUMENT_VISIBILITY_SCOPE,
         });
-        self.visit_ty(&mir.return_ty, lookup);
+        self.visit_ty(&mir.return_ty(), lookup);
 
-        for local_decl in &mir.local_decls {
-            self.visit_local_decl(local_decl);
+        for (local, local_decl) in mir.local_decls.iter_enumerated() {
+            self.visit_local_decl(local, local_decl);
         }
 
         self.visit_span(&mir.span);
@@ -862,13 +867,13 @@ impl<'b, 'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'b, 'a, 
         let mir = self.mcx.mir;
         match kind {
             &mir::TerminatorKind::Return => {
-                match mir.return_ty.sty {
+                match mir.return_ty().sty {
                     TypeVariants::TyTuple(ref slice, _) if slice.len() == 0 => {
                         self.scx.builder.ret().expect("ret");
                     }
                     _ => {
                         use rustc_data_structures::indexed_vec::Idx;
-                        let spirv_ty = { self.to_ty_fn(mir.return_ty) };
+                        let spirv_ty = { self.to_ty_fn(mir.return_ty()) };
                         let var = self.vars.get(&mir::Local::new(0)).unwrap();
                         let load = self.scx
                             .builder
@@ -1040,8 +1045,5 @@ impl<'b, 'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'b, 'a, 
             }
             rest => unimplemented!("{:?}", rest),
         };
-    }
-    fn visit_local_decl(&mut self, local_decl: &mir::LocalDecl<'tcx>) {
-        self.super_local_decl(local_decl);
     }
 }

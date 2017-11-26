@@ -1,4 +1,4 @@
-use self::ty::layout::Layout;
+use rustc::ty::layout::{HasDataLayout, LayoutOf, TargetDataLayout, TyLayout};
 use rustc_const_math::{ConstFloat, ConstInt};
 use rustc::middle::const_val::ConstVal;
 use rspirv;
@@ -11,7 +11,7 @@ use rspirv::mr::Builder;
 use syntax;
 use rustc::mir;
 use rustc::ty::{subst, TyCtxt};
-use {AccessChain, SpirvOperand, SpirvVar};
+use {Enum, AccessChain, SpirvOperand, SpirvVar};
 
 
 use {Intrinsic, IntrinsicType, SpirvConstVal, SpirvFn, SpirvFunctionCall, SpirvTy, SpirvValue};
@@ -213,15 +213,8 @@ impl<'a, 'tcx> SpirvCtx<'a, 'tcx> {
                 let mono_substs = mtx.monomorphize(&substs);
                 match adt.adt_kind() {
                     ty::AdtKind::Enum => {
-                        let layout =
-                            ty.layout(self.tcx, ty::ParamEnv::empty(rustc::traits::Reveal::All))
-                                .expect("layout");
-                        let discr_ty = if let &Layout::General { discr, .. } = layout {
-                            discr.to_ty(&self.tcx, false)
-                        } else {
-                            panic!("No enum layout")
-                        };
-                        let discr_ty_spirv = self.to_ty(discr_ty, mtx, storage_class);
+                        let e = Enum::from_ty(self.tcx, ty).expect("No enum layout");
+                        let discr_ty_spirv = self.to_ty(e.discr_ty, mtx, storage_class);
                         let mut field_ty_spirv: Vec<_> = adt.variants
                             .iter()
                             .map(|variant| {

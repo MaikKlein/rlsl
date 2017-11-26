@@ -1,15 +1,15 @@
 use rustc::mir::visit::Visitor;
 use rustc;
-use rustc::{mir};
+use rustc::mir;
 use rustc_data_structures::fx::FxHashSet;
-use rustc::middle::trans::TransItem;
+use rustc::mir::mono::MonoItem;
 use rustc::ty::{Instance, ParamEnv, TyCtxt};
 use context::MirContext;
 pub struct CollectCrateItems<'a, 'tcx: 'a> {
     mtx: MirContext<'a, 'tcx>,
-    items: Vec<TransItem<'tcx>>,
+    items: Vec<MonoItem<'tcx>>,
 }
-pub fn collect_crate_items<'a, 'tcx>(mtx: MirContext<'a, 'tcx>) -> Vec<TransItem<'tcx>> {
+pub fn collect_crate_items<'a, 'tcx>(mtx: MirContext<'a, 'tcx>) -> Vec<MonoItem<'tcx>> {
     let mut collector = CollectCrateItems {
         mtx,
         items: Vec::new(),
@@ -37,7 +37,7 @@ impl<'a, 'tcx> rustc::mir::visit::Visitor<'tcx> for CollectCrateItems<'a, 'tcx> 
                             def_id,
                             &mono_substs,
                         ).unwrap();
-                        self.items.push(TransItem::Fn(instance));
+                        self.items.push(MonoItem::Fn(instance));
                     }
                 }
             }
@@ -49,14 +49,14 @@ impl<'a, 'tcx> rustc::mir::visit::Visitor<'tcx> for CollectCrateItems<'a, 'tcx> 
 /// items in all crates (rlibs) so we need to manually find them.
 pub fn trans_all_items<'a, 'tcx>(
     tcx: TyCtxt<'a, 'tcx, 'tcx>,
-    start_items: &'a FxHashSet<TransItem<'tcx>>,
-) -> FxHashSet<TransItem<'tcx>> {
+    start_items: &'a FxHashSet<MonoItem<'tcx>>,
+) -> FxHashSet<MonoItem<'tcx>> {
     let mut hash_set = FxHashSet();
-    let mut uncollected_items: Vec<Vec<TransItem<'tcx>>> = Vec::new();
+    let mut uncollected_items: Vec<Vec<MonoItem<'tcx>>> = Vec::new();
     uncollected_items.push(start_items.iter().cloned().collect());
     while let Some(items) = uncollected_items.pop() {
         for item in &items {
-            if let &TransItem::Fn(ref instance) = item {
+            if let &MonoItem::Fn(ref instance) = item {
                 let mir = tcx.maybe_optimized_mir(instance.def_id());
                 if let Some(mir) = mir {
                     let mtx = MirContext {
