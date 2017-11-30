@@ -11,7 +11,7 @@ use rspirv::mr::Builder;
 use syntax;
 use rustc::mir;
 use rustc::ty::{subst, TyCtxt};
-use {Enum, AccessChain, SpirvOperand, SpirvVar};
+use {AccessChain, Enum, SpirvOperand, SpirvVar};
 
 
 use {Intrinsic, IntrinsicType, SpirvConstVal, SpirvFn, SpirvFunctionCall, SpirvTy, SpirvValue};
@@ -328,14 +328,8 @@ impl<'a, 'tcx> SpirvCtx<'a, 'tcx> {
         item.map(|item| &*item.attrs)
     }
     pub fn name_from_def_id(&mut self, def_id: hir::def_id::DefId, id: spirv::Word) {
-        let name = self.tcx
-            .hir
-            .as_local_node_id(def_id)
-            .map(|node_id| self.tcx.hir.name(node_id).as_str());
-        if let Some(name) = name {
-            if self.debug_symbols {
-                self.builder.name(id, name.as_ref());
-            }
+        if self.debug_symbols {
+            self.builder.name(id, self.tcx.item_name(def_id).as_ref());
         }
     }
     pub fn name_from_str(&mut self, name: &str, id: spirv::Word) {
