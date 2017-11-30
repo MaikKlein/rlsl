@@ -27,5 +27,5 @@ env_logger = "0.4.3"
 #getopts = "*"
 log = "*"
 debugit = "*"
-rspirv = {git = "https://github.com/google/rspirv.git", branch = "master" }
-spirv_headers = {git = "https://github.com/google/rspirv.git", branch = "master" }
+rspirv = "0.5"
+spirv_headers = "1.2"
