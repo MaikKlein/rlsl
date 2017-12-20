@@ -23,7 +23,6 @@ extern crate spirv_headers as spirv;
 extern crate syntax;
 extern crate syntax_pos;
 pub mod trans;
-
 use rustc::ty::layout::{HasDataLayout, LayoutOf, TargetDataLayout, TyLayout};
 use rustc_data_structures::indexed_vec::Idx;
 use std::collections::HashMap;
@@ -574,6 +573,9 @@ impl<'b, 'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'b, 'a, 
                 let ty = &mir.local_decls[arg].ty;
                 let spirv_ty = self.to_ty_as_ptr_fn(ty);
                 let var = self.entry_point.get_input_var(spirv_ty).expect("input");
+                if let Some(name) = mir.local_decls[arg].name {
+                    self.scx.name_from_str(name.as_str().as_ref(), var);
+                }
                 self.vars.insert(arg, SpirvVar::new(var, false, ty));
             }
         }

@@ -2,6 +2,7 @@
 #![feature(platform_intrinsics)]
 #![feature(concat_idents)]
 extern crate rlsl_math;
+use rlsl_math::Vec2;
 extern crate generic_array;
 
 //use std::ops::Add;
@@ -82,12 +83,14 @@ impl<T: Copy + Clone> Foo for Test<T>{
         self.y
     }
 }
+
 #[spirv(vertex)]
 fn vertex(pos: Vec2<f32>){
-    use generic_array::GenericArray;
-    use generic_array::typenum::{U1, U3, U4, U97};
-    use generic_array::typenum::Unsigned;
-    let i = U1::to_u8();
+    //let i = U1::to_u8();
+    let v = rlsl_math::Vec2{
+        x: 1.0f32,
+        y: 2.0
+    };
     let t = Test{
         x: 1.0f32,
         y: 2.0
