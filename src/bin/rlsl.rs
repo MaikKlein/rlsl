@@ -55,9 +55,8 @@ impl<'a> CompilerCalls<'a> for RlslCompilerCalls {
         odir: &Option<PathBuf>,
         ofile: &Option<PathBuf>,
     ) -> Compilation {
-        RustcDefaultCalls::print_crate_info(sess, Some(input), odir, ofile).and_then(|| {
-            RustcDefaultCalls::list_metadata(sess, cstore, matches, input)
-        })
+        RustcDefaultCalls::print_crate_info(sess, Some(input), odir, ofile)
+            .and_then(|| RustcDefaultCalls::list_metadata(sess, cstore, matches, input))
     }
     fn no_input(
         &mut self,
@@ -129,6 +128,7 @@ fn main() {
     args.extend_from_slice(&["-L".into(), l]);
     args.extend_from_slice(&["--cfg".into(), "spirv".into()]);
     args.extend_from_slice(&["-Z".into(), "always-encode-mir".into()]);
+    args.extend_from_slice(&["-Z".into(), "mir-opt-level=3".into()]);
     let mut calls = RlslCompilerCalls;
     let _ = run(move || run_compiler(&args, &mut calls, None, None));
 }

@@ -79,11 +79,9 @@ fn intrinsic_fn(attrs: &[syntax::ast::Attribute]) -> Option<IntrinsicFn> {
     attrs
         .iter()
         .filter_map(|attr| {
-            extract_attr(attr, &[], |s| {
-                match s {
-                    "dot" => Some(IntrinsicFn::Dot),
-                    _ => None,
-                }
+            extract_attr(attr, &[], |s| match s {
+                "dot" => Some(IntrinsicFn::Dot),
+                _ => None,
             })
         })
         .nth(0)
@@ -115,11 +113,9 @@ impl IntrinsicType {
         attrs
             .iter()
             .filter_map(|attr| {
-                extract_attr(attr, &["spirv", "ty"], |s| {
-                    match s {
-                        "Vec2" => Some(IntrinsicType::Vec(2)),
-                        _ => None,
-                    }
+                extract_attr(attr, &["spirv", "ty"], |s| match s {
+                    "Vec2" => Some(IntrinsicType::Vec(2)),
+                    _ => None,
                 })
             })
             .nth(0)
@@ -130,7 +126,6 @@ pub enum IntrinsicEntry {
     Vertex,
     Fragment,
 }
-
 
 pub fn extract_attr_impl<'a, R, F>(
     meta_item: &'a syntax::ast::MetaItem,
@@ -165,8 +160,6 @@ where
     None
 }
 
-
-
 #[repr(u32)]
 pub enum GlslExtId {
     Round = 1,
@@ -182,15 +175,19 @@ pub enum SpirvFunctionCall {
 
 pub fn trans_spirv<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, items: &'a FxHashSet<MonoItem<'tcx>>) {
     use rustc::mir::visit::Visitor;
+    let entry_fn = tcx.sess
+        .entry_fn
+        .borrow()
+        .map(|(node_id, _)| tcx.hir.local_def_id(node_id))
+        .expect("entry");
     let mut ctx = SpirvCtx::new(tcx);
     items
         .iter()
         .filter_map(|item| {
             if let &MonoItem::Fn(ref instance) = item {
-                Some(instance)
-            } else {
-                None
+                return Some(instance);
             }
+            None
         })
         .for_each(|instance| {
             //            let a = tcx.def_path(instance.def_id())
@@ -224,6 +221,7 @@ pub fn trans_spirv<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, items: &'a FxHashSet<M
                     .insert(instance.def_id(), SpirvFn(ctx.builder.id()));
             }
         });
+    println!("entry {:?}", entry_fn);
     let instances: Vec<_> = items
         .iter()
         .filter_map(|item| {
@@ -244,12 +242,10 @@ pub fn trans_spirv<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, items: &'a FxHashSet<M
         let intrinsic = tcx.get_attrs(mtx.def_id)
             .iter()
             .filter_map(|attr| {
-                extract_attr(attr, &["spirv"], |s| {
-                    match s {
-                        "vertex" => Some(IntrinsicEntry::Vertex),
-                        "fragment" => Some(IntrinsicEntry::Fragment),
-                        _ => None,
-                    }
+                extract_attr(attr, &["spirv"], |s| match s {
+                    "vertex" => Some(IntrinsicEntry::Vertex),
+                    "fragment" => Some(IntrinsicEntry::Fragment),
+                    _ => None,
                 })
             })
             .nth(0);
@@ -270,24 +266,24 @@ pub fn trans_spirv<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, items: &'a FxHashSet<M
         entry.input_vars.insert(location, var);
     }
 
-
-    for &mtx in &instances {
-        let mut visitor = RlslVisitor::new(mtx, &entry, &mut ctx);
-        let intrinsic = tcx.get_attrs(mtx.def_id)
-            .iter()
-            .filter_map(|attr| {
-                extract_attr(attr, &["spirv"], |s| {
-                    match s {
+    instances
+        .iter()
+        .filter(|mtx| mtx.def_id != entry_fn && tcx.lang_items().start_fn() != Some(mtx.def_id))
+        .for_each(|&mtx| {
+            let mut visitor = RlslVisitor::new(mtx, &entry, &mut ctx);
+            let intrinsic = tcx.get_attrs(mtx.def_id)
+                .iter()
+                .filter_map(|attr| {
+                    extract_attr(attr, &["spirv"], |s| match s {
                         "vertex" => Some(IntrinsicEntry::Vertex),
                         "fragment" => Some(IntrinsicEntry::Fragment),
                         _ => None,
-                    }
+                    })
                 })
-            })
-            .nth(0);
-        visitor.entry = intrinsic;
-        visitor.visit_mir(mtx.mir);
-    }
+                .nth(0);
+            visitor.entry = intrinsic;
+            visitor.visit_mir(mtx.mir);
+        });
     ctx.build_module();
 }
 #[derive(Debug)]
@@ -297,12 +293,12 @@ pub struct AccessChain {
 }
 
 impl AccessChain {
-    pub fn compute<'r, 'tcx>(lvalue: &'r mir::Lvalue<'tcx>) -> Self {
+    pub fn compute<'r, 'tcx>(lvalue: &'r mir::Place<'tcx>) -> Self {
         fn access_chain_indices<'r, 'tcx>(
-            lvalue: &'r mir::Lvalue<'tcx>,
+            lvalue: &'r mir::Place<'tcx>,
             mut indices: Vec<usize>,
-        ) -> (&'r mir::Lvalue<'tcx>, Vec<usize>) {
-            if let &mir::Lvalue::Projection(ref proj) = lvalue {
+        ) -> (&'r mir::Place<'tcx>, Vec<usize>) {
+            if let &mir::Place::Projection(ref proj) = lvalue {
                 if let mir::ProjectionElem::Field(field, _) = proj.elem {
                     indices.push(field.index());
                     return access_chain_indices(&proj.base, indices);
@@ -317,7 +313,7 @@ impl AccessChain {
         let indices = Vec::new();
         let (base, mut indices) = access_chain_indices(lvalue, indices);
         let local = match base {
-            &mir::Lvalue::Local(local) => local,
+            &mir::Place::Local(local) => local,
             _ => panic!("Should be local"),
         };
         indices.reverse();
@@ -327,7 +323,6 @@ impl AccessChain {
         }
     }
 }
-
 
 impl<'b, 'a, 'tcx: 'a> RlslVisitor<'b, 'a, 'tcx> {
     pub fn to_ty(&mut self, ty: Ty<'tcx>, storage_class: spirv::StorageClass) -> SpirvTy {
@@ -661,7 +656,7 @@ impl<'b, 'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'b, 'a, 
     fn visit_assign(
         &mut self,
         block: mir::BasicBlock,
-        lvalue: &mir::Lvalue<'tcx>,
+        lvalue: &mir::Place<'tcx>,
         rvalue: &mir::Rvalue<'tcx>,
         location: mir::Location,
     ) {
@@ -678,8 +673,8 @@ impl<'b, 'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'b, 'a, 
             .to_ty(self.scx.tcx);
         let lvalue_ty_spirv = self.to_ty_fn(lvalue_ty);
         let expr = match rvalue {
-            &mir::Rvalue::BinaryOp(op, ref l, ref r) |
-            &mir::Rvalue::CheckedBinaryOp(op, ref l, ref r) => {
+            &mir::Rvalue::BinaryOp(op, ref l, ref r)
+            | &mir::Rvalue::CheckedBinaryOp(op, ref l, ref r) => {
                 self.scx.binary_op(self.mcx, &self.vars, spirv_ty, op, l, r)
             }
             &mir::Rvalue::Use(ref operand) => {
@@ -727,7 +722,7 @@ impl<'b, 'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'b, 'a, 
                 let is_ptr = lvalue_ty.is_unsafe_ptr() || lvalue_ty.is_mutable_pointer()
                     || lvalue_ty.is_region_ptr();
                 match lvalue {
-                    &mir::Lvalue::Local(local) => {
+                    &mir::Place::Local(local) => {
                         let var = self.vars.get(&local).expect("no local");
                         if is_ptr {
                             //self.ctx.builder.load(self.ctx.from_ty(var.ty))
@@ -742,7 +737,7 @@ impl<'b, 'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'b, 'a, 
             }
             &mir::Rvalue::Discriminant(ref lvalue) => {
                 let local = match lvalue {
-                    &mir::Lvalue::Local(local) => local,
+                    &mir::Place::Local(local) => local,
                     _ => panic!("Should be local"),
                 };
                 let var = *self.vars.get(&local).expect("local");
@@ -800,7 +795,7 @@ impl<'b, 'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'b, 'a, 
             .store(store, expr.0, None, &[])
             .expect("store");
         //        match lvalue {
-        //            &mir::Lvalue::Local(local) => {
+        //            &mir::Place::Local(local) => {
         //                let var = self.vars.get(&local).expect("local");
         //                self.mtx
         //                    .stx
@@ -808,9 +803,9 @@ impl<'b, 'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'b, 'a, 
         //                    .store(var.word, expr.0, None, &[])
         //                    .expect("store");
         //            }
-        //            &mir::Lvalue::Projection(ref proj) => match &proj.elem {
+        //            &mir::Place::Projection(ref proj) => match &proj.elem {
         //                &mir::ProjectionElem::Field(field, ty) => match &proj.base {
-        //                    &mir::Lvalue::Local(local) => {
+        //                    &mir::Place::Local(local) => {
         //                        let var = self.vars.get(&local).expect("local");
         //                        let spirv_ty_ptr = self.mtx.from_ty_as_ptr(ty);
         //                        let index_ty = self.mtx.stx.tcx.mk_mach_uint(syntax::ast::UintTy::U32);
@@ -840,25 +835,6 @@ impl<'b, 'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'b, 'a, 
         //        };
     }
 
-    fn visit_lvalue(
-        &mut self,
-        lvalue: &mir::Lvalue<'tcx>,
-        context: mir::visit::LvalueContext<'tcx>,
-        location: mir::Location,
-    ) {
-        // TODO KERNEL NOT SUPPORTED :(
-        //        if let &mir::Lvalue::Local(local) = lvalue{
-        //            if context.is_storage_live_marker(){
-        //                let var = self.vars.get(&local).expect("no local");
-        //                self.ctx.builder.lifetime_start(var.word, 0);
-        //            }
-        //            if context.is_storage_dead_marker(){
-        //                let var = self.vars.get(&local).expect("no local");
-        //                self.ctx.builder.lifetime_stop(var.word, 0);
-        //            }
-        //        }
-        self.super_lvalue(lvalue, context, location);
-    }
     fn visit_terminator_kind(
         &mut self,
         block: mir::BasicBlock,
@@ -991,37 +967,32 @@ impl<'b, 'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'b, 'a, 
                                             .expect("fn call");
                                         Some(fn_call)
                                     }
-                                    SpirvFunctionCall::Intrinsic(intrinsic) => {
-                                        match intrinsic {
-                                            Intrinsic::GlslExt(id) => {
-                                                let ext_fn = self.scx
-                                                    .builder
-                                                    .ext_inst(
-                                                        spirv_ty.word,
-                                                        None,
-                                                        self.scx.glsl_ext_id,
-                                                        id,
-                                                        &arg_operand_loads,
-                                                    )
-                                                    .expect("ext instr");
-                                                Some(ext_fn)
-                                            }
-                                            Intrinsic::Abort => {
-                                                self.scx
-                                                    .builder
-                                                    .unreachable()
-                                                    .expect("unreachable");
-                                                None
-                                            }
+                                    SpirvFunctionCall::Intrinsic(intrinsic) => match intrinsic {
+                                        Intrinsic::GlslExt(id) => {
+                                            let ext_fn = self.scx
+                                                .builder
+                                                .ext_inst(
+                                                    spirv_ty.word,
+                                                    None,
+                                                    self.scx.glsl_ext_id,
+                                                    id,
+                                                    &arg_operand_loads,
+                                                )
+                                                .expect("ext instr");
+                                            Some(ext_fn)
                                         }
-                                    }
+                                        Intrinsic::Abort => {
+                                            self.scx.builder.unreachable().expect("unreachable");
+                                            None
+                                        }
+                                    },
                                 };
                                 if let (&Some(ref dest), Some(spirv_fn_call)) =
                                     (destination, spirv_fn_call)
                                 {
                                     let &(ref lvalue, _) = dest;
                                     match lvalue {
-                                        &mir::Lvalue::Local(local) => {
+                                        &mir::Place::Local(local) => {
                                             let var = self.vars.get(&local).expect("local");
                                             self.scx
                                                 .builder

@@ -1,11 +1,11 @@
 use RlslVisitor;
 use rustc::mir;
-use rustc::ty::layout::{Integer};
+use rustc::ty::layout::Integer;
 use SpirvConstVal;
 use rustc_const_math::ConstInt;
 use rustc::ty::ParamEnv;
 use rustc::traits::Reveal;
-use {Enum};
+use Enum;
 pub fn trans_statement<'scope, 'a: 'scope, 'tcx: 'a>(
     visitor: &mut RlslVisitor<'scope, 'a, 'tcx>,
     _: mir::BasicBlock,
@@ -13,18 +13,18 @@ pub fn trans_statement<'scope, 'a: 'scope, 'tcx: 'a>(
     _: mir::Location,
 ) {
     if let mir::StatementKind::SetDiscriminant {
-        ref lvalue,
+        ref place,
         variant_index,
     } = statement.kind
     {
-        let ty = lvalue
+        let ty = place
             .ty(&visitor.mcx.mir.local_decls, visitor.mcx.tcx)
             .to_ty(visitor.mcx.tcx);
         let e = Enum::from_ty(visitor.mcx.tcx, ty).expect("Enum");
         let discr_ty_spirv_ptr = visitor.to_ty_as_ptr_fn(e.discr_ty);
 
-        let spirv_var = match lvalue {
-            &mir::Lvalue::Local(local) => *visitor.vars.get(&local).expect("Local"),
+        let spirv_var = match place {
+            &mir::Place::Local(local) => *visitor.vars.get(&local).expect("Local"),
             _ => panic!("Should be local"),
         };
 

@@ -63,26 +63,27 @@ extern crate generic_array;
 //
 //struct Foo1;
 
-#[derive(Copy, Clone)]
-struct Test<T: Copy + Clone>{
-    x: T,
-    y: T
-}
+
+//#[derive(Copy, Clone)]
+//struct Test<T: Copy>{
+//    x: T,
+//    y: T
+//}
 
 pub trait Foo{
     type T;
     fn get(self) -> Self::T;
     fn get2(self) -> Self::T;
 }
-impl<T: Copy + Clone> Foo for Test<T>{
-    type T = T;
-    fn get(self) -> T{
-        self.x
-    }
-    fn get2(self) -> T{
-        self.y
-    }
-}
+//impl<T: Copy + Clone> Foo for Test<T>{
+//    type T = T;
+//    fn get(self) -> T{
+//        self.x
+//    }
+//    fn get2(self) -> T{
+//        self.y
+//    }
+//}
 
 #[spirv(vertex)]
 fn vertex(pos: Vec2<f32>){
@@ -91,11 +92,6 @@ fn vertex(pos: Vec2<f32>){
         x: 1.0f32,
         y: 2.0
     };
-    let t = Test{
-        x: 1.0f32,
-        y: 2.0
-    };
-    let i = t.get();
     pos;
 }
 //pipeline!(

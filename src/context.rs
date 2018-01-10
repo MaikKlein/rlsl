@@ -12,11 +12,10 @@ use syntax;
 use rustc::mir;
 use rustc::ty::{subst, TyCtxt};
 use {AccessChain, Enum, SpirvOperand, SpirvVar};
-
-
 use {Intrinsic, IntrinsicType, SpirvConstVal, SpirvFn, SpirvFunctionCall, SpirvTy, SpirvValue};
 use rustc::ty::Ty;
 use self::hir::def_id::DefId;
+
 pub struct SpirvCtx<'a, 'tcx: 'a> {
     pub tcx: ty::TyCtxt<'a, 'tcx, 'tcx>,
     pub builder: Builder,
@@ -46,8 +45,8 @@ impl<'a, 'tcx> SpirvCtx<'a, 'tcx> {
         let ty = operand.ty(local_decls, self.tcx);
         let spirv_ty = self.to_ty_fn(mcx, ty);
         match operand {
-            &mir::Operand::Consume(ref lvalue) => {
-                let access_chain = AccessChain::compute(lvalue);
+            &mir::Operand::Copy(ref place) | &mir::Operand::Move(ref place) => {
+                let access_chain = AccessChain::compute(place);
                 let spirv_var = *vars.get(&access_chain.base).expect("Local");
                 if access_chain.indices.is_empty() {
                     SpirvOperand::Variable(spirv_var)
@@ -68,25 +67,23 @@ impl<'a, 'tcx> SpirvCtx<'a, 'tcx> {
                     SpirvOperand::Value(SpirvValue(load))
                 }
             }
-            &mir::Operand::Constant(ref constant) => {
-                match constant.literal {
-                    mir::Literal::Value { ref value } => {
-                        let expr = match value.val {
-                            ConstVal::Float(f) => {
-                                let val = SpirvConstVal::Float(f);
-                                self.constant(mcx, val)
-                            }
-                            ConstVal::Integral(int) => {
-                                let val = SpirvConstVal::Integer(int);
-                                self.constant(mcx, val)
-                            }
-                            ref rest => unimplemented!("{:?}", rest),
-                        };
-                        SpirvOperand::Value(expr)
-                    }
-                    ref rest => unimplemented!("{:?}", rest),
+            &mir::Operand::Constant(ref constant) => match constant.literal {
+                mir::Literal::Value { ref value } => {
+                    let expr = match value.val {
+                        ConstVal::Float(f) => {
+                            let val = SpirvConstVal::Float(f);
+                            self.constant(mcx, val)
+                        }
+                        ConstVal::Integral(int) => {
+                            let val = SpirvConstVal::Integer(int);
+                            self.constant(mcx, val)
+                        }
+                        ref rest => unimplemented!("{:?}", rest),
+                    };
+                    SpirvOperand::Value(expr)
                 }
-            }
+                ref rest => unimplemented!("{:?}", rest),
+            },
         }
     }
     /// Tries to get a function id, if it fails it looks for an intrinsic id
@@ -94,11 +91,9 @@ impl<'a, 'tcx> SpirvCtx<'a, 'tcx> {
         self.forward_fns
             .get(&def_id)
             .map(|&spirv_fn| SpirvFunctionCall::Function(spirv_fn))
-            .or(
-                self.intrinsic_fns
-                    .get(&def_id)
-                    .map(|&id| SpirvFunctionCall::Intrinsic(id)),
-            )
+            .or(self.intrinsic_fns
+                .get(&def_id)
+                .map(|&id| SpirvFunctionCall::Intrinsic(id)))
     }
 
     pub fn constant_f32(&mut self, mcx: MirContext<'a, 'tcx>, value: f32) -> SpirvValue {
@@ -164,16 +159,12 @@ impl<'a, 'tcx> SpirvCtx<'a, 'tcx> {
             // TODO: Proper TyNever
             TypeVariants::TyNever => 0.into(),
             TypeVariants::TyBool => self.builder.type_bool().into(),
-            TypeVariants::TyInt(int_ty) => {
-                self.builder
-                    .type_int(int_ty.bit_width().unwrap_or(32) as u32, 1)
-                    .into()
-            }
-            TypeVariants::TyUint(uint_ty) => {
-                self.builder
-                    .type_int(uint_ty.bit_width().unwrap_or(32) as u32, 0)
-                    .into()
-            }
+            TypeVariants::TyInt(int_ty) => self.builder
+                .type_int(int_ty.bit_width().unwrap_or(32) as u32, 1)
+                .into(),
+            TypeVariants::TyUint(uint_ty) => self.builder
+                .type_int(uint_ty.bit_width().unwrap_or(32) as u32, 0)
+                .into(),
             TypeVariants::TyFloat(f_ty) => {
                 use syntax::ast::FloatTy;
                 match f_ty {
@@ -319,11 +310,9 @@ impl<'a, 'tcx> SpirvCtx<'a, 'tcx> {
     fn attrs_from_def_id(&self, def_id: DefId) -> Option<&[syntax::ast::Attribute]> {
         let node_id = self.tcx.hir.as_local_node_id(def_id);
         let node = node_id.and_then(|id| self.tcx.hir.find(id));
-        let item = node.and_then(|node| {
-            match node {
-                hir::map::Node::NodeItem(item) => Some(item),
-                _ => None,
-            }
+        let item = node.and_then(|node| match node {
+            hir::map::Node::NodeItem(item) => Some(item),
+            _ => None,
         });
         item.map(|item| &*item.attrs)
     }
@@ -347,9 +336,7 @@ impl<'a, 'tcx> SpirvCtx<'a, 'tcx> {
         let bytes: Vec<u8> = spirv_module
             .assemble()
             .iter()
-            .flat_map(|val| {
-                (0..size_of::<u32>()).map(move |i| ((val >> (8 * i)) & 0xff) as u8)
-            })
+            .flat_map(|val| (0..size_of::<u32>()).map(move |i| ((val >> (8 * i)) & 0xff) as u8))
             .collect();
         let mut loader = rspirv::mr::Loader::new();
         //let bytes = b.module().assemble_bytes();
