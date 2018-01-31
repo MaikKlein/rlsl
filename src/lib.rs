@@ -5,6 +5,7 @@
 extern crate arena;
 extern crate env_logger;
 extern crate getopts;
+extern crate itertools;
 extern crate log;
 extern crate rspirv;
 extern crate rustc;
@@ -36,6 +37,7 @@ pub mod collector;
 
 use self::context::{MirContext, SpirvCtx};
 use self::ty::*;
+use itertools::Itertools;
 
 pub enum IntrinsicFn {
     Dot,
@@ -44,33 +46,37 @@ pub enum IntrinsicFn {
 #[derive(Debug)]
 pub struct Entry {
     next_id: usize,
-    locations: HashMap<SpirvTy, usize>,
-    input_vars: HashMap<usize, spirv::Word>,
+    global_vars: HashMap<SpirvTy, Vec<spirv::Word>>,
 }
 
 impl Entry {
-    pub fn new() -> Self {
+    pub fn new<'a, 'tcx>(mtxs: &[MirContext<'a, 'tcx>], stx: SpirvCtx<'a, 'tcx>) -> Self {
+        let ty_count: HashMap<rustc::ty::Ty, usize> = mtxs.iter().flat_map(|mtx| {
+            let tys = mtx.mir
+                .args_iter()
+                .map(|local| mtx.monomorphize(&mtx.mir.local_decls[local].ty))
+                .collect_vec();
+            tys.iter()
+                .unique()
+                .map(|&ty| (ty, tys.iter().filter(|&&_ty| _ty == ty).count()))
+        }).fold(HashMap::new(), |mut map, (ty, count)|{
+            let map_count = map.entry(ty).or_insert(count);
+            *map_count = usize::max(*map_count, count);
+            map
+        });
+        ty_count.iter().map(|(ty, &count)| {
+            let var_ty = stx.to_ty_as_ptr(ty, mtxs[0], spirv::StorageClass::Input);
+            let vars = (0 .. count).map(|_|{
+                // TODO: Remove mtxs
+                stx.builder.variable(var_ty.word, None, spirv::StorageClass::Input, None)
+            }).collect_vec();
+            (var_ty, vars)
+
+        });
         Entry {
             next_id: 0,
-            locations: HashMap::new(),
-            input_vars: HashMap::new(),
+            global_vars: HashMap::new(),
         }
-    }
-
-    fn insert(&mut self, ty: SpirvTy) {
-        if !self.locations.contains_key(&ty) {
-            self.locations.insert(ty, self.next_id);
-            self.next_id += 1;
-        }
-    }
-
-    pub fn get_location(&self, ty: SpirvTy) -> Option<usize> {
-        self.locations.get(&ty).map(|l| *l)
-    }
-    pub fn get_input_var(&self, ty: SpirvTy) -> Option<spirv::Word> {
-        self.get_location(ty)
-            .and_then(|l| self.input_vars.get(&l))
-            .map(|l| *l)
     }
 }
 

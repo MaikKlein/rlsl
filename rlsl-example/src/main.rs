@@ -43,8 +43,6 @@ extern crate generic_array;
 //    }
 //}
 
-
-
 //#[cfg(spirv)]
 
 //struct Foo {
@@ -63,14 +61,13 @@ extern crate generic_array;
 //
 //struct Foo1;
 
-
 //#[derive(Copy, Clone)]
 //struct Test<T: Copy>{
 //    x: T,
 //    y: T
 //}
 
-pub trait Foo{
+pub trait Foo {
     type T;
     fn get(self) -> Self::T;
     fn get2(self) -> Self::T;
@@ -86,19 +83,16 @@ pub trait Foo{
 //}
 
 #[spirv(vertex)]
-fn vertex(pos: Vec2<f32>){
+fn vertex(pos: Vec2<f32>) {
     //let i = U1::to_u8();
-    let v = rlsl_math::Vec2{
-        x: 1.0f32,
-        y: 2.0
-    };
+    let v = rlsl_math::Vec2 { x: 1.0f32, y: 2.0 };
     pos;
 }
 //pipeline!(
-    //Test1,
-    //fn fragment(color: Vec4<f32>) -> Vec4<f32>{
-        //color;
-    //}
+//Test1,
+//fn fragment(color: Vec4<f32>) -> Vec4<f32>{
+//color;
+//}
 //);
 //#[spirv(vertex)]
 //fn vert() {
