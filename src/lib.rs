@@ -18,7 +18,6 @@ extern crate rustc_mir;
 extern crate rustc_passes;
 extern crate rustc_plugin;
 extern crate rustc_resolve;
-extern crate rustc_trans;
 extern crate spirv_headers as spirv;
 extern crate syntax;
 extern crate syntax_pos;
