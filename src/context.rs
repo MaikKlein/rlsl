@@ -196,7 +196,7 @@ impl<'a, 'tcx> SpirvCtx<'a, 'tcx> {
             TypeVariants::TyRawPtr(type_and_mut) => {
                 let inner = self.to_ty(type_and_mut.ty, mtx, storage_class);
                 self.builder
-                    .type_pointer(None, spirv::StorageClass::Function, inner.word)
+                    .type_pointer(None, storage_class, inner.word)
                     .into()
             }
             TypeVariants::TyParam(_) => panic!("TyParam should have been monomorphized"),

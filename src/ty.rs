@@ -54,7 +54,7 @@ impl<'tcx> SpirvOperand<'tcx> {
 pub struct SpirvLabel(pub spirv::Word);
 #[derive(Copy, Clone, Debug)]
 pub struct SpirvFn(pub spirv::Word);
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
 pub struct SpirvVar<'tcx> {
     pub word: spirv::Word,
     pub is_param: bool,

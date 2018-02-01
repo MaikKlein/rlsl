@@ -21,9 +21,9 @@ extern crate rustc_passes;
 extern crate rustc_plugin;
 extern crate rustc_resolve;
 extern crate rustc_save_analysis as save;
+extern crate rustc_trans_utils;
 extern crate syntax;
 extern crate syntax_pos;
-extern crate rustc_trans_utils;
 use rustc_driver::{run, run_compiler, Compilation, CompilerCalls};
 use rustc_driver::driver::{CompileController, CompileState};
 use rustc_driver::RustcDefaultCalls;
@@ -104,7 +104,9 @@ impl<'a> CompilerCalls<'a> for RlslCompilerCalls {
     }
 }
 fn main() {
-    let mut args: Vec<String> = std::env::args_os().map(|arg| arg.to_str().unwrap().into()).collect();
+    let mut args: Vec<String> = std::env::args_os()
+        .map(|arg| arg.to_str().unwrap().into())
+        .collect();
     let is_build_script = args.iter()
         .filter(|arg| arg.as_str() == "build_script_main")
         .nth(0)
