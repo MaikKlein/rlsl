@@ -35,7 +35,7 @@ pub mod ty;
 pub mod collector;
 use self::context::{MirContext, SpirvCtx};
 use self::ty::*;
-use itertools::Itertools;
+    use itertools::Itertools;
 pub enum IntrinsicFn {
     Dot,
 }
@@ -59,10 +59,13 @@ impl<'a> Entry<'a> {
                         (ty, spirv_ty)
                     })
                     .collect_vec();
-                tys.iter().unique().map(|&(ty, spirv_ty)| {
-                    let count = tys.iter().filter(|&&_ty| _ty.0 == ty).count();
-                    (ty, spirv_ty, count)
-                }).collect_vec()
+                tys.iter()
+                    .unique()
+                    .map(|&(ty, spirv_ty)| {
+                        let count = tys.iter().filter(|&&_ty| _ty.0 == ty).count();
+                        (ty, spirv_ty, count)
+                    })
+                    .collect_vec()
             })
             .fold(HashMap::new(), |mut map, (ty, spirv_ty, count)| {
                 {
@@ -252,7 +255,6 @@ pub fn trans_spirv<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, items: &'a FxHashSet<M
                     .insert(instance.def_id(), SpirvFn(ctx.builder.id()));
             }
         });
-    println!("entry {:?}", entry_fn);
     let instances: Vec<_> = items
         .iter()
         .filter_map(|item| {
@@ -286,7 +288,6 @@ pub fn trans_spirv<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, items: &'a FxHashSet<M
         })
         .collect();
     let mut entry = Entry::new(&entry_instances, &mut ctx);
-    println!("{:#?}", entry);
 
     instances
         .iter()
@@ -774,10 +775,7 @@ impl<'b, 'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'b, 'a, 
                 SpirvValue(cast)
             }
             &mir::Rvalue::Cast(_, ref op, ty) => {
-                println!("op = {:?}", op);
-                println!("ty = {:?}", ty);
                 let op_ty = op.ty(&self.mcx.mir.local_decls, self.mcx.tcx);
-                println!("op_ty = {:?}", op_ty);
                 unimplemented!("cast")
             }
 
