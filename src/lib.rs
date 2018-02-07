@@ -35,18 +35,71 @@ pub mod ty;
 pub mod collector;
 use self::context::{MirContext, SpirvCtx};
 use self::ty::*;
-    use itertools::Itertools;
+
+use itertools::Itertools;
 pub enum IntrinsicFn {
     Dot,
 }
 
+#[derive(Copy, Clone, Debug)]
+pub struct GlobalVar<'a> {
+    pub ty: rustc::ty::Ty<'a>,
+    pub var: spirv::Word,
+    pub location: usize,
+    pub storage_class: spirv::StorageClass,
+}
+
+fn count_types<'a>(tys: &[rustc::ty::Ty<'a>]) -> HashMap<rustc::ty::Ty<'a>, usize> {
+    tys.iter().fold(HashMap::new(), |mut map, ty| {
+        {
+            let count = map.entry(ty).or_insert(0);
+            *count += 1;
+        }
+        map
+    })
+}
+
+impl<'a> GlobalVar<'a> {}
+
+pub type TyMap<'a> = HashMap<rustc::ty::Ty<'a>, Vec<GlobalVar<'a>>>;
 #[derive(Debug)]
 pub struct Entry<'a> {
     next_id: usize,
-    global_vars: HashMap<rustc::ty::Ty<'a>, Vec<spirv::Word>>,
+    global_vars: TyMap<'a>,
+    variable_map: HashMap<rustc::hir::def_id::DefId, Vec<GlobalVar<'a>>>,
 }
 
 impl<'a> Entry<'a> {
+    pub fn input<'tcx>(entry_mtxs: &[&MirContext<'a, 'tcx>], stx: &mut SpirvCtx<'a, 'tcx>) -> Self {
+        let tys = entry_mtxs
+            .iter()
+            .map(|mtx| {
+                let tys = mtx.mir
+                    .args_iter()
+                    .map(move |local| mtx.mir.local_decls[local].ty)
+                    .collect_vec();
+                count_types(&tys)
+            })
+            .fold(HashMap::new(), |mut map, count_map| {
+                {
+                    for (ty, count) in count_map {
+                        let current_count = map.entry(ty).or_insert(count);
+                        *current_count = usize::max(*current_count, count);
+                    }
+                }
+                map
+            });
+        Self::create(stx, &tys, spirv::StorageClass::Input)
+    }
+
+    pub fn create<'tcx>(
+        stx: &mut SpirvCtx<'a, 'tcx>,
+        map: &HashMap<Ty<'a>, usize>,
+        storage_class: spirv::StorageClass,
+    ) -> Self {
+        unimplemented!()
+    }
+
     pub fn new<'tcx>(entry_mtxs: &[&MirContext<'a, 'tcx>], stx: &mut SpirvCtx<'a, 'tcx>) -> Self {
         let ty_count: HashMap<rustc::ty::Ty<'a>, (usize, SpirvTy)> = entry_mtxs
             .iter()
@@ -55,7 +108,8 @@ impl<'a> Entry<'a> {
                     .args_iter()
                     .map(|local| {
                         let ty = mtx.mir.local_decls[local].ty;
-                        let spirv_ty = stx.to_ty_as_ptr(&ty, mtx, spirv::StorageClass::Input);
+                        let ty = mtx.monomorphize(&ty);
+                        let spirv_ty = stx.to_ty_as_ptr(&ty, spirv::StorageClass::Input);
                         (ty, spirv_ty)
                     })
                     .collect_vec();
@@ -74,38 +128,65 @@ impl<'a> Entry<'a> {
                 }
                 map
             });
+        let mut next_id = 0;
         let global_vars = ty_count
             .iter()
             .map(|(&ty, &(count, spirv_ty))| {
                 let vars = (0..count)
                     .map(|_| {
-                        stx.builder
-                            .variable(spirv_ty.word, None, spirv::StorageClass::Input, None)
+                        let var = stx.builder.variable(
+                            spirv_ty.word,
+                            None,
+                            spirv::StorageClass::Input,
+                            None,
+                        );
+                        let global_var = GlobalVar {
+                            var,
+                            ty,
+                            storage_class: spirv::StorageClass::Input,
+                            location: next_id,
+                        };
+                        stx.builder.decorate(
+                            var,
+                            spirv::Decoration::Location,
+                            &[rspirv::mr::Operand::LiteralInt32(next_id as u32)],
+                        );
+                        next_id += 1;
+                        global_var
                     })
                     .collect_vec();
                 (ty, vars)
             })
             .collect();
-        Entry {
-            next_id: 0,
-            global_vars,
+        fn compute_variables<'a, 'tcx>(
+            variables: &TyMap<'a>,
+            entry: &MirContext<'a, 'tcx>,
+        ) -> Vec<GlobalVar<'a>> {
+            let mut cache: HashMap<rustc::ty::Ty, usize> = HashMap::new();
+            entry
+                .mir
+                .args_iter()
+                .map(|local| {
+                    let ty = entry.mir.local_decls[local].ty;
+                    let idx = cache.entry(ty).or_insert(0);
+                    let vars = variables.get(&ty).expect("global var");
+                    let var = *vars.get(*idx).expect("idx");
+                    *idx += 1;
+                    var
+                })
+                .collect_vec()
         }
-    }
 
-    pub fn compute_variables<'tcx>(&self, entry: &MirContext<'a, 'tcx>) -> Vec<spirv::Word> {
-        let mut chache: HashMap<rustc::ty::Ty, usize> = HashMap::new();
-        entry
-            .mir
-            .args_iter()
-            .map(|local| {
-                let ty = entry.mir.local_decls[local].ty;
-                let idx = chache.entry(ty).or_insert(0);
-                let vars = self.global_vars.get(&ty).expect("global var");
-                let var = *vars.get(*idx).expect("idx");
-                *idx += 1;
-                var
-            })
-            .collect_vec()
+        let variable_map = entry_mtxs
+            .iter()
+            .map(|mtx| (mtx.def_id, compute_variables(&global_vars, mtx)))
+            .collect();
+
+        Entry {
+            next_id,
+            global_vars,
+            variable_map,
+        }
     }
 }
 
@@ -349,17 +430,20 @@ impl AccessChain {
 
 impl<'b, 'a, 'tcx: 'a> RlslVisitor<'b, 'a, 'tcx> {
     pub fn to_ty(&mut self, ty: Ty<'tcx>, storage_class: spirv::StorageClass) -> SpirvTy {
-        self.scx.to_ty(ty, self.mcx, storage_class)
+        let ty = self.mcx.monomorphize(&ty);
+        self.scx.to_ty(ty, storage_class)
     }
     pub fn to_ty_as_ptr(&mut self, ty: Ty<'tcx>, storage_class: spirv::StorageClass) -> SpirvTy {
-        self.scx.to_ty_as_ptr(ty, self.mcx, storage_class)
+        let ty = self.mcx.monomorphize(&ty);
+        self.scx.to_ty_as_ptr(ty, storage_class)
     }
     pub fn to_ty_fn(&mut self, ty: Ty<'tcx>) -> SpirvTy {
-        self.scx.to_ty(ty, self.mcx, spirv::StorageClass::Function)
+        let ty = self.mcx.monomorphize(&ty);
+        self.scx.to_ty(ty, spirv::StorageClass::Function)
     }
     pub fn to_ty_as_ptr_fn(&mut self, ty: Ty<'tcx>) -> SpirvTy {
-        self.scx
-            .to_ty_as_ptr(ty, self.mcx, spirv::StorageClass::Function)
+        let ty = self.mcx.monomorphize(&ty);
+        self.scx.to_ty_as_ptr(ty, spirv::StorageClass::Function)
     }
     pub fn constant(&mut self, val: SpirvConstVal) -> SpirvValue {
         self.scx.constant(self.mcx, val)
@@ -443,6 +527,15 @@ impl<'tcx> Enum<'tcx> {
         }
     }
 }
+pub trait Monomorphize<'tcx> {
+    fn mono<'a>(self, mtx: MirContext<'a, 'tcx>) -> Ty<'tcx>;
+}
+
+impl<'tcx> Monomorphize<'tcx> for Ty<'tcx> {
+    fn mono<'a>(self, mtx: MirContext<'a, 'tcx>) -> Ty<'tcx> {
+        mtx.monomorphize(&self)
+    }
+}
 
 impl<'b, 'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'b, 'a, 'tcx> {
     fn visit_basic_block_data(&mut self, block: mir::BasicBlock, data: &mir::BasicBlockData<'tcx>) {
@@ -495,8 +588,11 @@ impl<'b, 'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'b, 'a, 
         let def_id = self.mcx.def_id;
         let spirv_function = if !self.entry.is_some() {
             let ret_ty_spirv = self.to_ty_fn(mir.return_ty());
+
             // If a param is not a ptr, we need to turn it into a ptr
-            let args_ty: Vec<_> = mir.args_iter().map(|l| mir.local_decls[l].ty).collect();
+            let args_ty: Vec<_> = mir.args_iter()
+                .map(|l| self.mcx.monomorphize(&mir.local_decls[l].ty))
+                .collect();
             let fn_sig = self.scx.tcx.mk_fn_sig(
                 args_ty.into_iter(),
                 mir.return_ty(),
@@ -587,10 +683,11 @@ impl<'b, 'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'b, 'a, 
             }
         } else {
             self.scx.builder.begin_basic_block(None).expect("block");
-            let inputs = self.entry_point.compute_variables(&self.mcx);
+            let inputs = self.entry_point.variable_map.get(&def_id).unwrap();
             for (idx, arg) in mir.args_iter().enumerate() {
-                let ty = &mir.local_decls[arg].ty;
-                self.vars.insert(arg, SpirvVar::new(inputs[idx], false, ty));
+                let ty = self.mcx.monomorphize(&mir.local_decls[arg].ty);
+                self.vars
+                    .insert(arg, SpirvVar::new(inputs[idx].var, false, ty));
             }
         }
         for local_var in mir.vars_and_temps_iter() {
@@ -612,7 +709,8 @@ impl<'b, 'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'b, 'a, 
             use rustc_data_structures::indexed_vec::Idx;
             let local = mir::Local::new(0);
             let local_decl = &mir.local_decls[local];
-            let spirv_var_ty = self.to_ty_as_ptr_fn(local_decl.ty);
+            let ty = self.mcx.monomorphize(&local_decl.ty);
+            let spirv_var_ty = self.to_ty_as_ptr_fn(ty);
             let spirv_var = self.scx.builder.variable(
                 spirv_var_ty.word,
                 None,
@@ -650,13 +748,19 @@ impl<'b, 'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'b, 'a, 
         self.visit_span(&mir.span);
         self.scx.builder.end_function().expect("end fn");
         if self.entry.is_some() {
-            let inputs = self.entry_point.compute_variables(&self.mcx);
+            let inputs = self.entry_point
+                .variable_map
+                .get(&def_id)
+                .unwrap()
+                .iter()
+                .map(|gv| gv.var)
+                .collect_vec();
             let name = self.mcx.tcx.item_name(self.mcx.def_id);
             self.scx.builder.entry_point(
                 spirv::ExecutionModel::Vertex,
                 spirv_function,
                 name.as_ref(),
-                &inputs,
+                inputs,
             );
             self.scx.builder.execution_mode(
                 spirv_function,
@@ -679,10 +783,12 @@ impl<'b, 'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'b, 'a, 
                 return;
             }
         }
+        let ty = self.mcx.monomorphize(&ty);
         let spirv_ty = self.to_ty_fn(ty);
         let lvalue_ty = lvalue
             .ty(&self.mcx.mir.local_decls, self.scx.tcx)
             .to_ty(self.scx.tcx);
+        let lvalue_ty = self.mcx.monomorphize(&lvalue_ty);
         let lvalue_ty_spirv = self.to_ty_fn(lvalue_ty);
         let expr = match rvalue {
             &mir::Rvalue::BinaryOp(op, ref l, ref r)
@@ -717,6 +823,7 @@ impl<'b, 'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'b, 'a, 
                     .iter()
                     .map(|op| {
                         let ty = op.ty(&self.mcx.mir.local_decls, self.mcx.tcx);
+                        let ty = self.mcx.monomorphize(&ty);
                         let spirv_ty = self.to_ty_fn(ty);
                         self.scx
                             .load_operand(self.mcx, &self.vars, op)
@@ -755,8 +862,9 @@ impl<'b, 'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'b, 'a, 
                 let var = *self.vars.get(&local).expect("local");
                 let ty = self.mcx.mir.local_decls[local].ty;
                 let enum_data = Enum::from_ty(self.mcx.tcx, ty).expect("enum");
-                let discr_ty_spirv = self.to_ty_fn(enum_data.discr_ty);
-                let discr_ty_spirv_ptr = self.to_ty_as_ptr_fn(enum_data.discr_ty);
+                let discr_ty = self.mcx.monomorphize(&enum_data.discr_ty);
+                let discr_ty_spirv = self.to_ty_fn(discr_ty);
+                let discr_ty_spirv_ptr = self.to_ty_as_ptr_fn(discr_ty);
                 let index = self.constant_u32(enum_data.index as u32).0;
                 let access = self.scx
                     .builder
@@ -766,6 +874,7 @@ impl<'b, 'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'b, 'a, 
                     .builder
                     .load(discr_ty_spirv.word, None, access, None, &[])
                     .expect("load");
+                let lvalue_ty = self.mcx.monomorphize(&lvalue_ty);
                 let target_ty_spirv = self.to_ty_fn(lvalue_ty);
                 let cast = self.scx
                     .builder
@@ -860,7 +969,8 @@ impl<'b, 'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'b, 'a, 
                     }
                     _ => {
                         use rustc_data_structures::indexed_vec::Idx;
-                        let spirv_ty = { self.to_ty_fn(mir.return_ty()) };
+                        let ty = self.mcx.monomorphize(&mir.return_ty());
+                        let spirv_ty = { self.to_ty_fn(ty) };
                         let var = self.vars.get(&mir::Local::new(0)).unwrap();
                         let load = self.scx
                             .builder
@@ -934,6 +1044,7 @@ impl<'b, 'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'b, 'a, 
                     &mir::Operand::Constant(ref constant) => {
                         let ret_ty_binder = constant.ty.fn_sig(self.scx.tcx).output();
                         let ret_ty = ret_ty_binder.skip_binder();
+                        let ret_ty = self.mcx.monomorphize(ret_ty);
                         let spirv_ty = self.to_ty_fn(ret_ty);
                         if let mir::Literal::Value { ref value } = constant.literal {
                             use rustc::middle::const_val::ConstVal;
@@ -951,6 +1062,7 @@ impl<'b, 'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'b, 'a, 
                                         let operand =
                                             self.scx.load_operand(self.mcx, &self.vars, arg);
                                         let arg_ty = arg.ty(local_decls, self.scx.tcx);
+                                        let arg_ty = self.mcx.monomorphize(&arg_ty);
                                         let arg_ty_spirv = self.to_ty_fn(arg_ty);
                                         operand.load_raw(&mut self.scx, arg_ty_spirv)
                                     })

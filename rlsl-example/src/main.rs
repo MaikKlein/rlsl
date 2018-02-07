@@ -82,9 +82,14 @@ pub trait Foo {
 //    }
 //}
 
+fn test_enum<T>(e: Option<T>) -> Option<T> {
+    e
+}
 #[spirv(vertex)]
-fn vertex(pos: Vec2<f32>) {
+fn vertex(pos: Vec2<f32>, uv: Vec2<f32>) {
     //let i = U1::to_u8();
+    let s = Some(1.0f32);
+    let s1 = test_enum(s);
     let v = rlsl_math::Vec2 { x: 1.0f32, y: 2.0 };
     pos;
 }

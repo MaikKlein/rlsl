@@ -29,10 +29,10 @@ pub struct SpirvCtx<'a, 'tcx: 'a> {
 
 impl<'a, 'tcx> SpirvCtx<'a, 'tcx> {
     pub fn to_ty_fn(&mut self, mcx: MirContext<'a, 'tcx>, ty: Ty<'tcx>) -> SpirvTy {
-        self.to_ty(ty, mcx, spirv::StorageClass::Function)
+        self.to_ty(ty, spirv::StorageClass::Function)
     }
     pub fn to_ty_as_ptr_fn(&mut self, mcx: MirContext<'a, 'tcx>, ty: Ty<'tcx>) -> SpirvTy {
-        self.to_ty_as_ptr(ty, mcx, spirv::StorageClass::Function)
+        self.to_ty_as_ptr(ty, spirv::StorageClass::Function)
     }
     pub fn load_operand<'r>(
         &mut self,
@@ -43,6 +43,7 @@ impl<'a, 'tcx> SpirvCtx<'a, 'tcx> {
         let mir = mcx.mir;
         let local_decls = &mir.local_decls;
         let ty = operand.ty(local_decls, self.tcx);
+        let ty = mcx.monomorphize(&ty);
         let spirv_ty = self.to_ty_fn(mcx, ty);
         match operand {
             &mir::Operand::Copy(ref place) | &mir::Operand::Move(ref place) => {
@@ -118,7 +119,7 @@ impl<'a, 'tcx> SpirvCtx<'a, 'tcx> {
             SpirvConstVal::Integer(const_int) => {
                 use rustc::ty::util::IntTypeExt;
                 let ty = const_int.int_type().to_ty(self.tcx);
-                let spirv_ty = self.to_ty(ty, mcx, spirv::StorageClass::Function);
+                let spirv_ty = self.to_ty(ty, spirv::StorageClass::Function);
                 let value = const_int.to_u128_unchecked() as u32;
                 self.builder.constant_u32(spirv_ty.word, value)
             }
@@ -126,7 +127,7 @@ impl<'a, 'tcx> SpirvCtx<'a, 'tcx> {
                 use rustc::infer::unify_key::ToType;
                 let value = const_float.to_i128(32).expect("Only f32 is supported") as f32;
                 let ty = const_float.ty.to_type(self.tcx);
-                let spirv_ty = self.to_ty(ty, mcx, spirv::StorageClass::Function);
+                let spirv_ty = self.to_ty(ty, spirv::StorageClass::Function);
                 self.builder.constant_f32(spirv_ty.word, value)
             }
         };
@@ -137,11 +138,10 @@ impl<'a, 'tcx> SpirvCtx<'a, 'tcx> {
     pub fn to_ty(
         &mut self,
         ty: rustc::ty::Ty<'tcx>,
-        mtx: MirContext<'a, 'tcx>,
         storage_class: spirv::StorageClass,
     ) -> SpirvTy {
         use rustc::ty::TypeVariants;
-        let ty = mtx.monomorphize(&ty);
+        println!("{:?} {:?}", ty, storage_class);
         let ty = match ty.sty {
             TypeVariants::TyRef(_, type_and_mut) => {
                 let t = ty::TypeAndMut {
@@ -176,7 +176,7 @@ impl<'a, 'tcx> SpirvCtx<'a, 'tcx> {
             TypeVariants::TyTuple(slice, _) => {
                 let field_ty_spirv: Vec<_> = slice
                     .iter()
-                    .map(|ty| self.to_ty(ty, mtx, storage_class).word)
+                    .map(|ty| self.to_ty(ty, storage_class).word)
                     .collect();
 
                 let spirv_struct = self.builder.type_struct(&field_ty_spirv);
@@ -185,27 +185,28 @@ impl<'a, 'tcx> SpirvCtx<'a, 'tcx> {
             TypeVariants::TyFnPtr(sig) => {
                 let ty = self.tcx
                     .erase_late_bound_regions_and_normalize(&sig.output());
-                let ret_ty = self.to_ty(ty, mtx, storage_class);
+                let ret_ty = self.to_ty(ty, storage_class);
                 let input_ty: Vec<_> = sig.inputs()
                     .skip_binder()
                     .iter()
-                    .map(|ty| self.to_ty(ty, mtx, storage_class).word)
+                    .map(|ty| self.to_ty(ty, storage_class).word)
                     .collect();
                 self.builder.type_function(ret_ty.word, &input_ty).into()
             }
             TypeVariants::TyRawPtr(type_and_mut) => {
-                let inner = self.to_ty(type_and_mut.ty, mtx, storage_class);
+                let inner = self.to_ty(type_and_mut.ty, storage_class);
                 self.builder
                     .type_pointer(None, storage_class, inner.word)
                     .into()
             }
             TypeVariants::TyParam(_) => panic!("TyParam should have been monomorphized"),
             TypeVariants::TyAdt(adt, substs) => {
-                let mono_substs = mtx.monomorphize(&substs);
+                //let mono_substs = mtx.monomorphize(&substs);
+                let mono_substs = substs;
                 match adt.adt_kind() {
                     ty::AdtKind::Enum => {
                         let e = Enum::from_ty(self.tcx, ty).expect("No enum layout");
-                        let discr_ty_spirv = self.to_ty(e.discr_ty, mtx, storage_class);
+                        let discr_ty_spirv = self.to_ty(e.discr_ty, storage_class);
                         let mut field_ty_spirv: Vec<_> = adt.variants
                             .iter()
                             .map(|variant| {
@@ -214,7 +215,7 @@ impl<'a, 'tcx> SpirvCtx<'a, 'tcx> {
                                     .iter()
                                     .map(|field| {
                                         let ty = field.ty(self.tcx, mono_substs);
-                                        self.to_ty(ty, mtx, storage_class).word
+                                        self.to_ty(ty, storage_class).word
                                     })
                                     .collect();
                                 let spirv_struct = self.builder.type_struct(&variant_field_ty);
@@ -258,7 +259,7 @@ impl<'a, 'tcx> SpirvCtx<'a, 'tcx> {
                                         .nth(0)
                                         .map(|f| f.ty(self.tcx, mono_substs))
                                         .expect("no field");
-                                    let spirv_ty = self.to_ty(field_ty, mtx, storage_class);
+                                    let spirv_ty = self.to_ty(field_ty, storage_class);
                                     self.builder.type_vector(spirv_ty.word, dim as u32).into()
                                 }
                             };
@@ -267,7 +268,7 @@ impl<'a, 'tcx> SpirvCtx<'a, 'tcx> {
                             let field_ty_spirv: Vec<_> = adt.all_fields()
                                 .map(|f| {
                                     let ty = f.ty(self.tcx, mono_substs);
-                                    self.to_ty(ty, mtx, storage_class).word
+                                    self.to_ty(ty, storage_class).word
                                 })
                                 .collect();
 
@@ -297,7 +298,6 @@ impl<'a, 'tcx> SpirvCtx<'a, 'tcx> {
     pub fn to_ty_as_ptr<'gcx>(
         &mut self,
         ty: ty::Ty<'tcx>,
-        mtx: MirContext<'a, 'tcx>,
         storage_class: spirv::StorageClass,
     ) -> SpirvTy {
         let t = ty::TypeAndMut {
@@ -305,7 +305,7 @@ impl<'a, 'tcx> SpirvCtx<'a, 'tcx> {
             mutbl: rustc::hir::Mutability::MutMutable,
         };
         let ty_ptr = self.tcx.mk_ptr(t);
-        self.to_ty(ty_ptr, mtx, storage_class)
+        self.to_ty(ty_ptr, storage_class)
     }
     fn attrs_from_def_id(&self, def_id: DefId) -> Option<&[syntax::ast::Attribute]> {
         let node_id = self.tcx.hir.as_local_node_id(def_id);
