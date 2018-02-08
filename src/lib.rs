@@ -398,17 +398,18 @@ impl AccessChain {
 impl<'b, 'a, 'tcx: 'a> RlslVisitor<'b, 'a, 'tcx> {
     pub fn trans_fn(mcx: MirContext<'a, 'tcx>, scx: &mut SpirvCtx<'a, 'tcx>) {
         use mir::visit::Visitor;
-        let ret_ty_spirv = scx.to_ty_fn(mcx.mir.return_ty());
+        let ret_ty = mcx.monomorphize(&mcx.mir.return_ty());
+        let ret_ty_spirv = scx.to_ty_fn(ret_ty);
         let def_id = mcx.def_id;
 
         // If a param is not a ptr, we need to turn it into a ptr
         let args_ty: Vec<_> = mcx.mir
             .args_iter()
-            .map(|l| mcx.mir.local_decls[l].ty)
+            .map(|l| mcx.monomorphize(&mcx.mir.local_decls[l].ty))
             .collect();
         let fn_sig = scx.tcx.mk_fn_sig(
             args_ty.into_iter(),
-            mcx.mir.return_ty(),
+            ret_ty,
             false,
             hir::Unsafety::Normal,
             syntax::abi::Abi::Rust,
@@ -431,7 +432,8 @@ impl<'b, 'a, 'tcx: 'a> RlslVisitor<'b, 'a, 'tcx> {
             .args_iter()
             .map(|local_arg| {
                 let local_decl = &mcx.mir.local_decls[local_arg];
-                let spirv_arg_ty = scx.to_ty_fn(local_decl.ty);
+                let local_ty = mcx.monomorphize(&local_decl.ty);
+                let spirv_arg_ty = scx.to_ty_fn(local_ty);
                 let spirv_param = scx.builder
                     .function_parameter(spirv_arg_ty.word)
                     .expect("fn param");
@@ -449,7 +451,8 @@ impl<'b, 'a, 'tcx: 'a> RlslVisitor<'b, 'a, 'tcx> {
             .map(|(index, param)| {
                 let local_arg = mir::Local::new(index + 1);
                 let local_decl = &mcx.mir.local_decls[local_arg];
-                let spirv_var_ty = scx.to_ty_as_ptr_fn(local_decl.ty);
+                let local_ty = mcx.monomorphize(&local_decl.ty);
+                let spirv_var_ty = scx.to_ty_as_ptr_fn(local_ty);
                 let spirv_var = scx.builder.variable(
                     spirv_var_ty.word,
                     None,
@@ -557,7 +560,8 @@ impl<'b, 'a, 'tcx: 'a> RlslVisitor<'b, 'a, 'tcx> {
             .vars_and_temps_iter()
             .map(|local_var| {
                 let local_decl = &mcx.mir.local_decls[local_var];
-                let spirv_var_ty = scx.to_ty_as_ptr_fn(local_decl.ty);
+                let local_ty = mcx.monomorphize(&local_decl.ty);
+                let spirv_var_ty = scx.to_ty_as_ptr_fn(local_ty);
                 let spirv_var = scx.builder.variable(
                     spirv_var_ty.word,
                     None,
@@ -574,7 +578,7 @@ impl<'b, 'a, 'tcx: 'a> RlslVisitor<'b, 'a, 'tcx> {
             use rustc_data_structures::indexed_vec::Idx;
             let local = mir::Local::new(0);
             let local_decl = &mcx.mir.local_decls[local];
-            let ty = local_decl.ty;
+            let ty = mcx.monomorphize(&local_decl.ty);
             let spirv_var_ty = scx.to_ty_as_ptr_fn(ty);
             let spirv_var =
                 scx.builder
