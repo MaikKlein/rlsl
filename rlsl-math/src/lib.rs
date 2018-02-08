@@ -10,6 +10,28 @@ impl Float for f32 {
     }
 }
 
+#[spirv(PerVertex)]
+pub struct Vertex {
+    pub position: Vec4<f32>,
+    pub point_size: f32,
+}
+
+#[spirv(Vec4)]
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Vec4<T> {
+    pub x: T,
+    pub y: T,
+    pub z: T,
+    pub w: T,
+}
+
+impl<T> Vec4<T> {
+    pub fn new(x: T, y: T, z: T, w: T) -> Vec4<T> {
+        Vec4 { x, y, z, w }
+    }
+}
+
 #[spirv(Vec2)]
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq)]

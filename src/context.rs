@@ -28,10 +28,10 @@ pub struct SpirvCtx<'a, 'tcx: 'a> {
 }
 
 impl<'a, 'tcx> SpirvCtx<'a, 'tcx> {
-    pub fn to_ty_fn(&mut self, mcx: MirContext<'a, 'tcx>, ty: Ty<'tcx>) -> SpirvTy {
+    pub fn to_ty_fn(&mut self, ty: Ty<'tcx>) -> SpirvTy {
         self.to_ty(ty, spirv::StorageClass::Function)
     }
-    pub fn to_ty_as_ptr_fn(&mut self, mcx: MirContext<'a, 'tcx>, ty: Ty<'tcx>) -> SpirvTy {
+    pub fn to_ty_as_ptr_fn(&mut self, ty: Ty<'tcx>) -> SpirvTy {
         self.to_ty_as_ptr(ty, spirv::StorageClass::Function)
     }
     pub fn load_operand<'r>(
@@ -44,7 +44,7 @@ impl<'a, 'tcx> SpirvCtx<'a, 'tcx> {
         let local_decls = &mir.local_decls;
         let ty = operand.ty(local_decls, self.tcx);
         let ty = mcx.monomorphize(&ty);
-        let spirv_ty = self.to_ty_fn(mcx, ty);
+        let spirv_ty = self.to_ty_fn(ty);
         match operand {
             &mir::Operand::Copy(ref place) | &mir::Operand::Move(ref place) => {
                 let access_chain = AccessChain::compute(place);
@@ -52,7 +52,7 @@ impl<'a, 'tcx> SpirvCtx<'a, 'tcx> {
                 if access_chain.indices.is_empty() {
                     SpirvOperand::Variable(spirv_var)
                 } else {
-                    let spirv_ty_ptr = self.to_ty_as_ptr_fn(mcx, ty);
+                    let spirv_ty_ptr = self.to_ty_as_ptr_fn(ty);
                     let indices: Vec<_> = access_chain
                         .indices
                         .iter()
@@ -141,7 +141,6 @@ impl<'a, 'tcx> SpirvCtx<'a, 'tcx> {
         storage_class: spirv::StorageClass,
     ) -> SpirvTy {
         use rustc::ty::TypeVariants;
-        println!("{:?} {:?}", ty, storage_class);
         let ty = match ty.sty {
             TypeVariants::TyRef(_, type_and_mut) => {
                 let t = ty::TypeAndMut {

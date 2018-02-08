@@ -36,9 +36,14 @@ pub mod collector;
 use self::context::{MirContext, SpirvCtx};
 use self::ty::*;
 
-use itertools::Itertools;
+use itertools::{Either, Itertools};
 pub enum IntrinsicFn {
     Dot,
+}
+
+pub struct EntryPoint<'a, 'tcx: 'a> {
+    pub entry_type: IntrinsicEntry,
+    pub mcx: MirContext<'a, 'tcx>,
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -48,7 +53,6 @@ pub struct GlobalVar<'a> {
     pub location: usize,
     pub storage_class: spirv::StorageClass,
 }
-
 fn count_types<'a>(tys: &[rustc::ty::Ty<'a>]) -> HashMap<rustc::ty::Ty<'a>, usize> {
     tys.iter().fold(HashMap::new(), |mut map, ty| {
         {
@@ -63,24 +67,49 @@ impl<'a> GlobalVar<'a> {}
 
 pub type TyMap<'a> = HashMap<rustc::ty::Ty<'a>, Vec<GlobalVar<'a>>>;
 #[derive(Debug)]
-pub struct Entry<'a> {
+pub struct Entry<'tcx> {
     next_id: usize,
-    global_vars: TyMap<'a>,
-    variable_map: HashMap<rustc::hir::def_id::DefId, Vec<GlobalVar<'a>>>,
+    global_vars: TyMap<'tcx>,
 }
 
-impl<'a> Entry<'a> {
-    pub fn input<'tcx>(entry_mtxs: &[&MirContext<'a, 'tcx>], stx: &mut SpirvCtx<'a, 'tcx>) -> Self {
+impl<'tcx> Entry<'tcx> {
+    pub fn input<'a>(
+        entry_points: &[EntryPoint<'a, 'tcx>],
+        stx: &mut SpirvCtx<'a, 'tcx>,
+    ) -> Self {
+        let tys = entry_points
+            .iter()
+            .map(|entry| {
+                entry
+                    .mcx
+                    .mir
+                    .args_iter()
+                    .map(move |local| entry.mcx.mir.local_decls[local].ty)
+                    .collect_vec()
+            })
+            .collect_vec();
+        Self::create(&tys, stx, spirv::StorageClass::Input)
+    }
+
+    pub fn output<'a>(
+        entry_mtxs: &[&MirContext<'a, 'tcx>],
+        stx: &mut SpirvCtx<'a, 'tcx>,
+    ) -> Self {
         let tys = entry_mtxs
             .iter()
-            .map(|mtx| {
-                let tys = mtx.mir
-                    .args_iter()
-                    .map(move |local| mtx.mir.local_decls[local].ty)
-                    .collect_vec();
-                count_types(&tys)
-            })
-            .fold(HashMap::new(), |mut map, count_map| {
+            .map(|mtx| vec![mtx.mir.return_ty()])
+            .collect_vec();
+        Self::create(&tys, stx, spirv::StorageClass::Output)
+    }
+
+    pub fn create<'a>(
+        tys: &[Vec<Ty<'tcx>>],
+        stx: &mut SpirvCtx<'a, 'tcx>,
+        storage_class: spirv::StorageClass,
+    ) -> Self {
+        let tys = tys.iter().map(|tys| count_types(&tys)).fold(
+            HashMap::new(),
+            |mut map, count_map| {
                 {
                     for (ty, count) in count_map {
                         let current_count = map.entry(ty).or_insert(count);
@@ -88,105 +117,47 @@ impl<'a> Entry<'a> {
                     }
                 }
                 map
-            });
-        Self::create(stx, &tys, spirv::StorageClass::Input)
-    }
-
-    pub fn create<'tcx>(
-        stx: &mut SpirvCtx<'a, 'tcx>,
-        map: &HashMap<Ty<'a>, usize>,
-        storage_class: spirv::StorageClass,
-    ) -> Self {
-        unimplemented!()
-    }
-
-    pub fn new<'tcx>(entry_mtxs: &[&MirContext<'a, 'tcx>], stx: &mut SpirvCtx<'a, 'tcx>) -> Self {
-        let ty_count: HashMap<rustc::ty::Ty<'a>, (usize, SpirvTy)> = entry_mtxs
-            .iter()
-            .flat_map(|&&mtx| {
-                let tys = mtx.mir
-                    .args_iter()
-                    .map(|local| {
-                        let ty = mtx.mir.local_decls[local].ty;
-                        let ty = mtx.monomorphize(&ty);
-                        let spirv_ty = stx.to_ty_as_ptr(&ty, spirv::StorageClass::Input);
-                        (ty, spirv_ty)
-                    })
-                    .collect_vec();
-                tys.iter()
-                    .unique()
-                    .map(|&(ty, spirv_ty)| {
-                        let count = tys.iter().filter(|&&_ty| _ty.0 == ty).count();
-                        (ty, spirv_ty, count)
-                    })
-                    .collect_vec()
-            })
-            .fold(HashMap::new(), |mut map, (ty, spirv_ty, count)| {
-                {
-                    let map_count = map.entry(ty).or_insert((count, spirv_ty));
-                    map_count.0 = usize::max(map_count.0, count);
-                }
-                map
-            });
-        let mut next_id = 0;
-        let global_vars = ty_count
-            .iter()
-            .map(|(&ty, &(count, spirv_ty))| {
-                let vars = (0..count)
+            },
+        );
+        let global_vars = tys.iter()
+            .map(|(&ty, &count)| {
+                let spirv_ty = stx.to_ty_as_ptr(&ty, storage_class);
+                let global_vars = (0..count)
                     .map(|_| {
-                        let var = stx.builder.variable(
-                            spirv_ty.word,
-                            None,
-                            spirv::StorageClass::Input,
-                            None,
-                        );
+                        let var = stx.builder
+                            .variable(spirv_ty.word, None, storage_class, None);
                         let global_var = GlobalVar {
                             var,
                             ty,
-                            storage_class: spirv::StorageClass::Input,
-                            location: next_id,
+                            storage_class: storage_class,
+                            location: 0,
                         };
-                        stx.builder.decorate(
-                            var,
-                            spirv::Decoration::Location,
-                            &[rspirv::mr::Operand::LiteralInt32(next_id as u32)],
-                        );
-                        next_id += 1;
                         global_var
                     })
                     .collect_vec();
-                (ty, vars)
+                (ty, global_vars)
             })
-            .collect();
-        fn compute_variables<'a, 'tcx>(
-            variables: &TyMap<'a>,
-            entry: &MirContext<'a, 'tcx>,
-        ) -> Vec<GlobalVar<'a>> {
-            let mut cache: HashMap<rustc::ty::Ty, usize> = HashMap::new();
-            entry
-                .mir
-                .args_iter()
-                .map(|local| {
-                    let ty = entry.mir.local_decls[local].ty;
-                    let idx = cache.entry(ty).or_insert(0);
-                    let vars = variables.get(&ty).expect("global var");
-                    let var = *vars.get(*idx).expect("idx");
-                    *idx += 1;
-                    var
-                })
-                .collect_vec()
-        }
-
-        let variable_map = entry_mtxs
-            .iter()
-            .map(|mtx| (mtx.def_id, compute_variables(&global_vars, mtx)))
-            .collect();
-
+            .collect::<HashMap<Ty, Vec<GlobalVar>>>();
         Entry {
-            next_id,
+            next_id: 0,
             global_vars,
-            variable_map,
         }
+    }
+
+    fn compute_variables<'a>(&self, entry: MirContext<'a, 'tcx>) -> Vec<GlobalVar<'a>> {
+        let mut cache: HashMap<rustc::ty::Ty, usize> = HashMap::new();
+        entry
+            .mir
+            .args_iter()
+            .map(|local| {
+                let ty = entry.mir.local_decls[local].ty;
+                let idx = cache.entry(ty).or_insert(0);
+                let vars = self.global_vars.get(&ty).expect("global var");
+                let var = *vars.get(*idx).expect("idx");
+                *idx += 1;
+                var
+            })
+            .collect_vec()
     }
 }
 
@@ -212,11 +183,9 @@ pub struct RlslVisitor<'b, 'a: 'b, 'tcx: 'a> {
     current_table: Vec<&'a TypeckTables<'tcx>>,
     pub mcx: MirContext<'a, 'tcx>,
     pub scx: &'b mut SpirvCtx<'a, 'tcx>,
-    pub entry: Option<IntrinsicEntry>,
     pub constants: HashMap<mir::Constant<'tcx>, SpirvVar<'tcx>>,
     pub label_blocks: HashMap<mir::BasicBlock, SpirvLabel>,
     pub vars: HashMap<mir::Local, SpirvVar<'tcx>>,
-    pub entry_point: &'b Entry<'a>,
 }
 
 #[derive(Debug)]
@@ -228,6 +197,7 @@ impl IntrinsicType {
         attrs
             .iter()
             .filter_map(|attr| {
+                // Fix
                 extract_attr(attr, &["spirv", "ty"], |s| match s {
                     "Vec2" => Some(IntrinsicType::Vec(2)),
                     _ => None,
@@ -236,7 +206,7 @@ impl IntrinsicType {
             .nth(0)
     }
 }
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone)]
 pub enum IntrinsicEntry {
     Vertex,
     Fragment,
@@ -336,7 +306,7 @@ pub fn trans_spirv<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, items: &'a FxHashSet<M
                     .insert(instance.def_id(), SpirvFn(ctx.builder.id()));
             }
         });
-    let instances: Vec<_> = items
+    let instances: Vec<MirContext> = items
         .iter()
         .filter_map(|item| {
             if let &MonoItem::Fn(ref instance) = item {
@@ -352,10 +322,9 @@ pub fn trans_spirv<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, items: &'a FxHashSet<M
             None
         })
         .collect();
-    let entry_instances: Vec<_> = instances
-        .iter()
-        .filter(|&&mtx| {
-            let intrinsic = tcx.get_attrs(mtx.def_id)
+    let (entry_instances, fn_instances): (Vec<_>, Vec<_>) =
+        instances.iter().partition_map(|&mcx| {
+            if let Some(entry_point) = tcx.get_attrs(mcx.def_id)
                 .iter()
                 .filter_map(|attr| {
                     extract_attr(attr, &["spirv"], |s| match s {
@@ -364,30 +333,28 @@ pub fn trans_spirv<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, items: &'a FxHashSet<M
                         _ => None,
                     })
                 })
-                .nth(0);
-            intrinsic.is_some()
-        })
-        .collect();
-    let mut entry = Entry::new(&entry_instances, &mut ctx);
-
-    instances
-        .iter()
-        .filter(|mtx| mtx.def_id != entry_fn && tcx.lang_items().start_fn() != Some(mtx.def_id))
-        .for_each(|&mtx| {
-            let mut visitor = RlslVisitor::new(mtx, &entry, &mut ctx);
-            let intrinsic = tcx.get_attrs(mtx.def_id)
-                .iter()
-                .filter_map(|attr| {
-                    extract_attr(attr, &["spirv"], |s| match s {
-                        "vertex" => Some(IntrinsicEntry::Vertex),
-                        "fragment" => Some(IntrinsicEntry::Fragment),
-                        _ => None,
-                    })
-                })
-                .nth(0);
-            visitor.entry = intrinsic;
-            visitor.visit_mir(mtx.mir);
+                .nth(0)
+                .map(|entry_type| EntryPoint { mcx, entry_type })
+            {
+                Either::Left(entry_point)
+            } else {
+                Either::Right(mcx)
+            }
         });
+    let entry = Entry::input(&entry_instances, &mut ctx);
+
+    entry_instances
+        .iter()
+        .for_each(|e| {
+            RlslVisitor::trans_entry(&e, &entry, &mut ctx);
+        });
+    fn_instances.iter()
+        .filter(|mcx| {
+            mcx.def_id != entry_fn && tcx.lang_items().start_fn() != Some(mcx.def_id)
+        })
+        .for_each(|&mcx| {
+        RlslVisitor::trans_fn(mcx, &mut ctx);
+    });
     ctx.build_module();
 }
 #[derive(Debug)]
@@ -429,6 +396,124 @@ impl AccessChain {
 }
 
 impl<'b, 'a, 'tcx: 'a> RlslVisitor<'b, 'a, 'tcx> {
+    pub fn trans_fn(mcx: MirContext<'a, 'tcx>, scx: &mut SpirvCtx<'a, 'tcx>) {
+        use mir::visit::Visitor;
+        let ret_ty_spirv = scx.to_ty_fn(mcx.mir.return_ty());
+        let def_id = mcx.def_id;
+
+        // If a param is not a ptr, we need to turn it into a ptr
+        let args_ty: Vec<_> = mcx.mir
+            .args_iter()
+            .map(|l| mcx.mir.local_decls[l].ty)
+            .collect();
+        let fn_sig = scx.tcx.mk_fn_sig(
+            args_ty.into_iter(),
+            mcx.mir.return_ty(),
+            false,
+            hir::Unsafety::Normal,
+            syntax::abi::Abi::Rust,
+        );
+        let fn_ty = scx.tcx.mk_fn_ptr(Binder(fn_sig));
+        let fn_ty_spirv = scx.to_ty_fn(fn_ty);
+
+        let forward_fn = scx.forward_fns.get(&def_id).map(|f| f.0).expect("forward");
+        let spirv_function = scx.builder
+            .begin_function(
+                ret_ty_spirv.word,
+                Some(forward_fn),
+                spirv::FunctionControl::empty(),
+                fn_ty_spirv.word,
+            )
+            .expect("begin fn");
+
+        scx.name_from_def_id(def_id, spirv_function);
+        let params: Vec<_> = mcx.mir
+            .args_iter()
+            .map(|local_arg| {
+                let local_decl = &mcx.mir.local_decls[local_arg];
+                let spirv_arg_ty = scx.to_ty_fn(local_decl.ty);
+                let spirv_param = scx.builder
+                    .function_parameter(spirv_arg_ty.word)
+                    .expect("fn param");
+
+                if let Some(name) = local_decl.name {
+                    scx.name_from_str(name.as_str().as_ref(), spirv_param);
+                }
+                spirv_param
+            })
+            .collect();
+        scx.builder.begin_basic_block(None).expect("block");
+        let args_map: HashMap<_, _> = params
+            .into_iter()
+            .enumerate()
+            .map(|(index, param)| {
+                let local_arg = mir::Local::new(index + 1);
+                let local_decl = &mcx.mir.local_decls[local_arg];
+                let spirv_var_ty = scx.to_ty_as_ptr_fn(local_decl.ty);
+                let spirv_var = scx.builder.variable(
+                    spirv_var_ty.word,
+                    None,
+                    spirv::StorageClass::Function,
+                    None,
+                );
+                scx.builder
+                    .store(spirv_var, param, None, &[])
+                    .expect("store");
+                (local_arg, SpirvVar::new(spirv_var, false, local_decl.ty))
+            })
+            .collect();
+        RlslVisitor::new(mcx, args_map, scx).visit_mir(mcx.mir);
+    }
+    pub fn trans_entry(
+        entry_point: &EntryPoint<'a, 'tcx>,
+        entry: &Entry<'tcx>,
+        scx: &mut SpirvCtx<'a, 'tcx>,
+    ) {
+        use mir::visit::Visitor;
+        let def_id = entry_point.mcx.def_id;
+        let mir = entry_point.mcx.mir;
+        let void = scx.tcx.mk_nil();
+        let fn_sig = scx.tcx.mk_fn_sig(
+            [].into_iter(),
+            &void,
+            false,
+            hir::Unsafety::Normal,
+            syntax::abi::Abi::Rust,
+        );
+        let void_spirv = scx.to_ty_fn(void);
+        let fn_ty = scx.tcx.mk_fn_ptr(Binder(fn_sig));
+        let fn_ty_spirv = scx.to_ty_fn(fn_ty);
+        let forward_fn = scx.forward_fns.get(&def_id).map(|f| f.0).expect("forward");
+        let spirv_function = scx.builder
+            .begin_function(
+                void_spirv.word,
+                Some(forward_fn),
+                spirv::FunctionControl::empty(),
+                fn_ty_spirv.word,
+            )
+            .expect("begin fn");
+        scx.builder.begin_basic_block(None).expect("block");
+        let inputs = entry.compute_variables(entry_point.mcx);
+        // Build the variable map from the global input variables
+        let variable_map: HashMap<mir::Local, SpirvVar<'tcx>> = mir.args_iter()
+            .enumerate()
+            .map(|(idx, arg)| {
+                let ty = mir.local_decls[arg].ty;
+                (arg, SpirvVar::new(inputs[idx].var, false, ty))
+            })
+            .collect();
+        RlslVisitor::new(entry_point.mcx, variable_map, scx).visit_mir(entry_point.mcx.mir);
+        let inputs_raw = inputs.iter().map(|gv| gv.var).collect_vec();
+        let name = entry_point.mcx.tcx.item_name(def_id);
+        scx.builder.entry_point(
+            spirv::ExecutionModel::Vertex,
+            spirv_function,
+            name.as_ref(),
+            inputs_raw,
+        );
+        scx.builder
+            .execution_mode(spirv_function, spirv::ExecutionMode::OriginUpperLeft, &[]);
+    }
     pub fn to_ty(&mut self, ty: Ty<'tcx>, storage_class: spirv::StorageClass) -> SpirvTy {
         let ty = self.mcx.monomorphize(&ty);
         self.scx.to_ty(ty, storage_class)
@@ -459,19 +544,56 @@ impl<'b, 'a, 'tcx: 'a> RlslVisitor<'b, 'a, 'tcx> {
         self.current_table.last().expect("no table yet")
     }
     pub fn new(
-        mir_ctx: MirContext<'a, 'tcx>,
-        entry_point: &'b Entry<'a>,
-        stx: &'b mut SpirvCtx<'a, 'tcx>,
+        mcx: MirContext<'a, 'tcx>,
+        mut variable_map: HashMap<mir::Local, SpirvVar<'tcx>>,
+        scx: &'b mut SpirvCtx<'a, 'tcx>,
     ) -> Self {
-        let visitor = RlslVisitor {
-            scx: stx,
-            entry_point,
+        let label_blocks: HashMap<_, _> = mcx.mir
+            .basic_blocks()
+            .iter_enumerated()
+            .map(|(block, _)| (block, SpirvLabel(scx.builder.id())))
+            .collect();
+        let mut local_vars: HashMap<_, _> = mcx.mir
+            .vars_and_temps_iter()
+            .map(|local_var| {
+                let local_decl = &mcx.mir.local_decls[local_var];
+                let spirv_var_ty = scx.to_ty_as_ptr_fn(local_decl.ty);
+                let spirv_var = scx.builder.variable(
+                    spirv_var_ty.word,
+                    None,
+                    spirv::StorageClass::Function,
+                    None,
+                );
+                if let Some(name) = local_decl.name {
+                    scx.name_from_str(name.as_str().as_ref(), spirv_var);
+                }
+                (local_var, SpirvVar::new(spirv_var, false, local_decl.ty))
+            })
+            .collect();
+        {
+            use rustc_data_structures::indexed_vec::Idx;
+            let local = mir::Local::new(0);
+            let local_decl = &mcx.mir.local_decls[local];
+            let ty = local_decl.ty;
+            let spirv_var_ty = scx.to_ty_as_ptr_fn(ty);
+            let spirv_var =
+                scx.builder
+                    .variable(spirv_var_ty.word, None, spirv::StorageClass::Function, None);
+            scx.name_from_str("retvar", spirv_var);
+            local_vars.insert(local, SpirvVar::new(spirv_var, false, local_decl.ty));
+            let spirv_label = label_blocks
+                .get(&mir::BasicBlock::new(0))
+                .expect("No first label");
+            scx.builder.branch(spirv_label.0).expect("branch");
+        }
+        variable_map.extend(local_vars.into_iter());
+        let mut visitor = RlslVisitor {
+            scx,
             current_table: Vec::new(),
-            mcx: mir_ctx,
-            entry: None,
+            mcx,
             constants: HashMap::new(),
-            label_blocks: HashMap::new(),
-            vars: HashMap::new(),
+            label_blocks,
+            vars: variable_map,
         };
         visitor
     }
@@ -576,159 +698,11 @@ impl<'b, 'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'b, 'a, 
         //let attr = self.mtx.tcx.get_attrs(self.mtx.def_id);
 
         //println!("attr = {:?}", attr);
-        use rustc_data_structures::control_flow_graph::iterate::reverse_post_order;
-        for (block, _) in mir.basic_blocks().iter_enumerated() {
-            self.label_blocks
-                .insert(block, SpirvLabel(self.scx.builder.id()));
-        }
-        assert!(
-            !is_ptr(mir.return_ty()),
-            "Functions are not allowed to return a ptr"
-        );
-        let def_id = self.mcx.def_id;
-        let spirv_function = if !self.entry.is_some() {
-            let ret_ty_spirv = self.to_ty_fn(mir.return_ty());
-
-            // If a param is not a ptr, we need to turn it into a ptr
-            let args_ty: Vec<_> = mir.args_iter()
-                .map(|l| self.mcx.monomorphize(&mir.local_decls[l].ty))
-                .collect();
-            let fn_sig = self.scx.tcx.mk_fn_sig(
-                args_ty.into_iter(),
-                mir.return_ty(),
-                false,
-                hir::Unsafety::Normal,
-                syntax::abi::Abi::Rust,
-            );
-            let fn_ty = self.scx.tcx.mk_fn_ptr(Binder(fn_sig));
-            let fn_ty_spirv = self.to_ty_fn(fn_ty);
-
-            let forward_fn = self.scx
-                .forward_fns
-                .get(&def_id)
-                .map(|f| f.0)
-                .expect("forward");
-            let spirv_function = self.scx
-                .builder
-                .begin_function(
-                    ret_ty_spirv.word,
-                    Some(forward_fn),
-                    spirv::FunctionControl::empty(),
-                    fn_ty_spirv.word,
-                )
-                .expect("begin fn");
-            spirv_function
-        } else {
-            let void = self.scx.tcx.mk_nil();
-            let fn_sig = self.scx.tcx.mk_fn_sig(
-                [].into_iter(),
-                &void,
-                false,
-                hir::Unsafety::Normal,
-                syntax::abi::Abi::Rust,
-            );
-            let void_spirv = self.to_ty_fn(void);
-            let fn_ty = self.scx.tcx.mk_fn_ptr(Binder(fn_sig));
-            let fn_ty_spirv = self.to_ty_fn(fn_ty);
-            let forward_fn = self.scx
-                .forward_fns
-                .get(&def_id)
-                .map(|f| f.0)
-                .expect("forward");
-            let spirv_function = self.scx
-                .builder
-                .begin_function(
-                    void_spirv.word,
-                    Some(forward_fn),
-                    spirv::FunctionControl::empty(),
-                    fn_ty_spirv.word,
-                )
-                .expect("begin fn");
-            spirv_function
-        };
-        if self.entry.is_none() {
-            self.scx.name_from_def_id(def_id, spirv_function);
-            let params: Vec<_> = mir.args_iter()
-                .map(|local_arg| {
-                    let local_decl = &mir.local_decls[local_arg];
-                    let spirv_arg_ty = self.to_ty_fn(local_decl.ty);
-                    let spirv_param = self.scx
-                        .builder
-                        .function_parameter(spirv_arg_ty.word)
-                        .expect("fn param");
-
-                    if let Some(name) = local_decl.name {
-                        self.scx.name_from_str(name.as_str().as_ref(), spirv_param);
-                    }
-                    spirv_param
-                })
-                .collect();
-            self.scx.builder.begin_basic_block(None).expect("block");
-            for (index, param) in params.into_iter().enumerate() {
-                let local_arg = mir::Local::new(index + 1);
-                let local_decl = &mir.local_decls[local_arg];
-                let spirv_var_ty = self.to_ty_as_ptr_fn(local_decl.ty);
-                let spirv_var = self.scx.builder.variable(
-                    spirv_var_ty.word,
-                    None,
-                    spirv::StorageClass::Function,
-                    None,
-                );
-                self.scx
-                    .builder
-                    .store(spirv_var, param, None, &[])
-                    .expect("store");
-                self.vars
-                    .insert(local_arg, SpirvVar::new(spirv_var, false, local_decl.ty));
-            }
-        } else {
-            self.scx.builder.begin_basic_block(None).expect("block");
-            let inputs = self.entry_point.variable_map.get(&def_id).unwrap();
-            for (idx, arg) in mir.args_iter().enumerate() {
-                let ty = self.mcx.monomorphize(&mir.local_decls[arg].ty);
-                self.vars
-                    .insert(arg, SpirvVar::new(inputs[idx].var, false, ty));
-            }
-        }
-        for local_var in mir.vars_and_temps_iter() {
-            let local_decl = &mir.local_decls[local_var];
-            let spirv_var_ty = self.to_ty_as_ptr_fn(local_decl.ty);
-            let spirv_var = self.scx.builder.variable(
-                spirv_var_ty.word,
-                None,
-                spirv::StorageClass::Function,
-                None,
-            );
-            if let Some(name) = local_decl.name {
-                self.scx.name_from_str(name.as_str().as_ref(), spirv_var);
-            }
-            self.vars
-                .insert(local_var, SpirvVar::new(spirv_var, false, local_decl.ty));
-        }
-        {
-            use rustc_data_structures::indexed_vec::Idx;
-            let local = mir::Local::new(0);
-            let local_decl = &mir.local_decls[local];
-            let ty = self.mcx.monomorphize(&local_decl.ty);
-            let spirv_var_ty = self.to_ty_as_ptr_fn(ty);
-            let spirv_var = self.scx.builder.variable(
-                spirv_var_ty.word,
-                None,
-                spirv::StorageClass::Function,
-                None,
-            );
-            self.scx.name_from_str("retvar", spirv_var);
-            self.vars
-                .insert(local, SpirvVar::new(spirv_var, false, local_decl.ty));
-            let spirv_label = self.label_blocks
-                .get(&mir::BasicBlock::new(0))
-                .expect("No first label");
-            self.scx.builder.branch(spirv_label.0).expect("branch");
-        }
         //self.super_mir(mir);
-        let order = reverse_post_order(mir, mir::BasicBlock::new(0));
-        for bb in order {
-            self.visit_basic_block_data(bb, &mir.basic_blocks()[bb]);
+        use mir::traversal::reverse_postorder;
+        let order = reverse_postorder(mir);
+        for (bb, data) in order {
+            self.visit_basic_block_data(bb, &data);
         }
 
         for scope in &mir.visibility_scopes {
@@ -747,27 +721,6 @@ impl<'b, 'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'b, 'a, 
 
         self.visit_span(&mir.span);
         self.scx.builder.end_function().expect("end fn");
-        if self.entry.is_some() {
-            let inputs = self.entry_point
-                .variable_map
-                .get(&def_id)
-                .unwrap()
-                .iter()
-                .map(|gv| gv.var)
-                .collect_vec();
-            let name = self.mcx.tcx.item_name(self.mcx.def_id);
-            self.scx.builder.entry_point(
-                spirv::ExecutionModel::Vertex,
-                spirv_function,
-                name.as_ref(),
-                inputs,
-            );
-            self.scx.builder.execution_mode(
-                spirv_function,
-                spirv::ExecutionMode::OriginUpperLeft,
-                &[],
-            );
-        }
     }
     fn visit_assign(
         &mut self,
