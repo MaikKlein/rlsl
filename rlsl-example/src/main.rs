@@ -91,12 +91,8 @@ fn test_enum<T>(e: Option<T>) -> Option<T> {
 // }
 
 #[spirv(vertex)]
-fn vertex(pos: Vec2<f32>, uv: Vec2<f32>) -> f32 {
-    //let i = U1::to_u8();
-    let s = Some(1.0f32);
-    let s1 = test_enum(s);
-    let v = rlsl_math::Vec2 { x: 1.0f32, y: 2.0 };
-    pos;
+fn vertex(vertex: &mut Vertex, pos: Vec2<f32>) -> f32 {
+    vertex.position = Vec4::new(pos.x, pos.y, 0.0, 1.0);
     1.0
 }
 //pipeline!(

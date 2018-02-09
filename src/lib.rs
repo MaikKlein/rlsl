@@ -1,6 +1,7 @@
 #![feature(rustc_private)]
 #![feature(box_syntax)]
 #![feature(try_from)]
+#![feature(conservative_impl_trait)]
 
 extern crate arena;
 extern crate env_logger;
@@ -45,6 +46,14 @@ pub struct EntryPoint<'a, 'tcx: 'a> {
     pub entry_type: IntrinsicEntry,
     pub mcx: MirContext<'a, 'tcx>,
 }
+impl<'a, 'tcx> EntryPoint<'a, 'tcx> {
+    pub fn args(&self) -> Vec<mir::Local> {
+        match self.entry_type {
+            IntrinsicEntry::Vertex => self.mcx.mir.args_iter().skip(1).collect(),
+            IntrinsicEntry::Fragment => self.mcx.mir.args_iter().collect(),
+        }
+    }
+}
 
 #[derive(Copy, Clone, Debug)]
 pub struct GlobalVar<'a> {
@@ -65,6 +74,23 @@ fn count_types<'a>(tys: &[rustc::ty::Ty<'a>]) -> HashMap<rustc::ty::Ty<'a>, usiz
 
 impl<'a> GlobalVar<'a> {}
 
+fn is_per_vertex<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, ty: Ty<'tcx>) -> bool {
+    if let TypeVariants::TyRef(_, ty_and_mut) = ty.sty {
+        if let TypeVariants::TyAdt(adt, substs) = ty_and_mut.ty.sty {
+            return tcx.get_attrs(adt.did)
+                .iter()
+                .filter_map(|attr| {
+                    extract_attr(attr, &["spirv"], |s| match s {
+                        "PerVertex" => Some(true),
+                        _ => None,
+                    })
+                })
+                .nth(0)
+                .is_some();
+        }
+    }
+    false
+}
 pub type TyMap<'a> = HashMap<rustc::ty::Ty<'a>, Vec<GlobalVar<'a>>>;
 #[derive(Debug)]
 pub struct Entry<'tcx> {
@@ -73,28 +99,22 @@ pub struct Entry<'tcx> {
 }
 
 impl<'tcx> Entry<'tcx> {
-    pub fn input<'a>(
-        entry_points: &[EntryPoint<'a, 'tcx>],
-        stx: &mut SpirvCtx<'a, 'tcx>,
-    ) -> Self {
+    pub fn input<'a>(entry_points: &[EntryPoint<'a, 'tcx>], stx: &mut SpirvCtx<'a, 'tcx>) -> Self {
         let tys = entry_points
             .iter()
             .map(|entry| {
                 entry
-                    .mcx
-                    .mir
-                    .args_iter()
+                    .args()
+                    .into_iter()
                     .map(move |local| entry.mcx.mir.local_decls[local].ty)
+                    .filter(|ty| !is_per_vertex(stx.tcx, ty))
                     .collect_vec()
             })
             .collect_vec();
         Self::create(&tys, stx, spirv::StorageClass::Input)
     }
 
-    pub fn output<'a>(
-        entry_mtxs: &[&MirContext<'a, 'tcx>],
-        stx: &mut SpirvCtx<'a, 'tcx>,
-    ) -> Self {
+    pub fn output<'a>(entry_mtxs: &[&MirContext<'a, 'tcx>], stx: &mut SpirvCtx<'a, 'tcx>) -> Self {
         let tys = entry_mtxs
             .iter()
             .map(|mtx| vec![mtx.mir.return_ty()])
@@ -144,13 +164,13 @@ impl<'tcx> Entry<'tcx> {
         }
     }
 
-    fn compute_variables<'a>(&self, entry: MirContext<'a, 'tcx>) -> Vec<GlobalVar<'a>> {
+    fn compute_variables<'a>(&self, entry: &EntryPoint<'a, 'tcx>) -> Vec<GlobalVar<'a>> {
         let mut cache: HashMap<rustc::ty::Ty, usize> = HashMap::new();
         entry
-            .mir
-            .args_iter()
+            .args()
+            .into_iter()
             .map(|local| {
-                let ty = entry.mir.local_decls[local].ty;
+                let ty = entry.mcx.mir.local_decls[local].ty;
                 let idx = cache.entry(ty).or_insert(0);
                 let vars = self.global_vars.get(&ty).expect("global var");
                 let var = *vars.get(*idx).expect("idx");
@@ -206,7 +226,7 @@ impl IntrinsicType {
             .nth(0)
     }
 }
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub enum IntrinsicEntry {
     Vertex,
     Fragment,
@@ -343,18 +363,15 @@ pub fn trans_spirv<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, items: &'a FxHashSet<M
         });
     let entry = Entry::input(&entry_instances, &mut ctx);
 
-    entry_instances
-        .iter()
-        .for_each(|e| {
-            RlslVisitor::trans_entry(&e, &entry, &mut ctx);
-        });
-    fn_instances.iter()
-        .filter(|mcx| {
-            mcx.def_id != entry_fn && tcx.lang_items().start_fn() != Some(mcx.def_id)
-        })
-        .for_each(|&mcx| {
-        RlslVisitor::trans_fn(mcx, &mut ctx);
+    entry_instances.iter().for_each(|e| {
+        RlslVisitor::trans_entry(&e, &entry, &mut ctx);
     });
+    fn_instances
+        .iter()
+        .filter(|mcx| mcx.def_id != entry_fn && tcx.lang_items().start_fn() != Some(mcx.def_id))
+        .for_each(|&mcx| {
+            RlslVisitor::trans_fn(mcx, &mut ctx);
+        });
     ctx.build_module();
 }
 #[derive(Debug)]
@@ -365,21 +382,26 @@ pub struct AccessChain {
 
 impl AccessChain {
     pub fn compute<'r, 'tcx>(lvalue: &'r mir::Place<'tcx>) -> Self {
+        println!("{:#?}", lvalue);
         fn access_chain_indices<'r, 'tcx>(
             lvalue: &'r mir::Place<'tcx>,
             mut indices: Vec<usize>,
         ) -> (&'r mir::Place<'tcx>, Vec<usize>) {
             if let &mir::Place::Projection(ref proj) = lvalue {
-                if let mir::ProjectionElem::Field(field, _) = proj.elem {
-                    indices.push(field.index());
-                    return access_chain_indices(&proj.base, indices);
+                match proj.elem {
+                    mir::ProjectionElem::Field(field, _) => {
+                        indices.push(field.index());
+                        access_chain_indices(&proj.base, indices)
+                    }
+                    mir::ProjectionElem::Downcast(_, id) => {
+                        indices.push(id);
+                        access_chain_indices(&proj.base, indices)
+                    }
+                    _ => access_chain_indices(&proj.base, indices),
                 }
-                if let mir::ProjectionElem::Downcast(_, id) = proj.elem {
-                    indices.push(id);
-                    return access_chain_indices(&proj.base, indices);
-                }
+            } else {
+                (lvalue, indices)
             }
-            (lvalue, indices)
         }
         let indices = Vec::new();
         let (base, mut indices) = access_chain_indices(lvalue, indices);
@@ -496,15 +518,21 @@ impl<'b, 'a, 'tcx: 'a> RlslVisitor<'b, 'a, 'tcx> {
             )
             .expect("begin fn");
         scx.builder.begin_basic_block(None).expect("block");
-        let inputs = entry.compute_variables(entry_point.mcx);
+        let inputs = entry.compute_variables(&entry_point);
         // Build the variable map from the global input variables
-        let variable_map: HashMap<mir::Local, SpirvVar<'tcx>> = mir.args_iter()
+        let mut variable_map: HashMap<mir::Local, SpirvVar<'tcx>> = entry_point
+            .args()
+            .into_iter()
             .enumerate()
             .map(|(idx, arg)| {
                 let ty = mir.local_decls[arg].ty;
                 (arg, SpirvVar::new(inputs[idx].var, false, ty))
             })
             .collect();
+        let first_local = mir::Local::new(1);
+        let per_vertex = scx.get_per_vertex(mir.local_decls[first_local].ty);
+        variable_map.insert(first_local, per_vertex);
+
         RlslVisitor::new(entry_point.mcx, variable_map, scx).visit_mir(entry_point.mcx.mir);
         let inputs_raw = inputs.iter().map(|gv| gv.var).collect_vec();
         let name = entry_point.mcx.tcx.item_name(def_id);

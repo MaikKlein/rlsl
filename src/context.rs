@@ -17,6 +17,7 @@ use rustc::ty::Ty;
 use self::hir::def_id::DefId;
 
 pub struct SpirvCtx<'a, 'tcx: 'a> {
+    per_vertex: Option<SpirvVar<'tcx>>,
     pub tcx: ty::TyCtxt<'a, 'tcx, 'tcx>,
     pub builder: Builder,
     pub ty_cache: HashMap<ty::Ty<'tcx>, SpirvTy>,
@@ -342,6 +343,37 @@ impl<'a, 'tcx> SpirvCtx<'a, 'tcx> {
         rspirv::binary::parse_bytes(&bytes, &mut loader);
         f.write_all(&bytes).expect("write bytes");
     }
+    // TODO: Hack to get the correct type for PerVertex
+    pub fn get_per_vertex(&mut self, ty: Ty<'tcx>) -> SpirvVar<'tcx> {
+        use rustc::ty::TypeVariants;
+        assert!(::is_per_vertex(self.tcx, ty), "Not PerVertex");
+        self.per_vertex.unwrap_or_else(|| {
+            let struct_ty = match ty.sty {
+                TypeVariants::TyRef(_, ty_and_mut) => ty_and_mut.ty,
+                _ => unreachable!(),
+            };
+            let spirv_ty = self.to_ty(struct_ty, spirv::StorageClass::Output);
+            self.builder.member_decorate(
+                spirv_ty.word,
+                0,
+                spirv::Decoration::BuiltIn,
+                &[rspirv::mr::Operand::BuiltIn(spirv::BuiltIn::Position)],
+            );
+            self.builder.member_decorate(
+                spirv_ty.word,
+                1,
+                spirv::Decoration::BuiltIn,
+                &[rspirv::mr::Operand::BuiltIn(spirv::BuiltIn::PointSize)],
+            );
+            let spirv_ty_ptr = self.to_ty_as_ptr(struct_ty, spirv::StorageClass::Output);
+            let var =
+                self.builder
+                    .variable(spirv_ty_ptr.word, None, spirv::StorageClass::Output, None);
+            let var = SpirvVar::new(var, false, struct_ty);
+            self.per_vertex = Some(var);
+            var
+        })
+    }
     pub fn new(tcx: ty::TyCtxt<'a, 'tcx, 'tcx>) -> SpirvCtx<'a, 'tcx> {
         let mut builder = Builder::new();
         builder.capability(spirv::Capability::Shader);
@@ -350,6 +382,7 @@ impl<'a, 'tcx> SpirvCtx<'a, 'tcx> {
         SpirvCtx {
             debug_symbols: true,
             builder,
+            per_vertex: None,
             ty_cache: HashMap::new(),
             const_cache: HashMap::new(),
             forward_fns: HashMap::new(),
