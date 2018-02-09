@@ -503,7 +503,15 @@ impl<'b, 'a, 'tcx: 'a> RlslVisitor<'b, 'a, 'tcx> {
                 scx.builder
                     .store(spirv_var, param, None, &[])
                     .expect("store");
-                (local_arg, SpirvVar::new(spirv_var, false, local_decl.ty))
+                (
+                    local_arg,
+                    SpirvVar::new(
+                        spirv_var,
+                        false,
+                        local_decl.ty,
+                        spirv::StorageClass::Function,
+                    ),
+                )
             })
             .collect();
         {
@@ -516,7 +524,15 @@ impl<'b, 'a, 'tcx: 'a> RlslVisitor<'b, 'a, 'tcx> {
                 scx.builder
                     .variable(spirv_var_ty.word, None, spirv::StorageClass::Function, None);
             scx.name_from_str("retvar", spirv_var);
-            args_map.insert(local, SpirvVar::new(spirv_var, false, local_decl.ty));
+            args_map.insert(
+                local,
+                SpirvVar::new(
+                    spirv_var,
+                    false,
+                    local_decl.ty,
+                    spirv::StorageClass::Function,
+                ),
+            );
         }
         RlslVisitor::new(InstanceType::Fn, mcx, args_map, scx).visit_mir(mcx.mir);
     }
@@ -566,7 +582,8 @@ impl<'b, 'a, 'tcx: 'a> RlslVisitor<'b, 'a, 'tcx> {
             .enumerate()
             .map(|(idx, arg)| {
                 let ty = mir.local_decls[arg].ty;
-                (arg, SpirvVar::new(inputs[idx].var, false, ty))
+                let var = inputs[idx];
+                (arg, SpirvVar::new(var.var, false, ty, var.storage_class))
             })
             .collect();
         // Only add the per vertex variable in the vertex shader
@@ -575,10 +592,16 @@ impl<'b, 'a, 'tcx: 'a> RlslVisitor<'b, 'a, 'tcx> {
             let per_vertex = scx.get_per_vertex(mir.local_decls[first_local].ty);
             variable_map.insert(first_local, per_vertex);
         }
+        let output_var = outputs[0];
         // Insert the return variable
         variable_map.insert(
             mir::Local::new(0),
-            SpirvVar::new(outputs[0].var, false, mir.return_ty()),
+            SpirvVar::new(
+                output_var.var,
+                false,
+                mir.return_ty(),
+                output_var.storage_class,
+            ),
         );
 
         RlslVisitor::new(
@@ -590,8 +613,12 @@ impl<'b, 'a, 'tcx: 'a> RlslVisitor<'b, 'a, 'tcx> {
         let mut inputs_raw = inputs.iter().map(|gv| gv.var).collect_vec();
         inputs_raw.extend(outputs.iter().map(|gv| gv.var));
         let name = entry_point.mcx.tcx.item_name(def_id);
+        let model = match entry_point.entry_type {
+            IntrinsicEntry::Vertex => spirv::ExecutionModel::Vertex,
+            IntrinsicEntry::Fragment => spirv::ExecutionModel::Fragment,
+        };
         scx.builder.entry_point(
-            spirv::ExecutionModel::Vertex,
+            model,
             spirv_function,
             name.as_ref(),
             inputs_raw,
@@ -654,7 +681,15 @@ impl<'b, 'a, 'tcx: 'a> RlslVisitor<'b, 'a, 'tcx> {
                 if let Some(name) = local_decl.name {
                     scx.name_from_str(name.as_str().as_ref(), spirv_var);
                 }
-                (local_var, SpirvVar::new(spirv_var, false, local_decl.ty))
+                (
+                    local_var,
+                    SpirvVar::new(
+                        spirv_var,
+                        false,
+                        local_decl.ty,
+                        spirv::StorageClass::Function,
+                    ),
+                )
             })
             .collect();
         {
@@ -928,6 +963,9 @@ impl<'b, 'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'b, 'a, 
             spirv_var.word
         } else {
             let spirv_ty_ptr = self.to_ty_as_ptr_fn(ty);
+            let var = *self.vars.get(&access_chain.base).expect("access chain local");
+            // TODO: Better way to get the correct storage class
+            let spirv_ty_ptr =self.to_ty_as_ptr(ty, var.storage_class);
             let indices: Vec<_> = access_chain
                 .indices
                 .iter()

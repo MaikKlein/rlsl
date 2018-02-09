@@ -59,11 +59,22 @@ pub struct SpirvVar<'tcx> {
     pub word: spirv::Word,
     pub is_param: bool,
     pub ty: ty::Ty<'tcx>,
+    pub storage_class: spirv::StorageClass,
 }
 
 impl<'tcx> SpirvVar<'tcx> {
-    pub fn new(word: spirv::Word, is_param: bool, ty: ty::Ty<'tcx>) -> Self {
-        SpirvVar { word, is_param, ty }
+    pub fn new(
+        word: spirv::Word,
+        is_param: bool,
+        ty: ty::Ty<'tcx>,
+        storage_class: spirv::StorageClass,
+    ) -> Self {
+        SpirvVar {
+            word,
+            is_param,
+            ty,
+            storage_class,
+        }
     }
     pub fn is_var(&self) -> bool {
         !self.is_param

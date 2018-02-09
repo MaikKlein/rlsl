@@ -151,11 +151,11 @@ impl<'a, 'tcx> SpirvCtx<'a, 'tcx> {
                 };
                 self.tcx.mk_ptr(t)
             }
-            _ => ty
+            _ => ty,
         };
         let is_ptr = match ty.sty {
             TypeVariants::TyRawPtr(_) => true,
-            _ => false
+            _ => false,
         };
         if let Some(ty) = self.ty_cache
             .get(ty)
@@ -299,10 +299,9 @@ impl<'a, 'tcx> SpirvCtx<'a, 'tcx> {
             }
             ref r => unimplemented!("{:?}", r),
         };
-        if is_ptr{
+        if is_ptr {
             self.ty_ptr_cache.insert((ty, storage_class), spirv_type);
-        }
-        else{
+        } else {
             self.ty_cache.insert(ty, spirv_type);
         }
         spirv_type
@@ -382,7 +381,7 @@ impl<'a, 'tcx> SpirvCtx<'a, 'tcx> {
             let var =
                 self.builder
                     .variable(spirv_ty_ptr.word, None, spirv::StorageClass::Output, None);
-            let var = SpirvVar::new(var, false, struct_ty);
+            let var = SpirvVar::new(var, false, struct_ty, spirv::StorageClass::Output);
             self.per_vertex = Some(var);
             var
         })
