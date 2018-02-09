@@ -21,6 +21,7 @@ pub struct SpirvCtx<'a, 'tcx: 'a> {
     pub tcx: ty::TyCtxt<'a, 'tcx, 'tcx>,
     pub builder: Builder,
     pub ty_cache: HashMap<ty::Ty<'tcx>, SpirvTy>,
+    pub ty_ptr_cache: HashMap<(ty::Ty<'tcx>, spirv::StorageClass), SpirvTy>,
     pub const_cache: HashMap<SpirvConstVal, SpirvValue>,
     pub forward_fns: HashMap<hir::def_id::DefId, SpirvFn>,
     pub intrinsic_fns: HashMap<hir::def_id::DefId, Intrinsic>,
@@ -150,9 +151,16 @@ impl<'a, 'tcx> SpirvCtx<'a, 'tcx> {
                 };
                 self.tcx.mk_ptr(t)
             }
-            _ => ty,
+            _ => ty
         };
-        if let Some(ty) = self.ty_cache.get(ty) {
+        let is_ptr = match ty.sty {
+            TypeVariants::TyRawPtr(_) => true,
+            _ => false
+        };
+        if let Some(ty) = self.ty_cache
+            .get(ty)
+            .or_else(|| self.ty_ptr_cache.get(&(ty, storage_class)))
+        {
             return *ty;
         }
         let spirv_type: SpirvTy = match ty.sty {
@@ -291,7 +299,12 @@ impl<'a, 'tcx> SpirvCtx<'a, 'tcx> {
             }
             ref r => unimplemented!("{:?}", r),
         };
-        self.ty_cache.insert(ty, spirv_type);
+        if is_ptr{
+            self.ty_ptr_cache.insert((ty, storage_class), spirv_type);
+        }
+        else{
+            self.ty_cache.insert(ty, spirv_type);
+        }
         spirv_type
     }
 
@@ -384,6 +397,7 @@ impl<'a, 'tcx> SpirvCtx<'a, 'tcx> {
             builder,
             per_vertex: None,
             ty_cache: HashMap::new(),
+            ty_ptr_cache: HashMap::new(),
             const_cache: HashMap::new(),
             forward_fns: HashMap::new(),
             intrinsic_fns: HashMap::new(),

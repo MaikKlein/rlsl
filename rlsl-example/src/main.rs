@@ -85,15 +85,15 @@ fn test_enum<T>(e: Option<T>) -> Option<T> {
     e
 }
 
-// #[spirv(fragment)]
-// fn frag(uv: Vec2<f32>) -> Vec4<f32> {
-//     Vec4::new(uv.x, uv.y, 0.0, 1.0)
-// }
+#[spirv(fragment)]
+fn frag(color: Vec4<f32>) -> Vec4<f32> {
+    color
+}
 
 #[spirv(vertex)]
-fn vertex(vertex: &mut Vertex, pos: Vec2<f32>, uv: Vec2<f32>) -> Vec2<f32> {
-    vertex.position = Vec4::new(pos.x, pos.y, 0.0, 1.0);
-    uv
+fn vertex(vertex: &mut Vertex, pos: Vec4<f32>, color: Vec4<f32>) -> Vec4<f32> {
+    vertex.position = pos;
+    color
 }
 //pipeline!(
 //Test1,

@@ -27,6 +27,7 @@ pub struct Vec4<T> {
 }
 
 impl<T> Vec4<T> {
+    #[inline]
     pub fn new(x: T, y: T, z: T, w: T) -> Vec4<T> {
         Vec4 { x, y, z, w }
     }
