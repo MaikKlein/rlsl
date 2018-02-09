@@ -2,7 +2,7 @@
 #![feature(platform_intrinsics)]
 #![feature(concat_idents)]
 extern crate rlsl_math;
-use rlsl_math::{Vec4, Vec2, Vertex};
+use rlsl_math::{Vec2, Vec4, Vertex};
 
 //use std::ops::Add;
 ////#[spirv(Vec2)]
@@ -86,14 +86,14 @@ fn test_enum<T>(e: Option<T>) -> Option<T> {
 }
 
 // #[spirv(fragment)]
-// fn frag(f: f32) -> Vec4<f32> {
-//     Vec4::new(1.0, 0.0, 0.0, 1.0)
+// fn frag(uv: Vec2<f32>) -> Vec4<f32> {
+//     Vec4::new(uv.x, uv.y, 0.0, 1.0)
 // }
 
 #[spirv(vertex)]
-fn vertex(vertex: &mut Vertex, pos: Vec2<f32>) -> f32 {
+fn vertex(vertex: &mut Vertex, pos: Vec2<f32>, uv: Vec2<f32>) -> Vec2<f32> {
     vertex.position = Vec4::new(pos.x, pos.y, 0.0, 1.0);
-    1.0
+    uv
 }
 //pipeline!(
 //Test1,

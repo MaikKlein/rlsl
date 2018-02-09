@@ -199,6 +199,11 @@ pub enum Intrinsic {
     Abort,
 }
 
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum InstanceType {
+    Entry(IntrinsicEntry),
+    Fn,
+}
 pub struct RlslVisitor<'b, 'a: 'b, 'tcx: 'a> {
     current_table: Vec<&'a TypeckTables<'tcx>>,
     pub mcx: MirContext<'a, 'tcx>,
@@ -206,6 +211,7 @@ pub struct RlslVisitor<'b, 'a: 'b, 'tcx: 'a> {
     pub constants: HashMap<mir::Constant<'tcx>, SpirvVar<'tcx>>,
     pub label_blocks: HashMap<mir::BasicBlock, SpirvLabel>,
     pub vars: HashMap<mir::Local, SpirvVar<'tcx>>,
+    pub instance_ty: InstanceType,
 }
 
 #[derive(Debug)]
@@ -218,8 +224,10 @@ impl IntrinsicType {
             .iter()
             .filter_map(|attr| {
                 // Fix
-                extract_attr(attr, &["spirv", "ty"], |s| match s {
+                extract_attr(attr, &["spirv"], |s| match s {
                     "Vec2" => Some(IntrinsicType::Vec(2)),
+                    "Vec3" => Some(IntrinsicType::Vec(3)),
+                    "Vec4" => Some(IntrinsicType::Vec(4)),
                     _ => None,
                 })
             })
@@ -374,6 +382,7 @@ pub fn trans_spirv<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, items: &'a FxHashSet<M
         });
     ctx.build_module();
 }
+
 #[derive(Debug)]
 pub struct AccessChain {
     pub base: mir::Local,
@@ -382,7 +391,6 @@ pub struct AccessChain {
 
 impl AccessChain {
     pub fn compute<'r, 'tcx>(lvalue: &'r mir::Place<'tcx>) -> Self {
-        println!("{:#?}", lvalue);
         fn access_chain_indices<'r, 'tcx>(
             lvalue: &'r mir::Place<'tcx>,
             mut indices: Vec<usize>,
@@ -397,6 +405,7 @@ impl AccessChain {
                         indices.push(id);
                         access_chain_indices(&proj.base, indices)
                     }
+                    // TODO: Is this actually correct?
                     _ => access_chain_indices(&proj.base, indices),
                 }
             } else {
@@ -487,7 +496,7 @@ impl<'b, 'a, 'tcx: 'a> RlslVisitor<'b, 'a, 'tcx> {
                 (local_arg, SpirvVar::new(spirv_var, false, local_decl.ty))
             })
             .collect();
-        RlslVisitor::new(mcx, args_map, scx).visit_mir(mcx.mir);
+        RlslVisitor::new(InstanceType::Fn, mcx, args_map, scx).visit_mir(mcx.mir);
     }
     pub fn trans_entry(
         entry_point: &EntryPoint<'a, 'tcx>,
@@ -529,11 +538,19 @@ impl<'b, 'a, 'tcx: 'a> RlslVisitor<'b, 'a, 'tcx> {
                 (arg, SpirvVar::new(inputs[idx].var, false, ty))
             })
             .collect();
-        let first_local = mir::Local::new(1);
-        let per_vertex = scx.get_per_vertex(mir.local_decls[first_local].ty);
-        variable_map.insert(first_local, per_vertex);
+        // Only add the per vertex variable in the vertex shader
+        if entry_point.entry_type == IntrinsicEntry::Vertex {
+            let first_local = mir::Local::new(1);
+            let per_vertex = scx.get_per_vertex(mir.local_decls[first_local].ty);
+            variable_map.insert(first_local, per_vertex);
+        }
 
-        RlslVisitor::new(entry_point.mcx, variable_map, scx).visit_mir(entry_point.mcx.mir);
+        RlslVisitor::new(
+            InstanceType::Entry(entry_point.entry_type),
+            entry_point.mcx,
+            variable_map,
+            scx,
+        ).visit_mir(entry_point.mcx.mir);
         let inputs_raw = inputs.iter().map(|gv| gv.var).collect_vec();
         let name = entry_point.mcx.tcx.item_name(def_id);
         scx.builder.entry_point(
@@ -575,6 +592,7 @@ impl<'b, 'a, 'tcx: 'a> RlslVisitor<'b, 'a, 'tcx> {
         self.current_table.last().expect("no table yet")
     }
     pub fn new(
+        instance_ty: InstanceType,
         mcx: MirContext<'a, 'tcx>,
         mut variable_map: HashMap<mir::Local, SpirvVar<'tcx>>,
         scx: &'b mut SpirvCtx<'a, 'tcx>,
@@ -620,6 +638,7 @@ impl<'b, 'a, 'tcx: 'a> RlslVisitor<'b, 'a, 'tcx> {
         }
         variable_map.extend(local_vars.into_iter());
         let mut visitor = RlslVisitor {
+            instance_ty,
             scx,
             current_table: Vec::new(),
             mcx,
@@ -948,22 +967,27 @@ impl<'b, 'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'b, 'a, 
         let mir = self.mcx.mir;
         match kind {
             &mir::TerminatorKind::Return => {
-                match mir.return_ty().sty {
-                    TypeVariants::TyTuple(ref slice, _) if slice.len() == 0 => {
-                        self.scx.builder.ret().expect("ret");
-                    }
-                    _ => {
-                        use rustc_data_structures::indexed_vec::Idx;
-                        let ty = self.mcx.monomorphize(&mir.return_ty());
-                        let spirv_ty = { self.to_ty_fn(ty) };
-                        let var = self.vars.get(&mir::Local::new(0)).unwrap();
-                        let load = self.scx
-                            .builder
-                            .load(spirv_ty.word, None, var.word, None, &[])
-                            .expect("load");
-                        self.scx.builder.ret_value(load).expect("ret value");
-                    }
-                };
+                // If we are inside an entry, we just return void
+                if self.instance_ty != InstanceType::Fn {
+                    return self.scx.builder.ret().expect("ret");
+                } else {
+                    match mir.return_ty().sty {
+                        TypeVariants::TyTuple(ref slice, _) if slice.len() == 0 => {
+                            self.scx.builder.ret().expect("ret");
+                        }
+                        _ => {
+                            use rustc_data_structures::indexed_vec::Idx;
+                            let ty = self.mcx.monomorphize(&mir.return_ty());
+                            let spirv_ty = { self.to_ty_fn(ty) };
+                            let var = self.vars.get(&mir::Local::new(0)).unwrap();
+                            let load = self.scx
+                                .builder
+                                .load(spirv_ty.word, None, var.word, None, &[])
+                                .expect("load");
+                            self.scx.builder.ret_value(load).expect("ret value");
+                        }
+                    };
+                }
             }
             &mir::TerminatorKind::Goto { target } => {
                 let label = self.label_blocks.get(&target).expect("no goto label");
