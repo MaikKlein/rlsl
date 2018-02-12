@@ -14,6 +14,7 @@ use rustc::ty::{subst, TyCtxt};
 use {AccessChain, Enum, SpirvOperand, SpirvVar};
 use {Intrinsic, IntrinsicType, SpirvConstVal, SpirvFn, SpirvFunctionCall, SpirvTy, SpirvValue};
 use rustc::ty::Ty;
+use rustc::ty::subst::Substs;
 use self::hir::def_id::DefId;
 
 pub struct SpirvCtx<'a, 'tcx: 'a> {
@@ -23,7 +24,7 @@ pub struct SpirvCtx<'a, 'tcx: 'a> {
     pub ty_cache: HashMap<ty::Ty<'tcx>, SpirvTy>,
     pub ty_ptr_cache: HashMap<(ty::Ty<'tcx>, spirv::StorageClass), SpirvTy>,
     pub const_cache: HashMap<SpirvConstVal, SpirvValue>,
-    pub forward_fns: HashMap<hir::def_id::DefId, SpirvFn>,
+    pub forward_fns: HashMap<(hir::def_id::DefId, &'a Substs<'tcx>), SpirvFn>,
     pub intrinsic_fns: HashMap<hir::def_id::DefId, Intrinsic>,
     pub debug_symbols: bool,
     pub glsl_ext_id: spirv::Word,
@@ -54,7 +55,7 @@ impl<'a, 'tcx> SpirvCtx<'a, 'tcx> {
                 if access_chain.indices.is_empty() {
                     SpirvOperand::Variable(spirv_var)
                 } else {
-                    let spirv_ty_ptr = self.to_ty_as_ptr_fn(ty);
+                    let spirv_ty_ptr = self.to_ty_as_ptr(ty, spirv_var.storage_class);
                     let indices: Vec<_> = access_chain
                         .indices
                         .iter()
@@ -90,9 +91,13 @@ impl<'a, 'tcx> SpirvCtx<'a, 'tcx> {
         }
     }
     /// Tries to get a function id, if it fails it looks for an intrinsic id
-    pub fn get_function_call(&self, def_id: DefId) -> Option<SpirvFunctionCall> {
+    pub fn get_function_call(
+        &self,
+        def_id: DefId,
+        substs: &'a Substs<'tcx>,
+    ) -> Option<SpirvFunctionCall> {
         self.forward_fns
-            .get(&def_id)
+            .get(&(def_id, substs))
             .map(|&spirv_fn| SpirvFunctionCall::Function(spirv_fn))
             .or(self.intrinsic_fns
                 .get(&def_id)
@@ -165,7 +170,10 @@ impl<'a, 'tcx> SpirvCtx<'a, 'tcx> {
         }
         let spirv_type: SpirvTy = match ty.sty {
             // TODO: Proper TyNever
-            TypeVariants::TyNever => 0.into(),
+            TypeVariants::TyNever => {
+                let ty = self.tcx.mk_nil();
+                self.to_ty(ty, storage_class)
+            }
             TypeVariants::TyBool => self.builder.type_bool().into(),
             TypeVariants::TyInt(int_ty) => self.builder
                 .type_int(int_ty.bit_width().unwrap_or(32) as u32, 1)
@@ -213,47 +221,57 @@ impl<'a, 'tcx> SpirvCtx<'a, 'tcx> {
                 let mono_substs = substs;
                 match adt.adt_kind() {
                     ty::AdtKind::Enum => {
-                        let e = Enum::from_ty(self.tcx, ty).expect("No enum layout");
-                        let discr_ty_spirv = self.to_ty(e.discr_ty, storage_class);
-                        let mut field_ty_spirv: Vec<_> = adt.variants
-                            .iter()
-                            .map(|variant| {
-                                let variant_field_ty: Vec<_> = variant
-                                    .fields
-                                    .iter()
-                                    .map(|field| {
-                                        let ty = field.ty(self.tcx, mono_substs);
-                                        self.to_ty(ty, storage_class).word
-                                    })
-                                    .collect();
-                                let spirv_struct = self.builder.type_struct(&variant_field_ty);
-                                if self.debug_symbols {
-                                    for (index, field) in variant.fields.iter().enumerate() {
-                                        self.builder.member_name(
-                                            spirv_struct,
-                                            index as u32,
-                                            field.name.as_str().to_string(),
-                                        );
+                        if let Some(e) = Enum::from_ty(self.tcx, ty) {
+                            let discr_ty_spirv = self.to_ty(e.discr_ty, storage_class);
+                            let mut field_ty_spirv: Vec<_> = adt.variants
+                                .iter()
+                                .map(|variant| {
+                                    let variant_field_ty: Vec<
+                                        _,
+                                    > = variant
+                                        .fields
+                                        .iter()
+                                        .map(|field| {
+                                            let ty = field.ty(self.tcx, mono_substs);
+                                            self.to_ty(ty, storage_class).word
+                                        })
+                                        .collect();
+                                    let spirv_struct = self.builder.type_struct(&variant_field_ty);
+                                    if self.debug_symbols {
+                                        for (index, field) in variant.fields.iter().enumerate() {
+                                            self.builder.member_name(
+                                                spirv_struct,
+                                                index as u32,
+                                                field.name.as_str().to_string(),
+                                            );
+                                        }
+                                        self.name_from_def_id(variant.did, spirv_struct);
                                     }
-                                    self.name_from_def_id(variant.did, spirv_struct);
-                                }
-                                spirv_struct
-                            })
-                            .collect();
-                        field_ty_spirv.push(discr_ty_spirv.word);
+                                    spirv_struct
+                                })
+                                .collect();
+                            field_ty_spirv.push(discr_ty_spirv.word);
 
-                        let spirv_struct = self.builder.type_struct(&field_ty_spirv);
-                        if self.debug_symbols {
-                            for (index, field) in adt.all_fields().enumerate() {
-                                self.builder.member_name(
-                                    spirv_struct,
-                                    index as u32,
-                                    field.name.as_str().to_string(),
-                                );
+                            let spirv_struct = self.builder.type_struct(&field_ty_spirv);
+                            if self.debug_symbols {
+                                for (index, field) in adt.all_fields().enumerate() {
+                                    self.builder.member_name(
+                                        spirv_struct,
+                                        index as u32,
+                                        field.name.as_str().to_string(),
+                                    );
+                                }
+                                self.name_from_def_id(adt.did, spirv_struct);
                             }
-                            self.name_from_def_id(adt.did, spirv_struct);
+                            spirv_struct.into()
+                        } else {
+                            // If we have an enum, but without an layout it should be enum Foo {}
+                            // TODO: Empty struct correct?
+                            //self.builder.type_struct(&[]).into()
+                            let ty = self.tcx.mk_ty(TypeVariants::TyNever);
+                            self.to_ty(ty, storage_class)
+                            //self.builder.type_opaque(self.tcx.item_name(adt.did).as_ref()).into()
                         }
-                        spirv_struct.into()
                     }
                     ty::AdtKind::Struct => {
                         let attrs = self.tcx.get_attrs(adt.did);

@@ -36,6 +36,7 @@ pub mod ty;
 pub mod collector;
 use self::context::{MirContext, SpirvCtx};
 use self::ty::*;
+use rustc::ty::subst::Substs;
 
 use itertools::{Either, Itertools};
 pub enum IntrinsicFn {
@@ -145,6 +146,8 @@ impl<'tcx> Entry<'tcx> {
                 let spirv_ty = stx.to_ty_as_ptr(&ty, storage_class);
                 let global_vars = (0..count)
                     .map(|_| {
+                        // let comp = stx.builder.type_struct(&[spirv_ty.word]);
+                        // let comp_ptr = stx.builder.type_pointer(None, storage_class, comp);
                         let var = stx.builder
                             .variable(spirv_ty.word, None, storage_class, None);
                         stx.builder.decorate(
@@ -338,11 +341,9 @@ pub fn trans_spirv<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, items: &'a FxHashSet<M
                 if let Some(abort) = abort {
                     ctx.intrinsic_fns.insert(instance.def_id(), abort);
                 }
-            } else {
-                ctx.forward_fns
-                    .insert(instance.def_id(), SpirvFn(ctx.builder.id()));
             }
         });
+
     let instances: Vec<MirContext> = items
         .iter()
         .filter_map(|item| {
@@ -359,6 +360,11 @@ pub fn trans_spirv<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, items: &'a FxHashSet<M
             None
         })
         .collect();
+    for mcx in &instances {
+        ctx.forward_fns
+            .insert((mcx.def_id, mcx.substs), SpirvFn(ctx.builder.id()));
+    }
+    println!("fn - {:#?}", ctx.forward_fns);
     let (entry_instances, fn_instances): (Vec<_>, Vec<_>) =
         instances.iter().partition_map(|&mcx| {
             if let Some(entry_point) = tcx.get_attrs(mcx.def_id)
@@ -458,7 +464,10 @@ impl<'b, 'a, 'tcx: 'a> RlslVisitor<'b, 'a, 'tcx> {
         let fn_ty = scx.tcx.mk_fn_ptr(Binder(fn_sig));
         let fn_ty_spirv = scx.to_ty_fn(fn_ty);
 
-        let forward_fn = scx.forward_fns.get(&def_id).map(|f| f.0).expect("forward");
+        let forward_fn = scx.forward_fns
+            .get(&(def_id, mcx.substs))
+            .map(|f| f.0)
+            .expect("forward");
         let spirv_function = scx.builder
             .begin_function(
                 ret_ty_spirv.word,
@@ -561,7 +570,10 @@ impl<'b, 'a, 'tcx: 'a> RlslVisitor<'b, 'a, 'tcx> {
         let void_spirv = scx.to_ty_fn(void);
         let fn_ty = scx.tcx.mk_fn_ptr(Binder(fn_sig));
         let fn_ty_spirv = scx.to_ty_fn(fn_ty);
-        let forward_fn = scx.forward_fns.get(&def_id).map(|f| f.0).expect("forward");
+        let forward_fn = scx.forward_fns
+            .get(&(def_id, entry_point.mcx.substs))
+            .map(|f| f.0)
+            .expect("forward");
         let spirv_function = scx.builder
             .begin_function(
                 void_spirv.word,
@@ -573,7 +585,6 @@ impl<'b, 'a, 'tcx: 'a> RlslVisitor<'b, 'a, 'tcx> {
         scx.builder.begin_basic_block(None).expect("block");
         let inputs = entry_input.compute_variables(&entry_point, &entry_point.args());
         let outputs = entry_output.compute_variables(&entry_point, &[mir::Local::new(0)]);
-        println!("{:?}", outputs);
         // println!("{:?}", outputs);
         // Build the variable map from the global input variables
         let mut variable_map: HashMap<mir::Local, SpirvVar<'tcx>> = entry_point
@@ -617,12 +628,8 @@ impl<'b, 'a, 'tcx: 'a> RlslVisitor<'b, 'a, 'tcx> {
             IntrinsicEntry::Vertex => spirv::ExecutionModel::Vertex,
             IntrinsicEntry::Fragment => spirv::ExecutionModel::Fragment,
         };
-        scx.builder.entry_point(
-            model,
-            spirv_function,
-            name.as_ref(),
-            inputs_raw,
-        );
+        scx.builder
+            .entry_point(model, spirv_function, name.as_ref(), inputs_raw);
         scx.builder
             .execution_mode(spirv_function, spirv::ExecutionMode::OriginUpperLeft, &[]);
     }
@@ -963,9 +970,12 @@ impl<'b, 'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'b, 'a, 
             spirv_var.word
         } else {
             let spirv_ty_ptr = self.to_ty_as_ptr_fn(ty);
-            let var = *self.vars.get(&access_chain.base).expect("access chain local");
+            let var = *self.vars
+                .get(&access_chain.base)
+                .expect("access chain local");
             // TODO: Better way to get the correct storage class
-            let spirv_ty_ptr =self.to_ty_as_ptr(ty, var.storage_class);
+            println!("Var = {:?}", var);
+            let spirv_ty_ptr = self.to_ty_as_ptr(ty, var.storage_class);
             let indices: Vec<_> = access_chain
                 .indices
                 .iter()
@@ -1124,13 +1134,12 @@ impl<'b, 'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'b, 'a, 
                             use rustc::middle::const_val::ConstVal;
                             if let ConstVal::Function(def_id, ref substs) = value.val {
                                 let mono_substs = self.mcx.monomorphize(substs);
-                                let resolve_fn_id = Instance::resolve(
+                                let resolve_instance = Instance::resolve(
                                     self.scx.tcx,
                                     ParamEnv::empty(rustc::traits::Reveal::All),
                                     def_id,
                                     &mono_substs,
-                                ).unwrap()
-                                    .def_id();
+                                ).unwrap();
                                 let arg_operand_loads: Vec<_> = args.iter()
                                     .map(|arg| {
                                         let operand =
@@ -1142,15 +1151,14 @@ impl<'b, 'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'b, 'a, 
                                     })
                                     .collect();
                                 let fn_call = self.scx
-                                    .get_function_call(resolve_fn_id)
+                                    .get_function_call(
+                                        resolve_instance.def_id(),
+                                        resolve_instance.substs,
+                                    )
                                     .expect("function call");
                                 let spirv_fn_call = match fn_call {
-                                    SpirvFunctionCall::Function(_) => {
-                                        let spirv_fn = self.scx
-                                            .forward_fns
-                                            .get(&resolve_fn_id)
-                                            .map(|v| *v)
-                                            .expect("forward fn call");
+                                    // TODO Resolve even necessary?
+                                    SpirvFunctionCall::Function(spirv_fn) => {
                                         let fn_call = self.scx
                                             .builder
                                             .function_call(
@@ -1208,6 +1216,15 @@ impl<'b, 'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'b, 'a, 
                 self.scx.builder.branch(target_label.0).expect("label");
             }
             &mir::TerminatorKind::Assert { target, .. } => {
+                let target_label = self.label_blocks.get(&target).expect("no label");
+                self.scx.builder.branch(target_label.0).expect("label");
+            }
+            &mir::TerminatorKind::Drop {
+                ref location,
+                target,
+                ..
+            } => {
+                println!("Location {:?}", location);
                 let target_label = self.label_blocks.get(&target).expect("no label");
                 self.scx.builder.branch(target_label.0).expect("label");
             }

@@ -1,5 +1,6 @@
 #![feature(custom_attribute, attr_literals)]
 use std::ops::{Add, Mul};
+use std::convert::From;
 pub trait Float: Copy + Add<Output = Self> + Mul<Output = Self> {
     fn sqrt(self) -> Self;
 }
@@ -69,3 +70,29 @@ where
         self.dot(self).sqrt()
     }
 }
+
+#[spirv(Input)]
+pub struct Input<Location: Sized, T>{
+    pub location: Location,
+    pub data: T
+}
+
+impl<Location, T> From<Input<Location, T>> for Output<T> {
+    fn from(input: Input<Location, T>) -> Output<T> {
+        Output {
+            data: input.data
+        }
+    }
+}
+
+#[spirv(Output)]
+pub struct Output<T>{
+    pub data: T
+}
+
+
+#[spirv(Const0)]
+pub enum N0{}
+
+#[spirv(Const1)]
+pub enum N1{}
