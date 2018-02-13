@@ -291,16 +291,73 @@ impl<'a, 'tcx> SpirvCtx<'a, 'tcx> {
                             };
                             intrinsic_spirv
                         } else {
-                            let field_ty_spirv: Vec<_> = adt.all_fields()
-                                .map(|f| {
-                                    let ty = f.ty(self.tcx, mono_substs);
-                                    self.to_ty(ty, storage_class).word
-                                })
+                            let attrs = self.tcx.get_attrs(adt.did);
+                            let needs_block = ::extract_attr(&attrs, "spirv", |s| match s {
+                                "Input" => Some(true),
+                                "Output" => Some(true),
+                                _ => None,
+                            }).get(0)
+                                .is_some();
+                            let field_ty: Vec<_> = adt.all_fields()
+                                .map(|f| f.ty(self.tcx, mono_substs))
+                                .filter(|ty| !ty.is_phantom_data())
                                 .collect();
-
+                            println!("{:?}", field_ty);
+                            let field_ty_spirv: Vec<_> = field_ty
+                                .iter()
+                                .map(|ty| self.to_ty(ty, storage_class).word)
+                                .collect();
                             let spirv_struct = self.builder.type_struct(&field_ty_spirv);
+                            // TODO: Proper input
+                            if needs_block {
+                                self.builder
+                                    .decorate(spirv_struct, spirv::Decoration::Block, &[]);
+                                fn extract_location<'a, 'tcx>(
+                                    tcx: TyCtxt<'a, 'tcx, 'tcx>,
+                                    ty: Ty<'tcx>,
+                                ) -> Option<u32> {
+                                    if let TypeVariants::TyAdt(adt, substs) = ty.sty {
+                                        assert!(substs.len() == 1, "Len should be 1");
+                                        let inner_ty = substs[0].as_type().expect("Should be ty");
+                                        let location_id =
+                                            inner_ty.ty_to_def_id().expect("id location");
+                                        let attrs = tcx.get_attrs(location_id);
+                                        let val = ::extract_attr(&attrs, "spirv", |s| match s {
+                                            "Const0" => Some(0u32),
+                                            "Const1" => Some(1),
+                                            "Const2" => Some(2),
+                                            "Const3" => Some(3),
+                                            "Const4" => Some(4),
+                                            "Const5" => Some(5),
+                                            _ => None,
+                                        });
+                                        return val.get(0).map(|&i| i);
+                                    }
+                                    None
+                                }
+                                let fields: Vec<_> = adt.all_fields().take(2).collect();
+                                let location_ty = fields[1].ty(self.tcx, mono_substs);
+                                let location_index = extract_location(self.tcx, location_ty)
+                                    .expect("location index");
+
+                                //println!("atrs {:?}", self.tcx.get_attrs(location_id));
+                                //let variable_ty = fields[0].ty(self.tcx, mono_substs);
+                                self.builder.member_decorate(
+                                    spirv_struct,
+                                    0,
+                                    spirv::Decoration::Location,
+                                    &[rspirv::mr::Operand::LiteralInt32(location_index as u32)],
+                                );
+                            }
+
                             if self.debug_symbols {
-                                for (index, field) in adt.all_fields().enumerate() {
+                                let fields: Vec<_> = adt.all_fields()
+                                    .filter(|field| {
+                                        let ty = field.ty(self.tcx, mono_substs);
+                                        !ty.is_phantom_data()
+                                    })
+                                    .collect();
+                                for (index, field) in fields.iter().enumerate() {
                                     self.builder.member_name(
                                         spirv_struct,
                                         index as u32,

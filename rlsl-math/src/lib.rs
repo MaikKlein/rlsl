@@ -49,6 +49,15 @@ impl<T: Float> Vec2<T> {
     pub fn length(self) -> T {
         <Self as Vector>::length(self)
     }
+
+    pub fn extend2(self, z: T, w: T) -> Vec4<T> {
+        Vec4 {
+            x: self.x,
+            y: self.y,
+            z,
+            w,
+        }
+    }
 }
 
 impl<T: Float> Vector for Vec2<T> {
@@ -72,27 +81,32 @@ where
 }
 
 #[spirv(Input)]
-pub struct Input<Location: Sized, T>{
-    pub location: Location,
-    pub data: T
+pub struct Input<Location: Sized, T> {
+    pub data: T,
+    pub _location: std::marker::PhantomData<Location>,
 }
 
-impl<Location, T> From<Input<Location, T>> for Output<T> {
-    fn from(input: Input<Location, T>) -> Output<T> {
-        Output {
-            data: input.data
-        }
+
+// impl<LInput, LOutput, T> From<Input<LInput, T>> for Output<LOutput, T> {
+//     fn from(input: Input<LInput, T>) -> Output<LOutput, T> {
+//         Output::new(data: input.data)
+//     }
+// }
+
+#[spirv(Output)]
+pub struct Output<Location: Sized, T> {
+    pub data: T,
+    pub _location: std::marker::PhantomData<Location>,
+}
+
+impl<Location, T> Output<Location, T> {
+    pub fn new(data: T) -> Output<Location, T> {
+        Output { _location: std::marker::PhantomData, data }
     }
 }
 
-#[spirv(Output)]
-pub struct Output<T>{
-    pub data: T
-}
-
-
 #[spirv(Const0)]
-pub enum N0{}
+pub enum N0 {}
 
 #[spirv(Const1)]
-pub enum N1{}
+pub enum N1 {}

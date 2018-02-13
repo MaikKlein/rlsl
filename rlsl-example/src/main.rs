@@ -21,11 +21,12 @@
 
 #![feature(custom_attribute)]
 extern crate rlsl_math;
-use rlsl_math::{N0, N1, Input, Output, Vec2, Vec4, Vertex};
+use rlsl_math::{Input, N0, N1, Output, Vec2, Vec4, Vertex};
 
 #[spirv(fragment)]
-fn frag(color: Input<N0, Vec4<f32>>) -> Output<Vec4<f32>> {
-    color.into()
+fn frag(color: Input<N0, Vec4<f32>>) -> Output<N0, Vec4<f32>> {
+    let color = color.data;
+    Output::new(color)
 }
 
 #[spirv(vertex)]
@@ -33,9 +34,9 @@ fn vertex(
     vertex: &mut Vertex,
     pos: Input<N0, Vec4<f32>>,
     color: Input<N1, Vec4<f32>>,
-) -> Output<Vec4<f32>> {
+) -> Output<N0, Vec4<f32>> {
     vertex.position = pos.data;
-    color.into()
+    Output::new(color.data)
 }
 
 fn main() {}

@@ -39,6 +39,7 @@ use self::ty::*;
 use rustc::ty::subst::Substs;
 
 use itertools::{Either, Itertools};
+#[derive(Copy, Clone, Debug)]
 pub enum IntrinsicFn {
     Dot,
 }
@@ -78,15 +79,11 @@ impl<'a> GlobalVar<'a> {}
 fn is_per_vertex<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, ty: Ty<'tcx>) -> bool {
     if let TypeVariants::TyRef(_, ty_and_mut) = ty.sty {
         if let TypeVariants::TyAdt(adt, substs) = ty_and_mut.ty.sty {
-            return tcx.get_attrs(adt.did)
-                .iter()
-                .filter_map(|attr| {
-                    extract_attr(attr, &["spirv"], |s| match s {
-                        "PerVertex" => Some(true),
-                        _ => None,
-                    })
-                })
-                .nth(0)
+            let attrs = tcx.get_attrs(adt.did);
+            return extract_attr(&attrs, "spirv", |s| match s {
+                "PerVertex" => Some(true),
+                _ => None,
+            }).get(0)
                 .is_some();
         }
     }
@@ -150,11 +147,11 @@ impl<'tcx> Entry<'tcx> {
                         // let comp_ptr = stx.builder.type_pointer(None, storage_class, comp);
                         let var = stx.builder
                             .variable(spirv_ty.word, None, storage_class, None);
-                        stx.builder.decorate(
-                            var,
-                            spirv::Decoration::Location,
-                            &[rspirv::mr::Operand::LiteralInt32(location_index as u32)],
-                        );
+                        // stx.builder.decorate(
+                        //     var,
+                        //     spirv::Decoration::Location,
+                        //     &[rspirv::mr::Operand::LiteralInt32(location_index as u32)],
+                        // );
                         let global_var = GlobalVar {
                             var,
                             ty,
@@ -194,15 +191,11 @@ impl<'tcx> Entry<'tcx> {
 }
 
 fn intrinsic_fn(attrs: &[syntax::ast::Attribute]) -> Option<IntrinsicFn> {
-    attrs
-        .iter()
-        .filter_map(|attr| {
-            extract_attr(attr, &[], |s| match s {
-                "dot" => Some(IntrinsicFn::Dot),
-                _ => None,
-            })
-        })
-        .nth(0)
+    extract_attr(attrs, "spirv", |s| match s {
+        "dot" => Some(IntrinsicFn::Dot),
+        _ => None,
+    }).get(0)
+        .map(|&i| i)
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -226,24 +219,19 @@ pub struct RlslVisitor<'b, 'a: 'b, 'tcx: 'a> {
     pub instance_ty: InstanceType,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone)]
 pub enum IntrinsicType {
     Vec(usize),
 }
 impl IntrinsicType {
     pub fn from_attr(attrs: &[syntax::ast::Attribute]) -> Option<Self> {
-        attrs
-            .iter()
-            .filter_map(|attr| {
-                // Fix
-                extract_attr(attr, &["spirv"], |s| match s {
-                    "Vec2" => Some(IntrinsicType::Vec(2)),
-                    "Vec3" => Some(IntrinsicType::Vec(3)),
-                    "Vec4" => Some(IntrinsicType::Vec(4)),
-                    _ => None,
-                })
-            })
-            .nth(0)
+        extract_attr(attrs, "spirv", |s| match s {
+            "Vec2" => Some(IntrinsicType::Vec(2)),
+            "Vec3" => Some(IntrinsicType::Vec(3)),
+            "Vec4" => Some(IntrinsicType::Vec(4)),
+            _ => None,
+        }).get(0)
+            .map(|&i| i)
     }
 }
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
@@ -252,10 +240,10 @@ pub enum IntrinsicEntry {
     Fragment,
 }
 
-pub fn extract_attr_impl<'a, R, F>(
-    meta_item: &'a syntax::ast::MetaItem,
+pub fn extract_attr_impl<R, F>(
+    meta_item: &syntax::ast::MetaItem,
     keywords: &[&str],
-    f: F,
+    f: &F,
 ) -> Option<R>
 where
     F: Fn(&str) -> Option<R>,
@@ -271,18 +259,18 @@ where
     }
     None
 }
-pub fn extract_attr<'a, R, F>(
-    attr: &'a syntax::ast::Attribute,
-    keywords: &[&str],
-    f: F,
-) -> Option<R>
+// TODO: Better API
+pub fn extract_attr<R, F>(attrs: &[syntax::ast::Attribute], keyword: &str, f: F) -> Vec<R>
 where
     F: Fn(&str) -> Option<R>,
 {
-    if let Some(ref meta) = attr.meta() {
-        return extract_attr_impl(meta, keywords, f);
-    }
-    None
+    attrs
+        .iter()
+        .filter_map(|attr| {
+            attr.meta()
+                .and_then(|meta| extract_attr_impl(&meta, &[keyword], &f))
+        })
+        .collect::<Vec<_>>()
 }
 
 #[repr(u32)]
@@ -364,21 +352,17 @@ pub fn trans_spirv<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, items: &'a FxHashSet<M
         ctx.forward_fns
             .insert((mcx.def_id, mcx.substs), SpirvFn(ctx.builder.id()));
     }
-    println!("fn - {:#?}", ctx.forward_fns);
     let (entry_instances, fn_instances): (Vec<_>, Vec<_>) =
         instances.iter().partition_map(|&mcx| {
-            if let Some(entry_point) = tcx.get_attrs(mcx.def_id)
-                .iter()
-                .filter_map(|attr| {
-                    extract_attr(attr, &["spirv"], |s| match s {
-                        "vertex" => Some(IntrinsicEntry::Vertex),
-                        "fragment" => Some(IntrinsicEntry::Fragment),
-                        _ => None,
-                    })
-                })
+            let attrs = tcx.get_attrs(mcx.def_id);
+            let entry = extract_attr(&attrs, "spirv", |s| match s {
+                "vertex" => Some(IntrinsicEntry::Vertex),
+                "fragment" => Some(IntrinsicEntry::Fragment),
+                _ => None,
+            }).iter()
                 .nth(0)
-                .map(|entry_type| EntryPoint { mcx, entry_type })
-            {
+                .map(|&entry_type| EntryPoint { mcx, entry_type });
+            if let Some(entry_point) = entry {
                 Either::Left(entry_point)
             } else {
                 Either::Right(mcx)
@@ -894,13 +878,19 @@ impl<'b, 'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'b, 'a, 
 
                 let spirv_operands: Vec<_> = operands
                     .iter()
-                    .map(|op| {
+                    .filter_map(|op| {
                         let ty = op.ty(&self.mcx.mir.local_decls, self.mcx.tcx);
                         let ty = self.mcx.monomorphize(&ty);
-                        let spirv_ty = self.to_ty_fn(ty);
-                        self.scx
-                            .load_operand(self.mcx, &self.vars, op)
-                            .load_raw(self.scx, spirv_ty)
+                        if ty.is_phantom_data() {
+                            None
+                        } else {
+                            let spirv_ty = self.to_ty_fn(ty);
+                            Some(
+                                self.scx
+                                    .load_operand(self.mcx, &self.vars, op)
+                                    .load_raw(self.scx, spirv_ty),
+                            )
+                        }
                     })
                     .collect();
                 SpirvValue(
@@ -1157,7 +1147,6 @@ impl<'b, 'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'b, 'a, 
                                     )
                                     .expect("function call");
                                 let spirv_fn_call = match fn_call {
-                                    // TODO Resolve even necessary?
                                     SpirvFunctionCall::Function(spirv_fn) => {
                                         let fn_call = self.scx
                                             .builder
