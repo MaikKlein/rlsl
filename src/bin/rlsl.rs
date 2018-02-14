@@ -78,11 +78,14 @@ impl<'a> CompilerCalls<'a> for RlslCompilerCalls {
     ) -> CompileController<'a> {
         let mut controller = CompileController::basic();
         session.abort_if_errors();
+        controller.keep_ast = session.opts.debugging_opts.keep_ast;
+        controller.continue_parse_after_error = session.opts.debugging_opts.continue_parse_after_error;
         if let Some(ref crate_type) = matches.opt_str("crate-type") {
             if crate_type == "bin" {
                 controller.after_analysis.stop = Compilation::Stop;
                 controller.keep_ast = true;
                 controller.make_glob_map = rustc_resolve::MakeGlobMap::Yes;
+                controller.after_analysis.run_callback_on_error = false;
                 controller.after_analysis.callback = box |state: &mut CompileState| {
                     let tcx = &state.tcx.unwrap();
                     let f = rustc_driver::driver::build_output_filenames(

@@ -2,6 +2,7 @@
 #![feature(box_syntax)]
 #![feature(try_from)]
 #![feature(conservative_impl_trait)]
+#![feature(rustc_diagnostic_macros)]
 
 extern crate arena;
 extern crate env_logger;
@@ -9,6 +10,7 @@ extern crate getopts;
 extern crate itertools;
 extern crate log;
 extern crate rspirv;
+#[macro_use]
 extern crate rustc;
 extern crate rustc_borrowck;
 extern crate rustc_const_math;
@@ -20,7 +22,10 @@ extern crate rustc_mir;
 extern crate rustc_passes;
 extern crate rustc_plugin;
 extern crate rustc_resolve;
+#[macro_use]
+extern crate rustc_typeck;
 extern crate spirv_headers as spirv;
+#[macro_use]
 extern crate syntax;
 extern crate syntax_pos;
 pub mod trans;
@@ -31,6 +36,8 @@ use rustc::{hir, mir};
 use rustc_data_structures::fx::FxHashSet;
 use rustc::mir::mono::MonoItem;
 use rustc::ty::{Binder, Instance, ParamEnv, Ty, TyCtxt, TypeVariants, TypeckTables};
+use rustc::mir::visit::{TyContext, Visitor};
+use syntax_pos::DUMMY_SP;
 pub mod context;
 pub mod ty;
 pub mod collector;
@@ -43,7 +50,34 @@ use itertools::{Either, Itertools};
 pub enum IntrinsicFn {
     Dot,
 }
+register_diagnostics! {
+    E1337,
+}
 
+pub struct TyErrorVisitor {
+    has_error: bool,
+}
+impl TyErrorVisitor {
+    pub fn has_error(mcxs: &[MirContext]) -> bool {
+        let mut visitor = TyErrorVisitor { has_error: false };
+        for mcx in mcxs {
+            if visitor.has_error {
+                return true;
+            } else {
+                visitor.visit_mir(mcx.mir);
+            }
+        }
+        false
+    }
+}
+impl<'tcx> rustc::mir::visit::Visitor<'tcx> for TyErrorVisitor {
+    fn visit_ty(&mut self, ty: &Ty<'tcx>, _: TyContext) {
+        self.super_ty(ty);
+        if let TypeVariants::TyError = ty.sty {
+            self.has_error = true;
+        }
+    }
+}
 pub struct EntryPoint<'a, 'tcx: 'a> {
     pub entry_type: IntrinsicEntry,
     pub mcx: MirContext<'a, 'tcx>,
@@ -288,11 +322,13 @@ pub enum SpirvFunctionCall {
 
 pub fn trans_spirv<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, items: &'a FxHashSet<MonoItem<'tcx>>) {
     use rustc::mir::visit::Visitor;
-    let entry_fn = tcx.sess
-        .entry_fn
-        .borrow()
-        .map(|(node_id, _)| tcx.hir.local_def_id(node_id))
-        .expect("entry");
+    //struct_span_err!(tcx.sess, DUMMY_SP, E1337, "Test not allowed").emit();
+
+    // let entry_fn = tcx.sess
+    //     .entry_fn
+    //     .borrow()
+    //     .map(|(node_id, _)| tcx.hir.local_def_id(node_id))
+    //     .expect("entry");
     let mut ctx = SpirvCtx::new(tcx);
     items
         .iter()
@@ -348,6 +384,10 @@ pub fn trans_spirv<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, items: &'a FxHashSet<M
             None
         })
         .collect();
+
+    if TyErrorVisitor::has_error(&instances) {
+        return;
+    }
     for mcx in &instances {
         ctx.forward_fns
             .insert((mcx.def_id, mcx.substs), SpirvFn(ctx.builder.id()));
@@ -376,7 +416,7 @@ pub fn trans_spirv<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, items: &'a FxHashSet<M
     });
     fn_instances
         .iter()
-        .filter(|mcx| mcx.def_id != entry_fn && tcx.lang_items().start_fn() != Some(mcx.def_id))
+        //.filter(|mcx| mcx.def_id != entry_fn && tcx.lang_items().start_fn() != Some(mcx.def_id))
         .for_each(|&mcx| {
             RlslVisitor::trans_fn(mcx, &mut ctx);
         });
