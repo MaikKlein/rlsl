@@ -1,0 +1,8 @@
+[package]
+name = "shader"
+version = "0.1.0"
+authors = ["Maik Klein <maikklein@googlemail.com>"]
+
+[dependencies]
+
+rlsl-math = {path = "../../rlsl-math" }
