@@ -37,3 +37,5 @@ fn vertex(
     vertex.position = pos.data;
     Output::new(color.data)
 }
+
+//fn main(){}

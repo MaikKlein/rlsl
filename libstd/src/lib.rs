@@ -7,8 +7,7 @@
 #![feature(prelude_import)]
 #![feature(custom_attribute, attr_literals)]
 
-#[macro_reexport(assert, assert_eq, assert_ne, debug_assert, debug_assert_eq, debug_assert_ne,
-                 unreachable, unimplemented, write, writeln, try)]
+#[macro_reexport(assert, assert_eq, assert_ne, debug_assert, debug_assert_eq, debug_assert_ne, unreachable, unimplemented, write, writeln, try)]
 extern crate core as __core;
 
 pub use core::iter;
