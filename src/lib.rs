@@ -78,11 +78,63 @@ impl<'tcx> rustc::mir::visit::Visitor<'tcx> for TyErrorVisitor {
         }
     }
 }
+
+#[derive(Copy, Clone, Debug, Hash, PartialEq, Eq)]
+pub struct Input<'tcx> {
+    pub location: u32,
+    pub ty: Ty<'tcx>,
+}
+
+impl<'tcx> Input<'tcx> {
+    pub fn new<'a>(mcx: MirContext<'a, 'tcx>, ty: Ty<'tcx>) -> Option<Input<'tcx>> {
+        let adt = ty.ty_adt_def()?;
+        let attrs = mcx.tcx.get_attrs(adt.did);
+        extract_attr(&attrs, "spirv", |s| match s {
+            "Input" => Some(()),
+            _ => None,
+        }).get(0)?;
+
+        let fields: Vec<_> = adt.all_fields()
+            .map(|field| field.ty(mcx.tcx, mcx.substs))
+            .collect();
+        assert!(fields.len() == 2, "Input should have two fields");
+        let location_ty = fields[1];
+        let location = extract_location(mcx.tcx, location_ty).expect("Unable to extract location");
+        Some(Input { ty, location })
+    }
+}
+
+fn extract_location<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, ty: Ty<'tcx>) -> Option<u32> {
+    if let TypeVariants::TyAdt(adt, substs) = ty.sty {
+        assert!(substs.len() == 1, "Len should be 1");
+        let inner_ty = substs[0].as_type().expect("Should be ty");
+        let location_id = inner_ty.ty_to_def_id().expect("id location");
+        let attrs = tcx.get_attrs(location_id);
+        let val = ::extract_attr(&attrs, "spirv", |s| match s {
+            "Const0" => Some(0u32),
+            "Const1" => Some(1),
+            "Const2" => Some(2),
+            "Const3" => Some(3),
+            "Const4" => Some(4),
+            "Const5" => Some(5),
+            _ => None,
+        });
+        return val.get(0).map(|&i| i);
+    }
+    None
+}
 pub struct EntryPoint<'a, 'tcx: 'a> {
     pub entry_type: IntrinsicEntry,
     pub mcx: MirContext<'a, 'tcx>,
 }
+
 impl<'a, 'tcx> EntryPoint<'a, 'tcx> {
+    pub fn input_iter(&self) -> impl Iterator<Item = Input> {
+        self.mcx.mir.args_iter().filter_map(move |local| {
+            let ty = self.mcx.mir.local_decls[local].ty;
+            Input::new(self.mcx, ty)
+        })
+    }
     pub fn args(&self) -> Vec<mir::Local> {
         match self.entry_type {
             IntrinsicEntry::Vertex => self.mcx.mir.args_iter().skip(1).collect(),
@@ -1004,7 +1056,6 @@ impl<'b, 'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'b, 'a, 
                 .get(&access_chain.base)
                 .expect("access chain local");
             // TODO: Better way to get the correct storage class
-            println!("Var = {:?}", var);
             let spirv_ty_ptr = self.to_ty_as_ptr(ty, var.storage_class);
             let indices: Vec<_> = access_chain
                 .indices
@@ -1253,7 +1304,6 @@ impl<'b, 'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'b, 'a, 
                 target,
                 ..
             } => {
-                println!("Location {:?}", location);
                 let target_label = self.label_blocks.get(&target).expect("no label");
                 self.scx.builder.branch(target_label.0).expect("label");
             }

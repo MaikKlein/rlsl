@@ -98,8 +98,6 @@ impl<'a> CompilerCalls<'a> for RlslCompilerCalls {
                     //eprintln!("err files: {:?}", f);
                     let _ = rustc_mir::transform::dump_mir::emit_mir(*tcx, &f);
                     let (items, _) = collect_crate_mono_items(*tcx, MonoItemCollectionMode::Eager);
-                    println!("{:#?}", items);
-                    // println!("-----------");
                     // TODO: Custom collector not needed anymore?
                     //let items = rlsl::collector::trans_all_items(*tcx, &items);
                     rlsl::trans_spirv(*tcx, &items);
