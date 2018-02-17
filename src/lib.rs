@@ -129,12 +129,13 @@ pub struct EntryPoint<'a, 'tcx: 'a> {
 }
 
 impl<'a, 'tcx> EntryPoint<'a, 'tcx> {
-    pub fn input_iter(&self) -> impl Iterator<Item = Input> {
+    pub fn input_iter(&'a self) -> impl Iterator<Item = Input<'tcx>> + 'a {
         self.mcx.mir.args_iter().filter_map(move |local| {
             let ty = self.mcx.mir.local_decls[local].ty;
             Input::new(self.mcx, ty)
         })
     }
+
     pub fn args(&self) -> Vec<mir::Local> {
         match self.entry_type {
             IntrinsicEntry::Vertex => self.mcx.mir.args_iter().skip(1).collect(),
