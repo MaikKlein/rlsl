@@ -431,18 +431,40 @@ pub struct RlslVisitor<'b, 'a: 'b, 'tcx: 'a> {
 }
 
 #[derive(Debug, Copy, Clone)]
-pub enum IntrinsicType {
-    Vec(usize),
+pub struct TyVec<'tcx> {
+    pub ty: Ty<'tcx>,
+    pub dim: usize
 }
-impl IntrinsicType {
-    pub fn from_attr(attrs: &[syntax::ast::Attribute]) -> Option<Self> {
-        extract_attr(attrs, "spirv", |s| match s {
-            "Vec2" => Some(IntrinsicType::Vec(2)),
-            "Vec3" => Some(IntrinsicType::Vec(3)),
-            "Vec4" => Some(IntrinsicType::Vec(4)),
-            _ => None,
-        }).get(0)
-            .map(|&i| i)
+
+#[derive(Debug, Copy, Clone)]
+pub enum IntrinsicType<'tcx> {
+    TyVec(TyVec<'tcx>),
+}
+impl<'tcx> IntrinsicType<'tcx> {
+    pub fn from_ty<'a>(tcx: TyCtxt<'a, 'tcx, 'tcx>, ty: Ty<'tcx>) -> Option<Self> {
+        TyVec::from_ty(tcx, ty).map(IntrinsicType::TyVec)
+    }
+}
+impl<'tcx> TyVec<'tcx> {
+    pub fn from_ty<'a>(tcx: TyCtxt<'a, 'tcx, 'tcx>, ty: Ty<'tcx>) -> Option<Self> {
+        if let TypeVariants::TyAdt(adt, substs) = ty.sty {
+            let attrs = tcx.get_attrs(adt.did);
+            let dim = extract_attr(&attrs, "spirv", |s| match s {
+                "Vec2" => Some(2),
+                "Vec3" => Some(3),
+                "Vec4" => Some(4),
+                _ => None,
+            }).get(0)
+                .map(|&i| i)?;
+            assert!(adt.is_struct(), "A Vec should be a struct");
+            let field = adt.all_fields()
+                .nth(0)
+                .expect("A Vec should have at least one field");
+            let field_ty = field.ty(tcx, substs);
+            Some(TyVec{ty: field_ty, dim})
+        } else {
+            None
+        }
     }
 }
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]

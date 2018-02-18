@@ -275,18 +275,15 @@ impl<'a, 'tcx> SpirvCtx<'a, 'tcx> {
                     }
                     ty::AdtKind::Struct => {
                         let attrs = self.tcx.get_attrs(adt.did);
-                        use std::ops::Deref;
-                        let intrinsic = IntrinsicType::from_attr(attrs.deref());
+                        let intrinsic = IntrinsicType::from_ty(self.tcx, ty);
 
                         if let Some(intrinsic) = intrinsic {
                             let intrinsic_spirv = match intrinsic {
-                                IntrinsicType::Vec(dim) => {
-                                    let field_ty = adt.all_fields()
-                                        .nth(0)
-                                        .map(|f| f.ty(self.tcx, mono_substs))
-                                        .expect("no field");
-                                    let spirv_ty = self.to_ty(field_ty, storage_class);
-                                    self.builder.type_vector(spirv_ty.word, dim as u32).into()
+                                IntrinsicType::TyVec(ty_vec) => {
+                                    let spirv_ty = self.to_ty(ty_vec.ty, storage_class);
+                                    self.builder
+                                        .type_vector(spirv_ty.word, ty_vec.dim as u32)
+                                        .into()
                                 }
                             };
                             intrinsic_spirv
