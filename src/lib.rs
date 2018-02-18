@@ -104,15 +104,23 @@ pub struct EntryPoint<'a, 'tcx: 'a> {
 }
 
 impl<'a, 'tcx> EntryPoint<'a, 'tcx> {
-    pub fn input_iter(&'a self) -> impl Iterator<Item = Global<'tcx>> + 'a {
+    pub fn input_iter(&'a self) -> impl Iterator<Item = Input<'tcx>> + 'a {
         self.mcx.mir.args_iter().filter_map(move |local| {
             let ty = self.mcx.mir.local_decls[local].ty;
-            Global::input(self, ty)
+            Input::new(self, ty)
         })
     }
-    pub fn output_iter(&'a self) -> impl Iterator<Item = Global<'tcx>> + 'a {
+
+    pub fn descriptor_iter(&'a self) -> impl Iterator<Item = Descriptor<'tcx>> + 'a {
+        self.mcx.mir.args_iter().filter_map(move |local| {
+            let ty = self.mcx.mir.local_decls[local].ty;
+            Descriptor::new(self, ty)
+        })
+    }
+
+    pub fn output_iter(&'a self) -> impl Iterator<Item = Output<'tcx>> + 'a {
         use std::iter::once;
-        once(self.mcx.mir.return_ty()).filter_map(move |ty| Global::output(self, ty))
+        once(self.mcx.mir.return_ty()).filter_map(move |ty| Output::new(self, ty))
     }
 
     pub fn args(&self) -> Vec<mir::Local> {
@@ -156,67 +164,136 @@ fn is_per_vertex<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, ty: Ty<'tcx>) -> bool {
     false
 }
 pub type TyMap<'a> = HashMap<rustc::ty::Ty<'a>, GlobalVar<'a>>;
-use std::marker::PhantomData;
+use std::hash::Hash;
 #[derive(Debug)]
-pub struct Entry<'tcx, Var> {
-    _var: PhantomData<Var>,
-    next_id: usize,
-    global_vars: TyMap<'tcx>,
+pub struct Entry<'tcx, T: Hash + Eq> {
+    global_vars: HashMap<T, GlobalVar<'tcx>>,
 }
 
 use std::collections::HashSet;
 #[derive(Copy, Clone, Debug, Hash, PartialEq, Eq)]
-pub struct Global<'tcx> {
+pub struct Input<'tcx> {
+    pub ty: Ty<'tcx>,
+    pub location: u32,
+}
+#[derive(Copy, Clone, Debug, Hash, PartialEq, Eq)]
+pub struct Output<'tcx> {
     pub ty: Ty<'tcx>,
     pub location: u32,
 }
 
-pub enum Input {}
-pub enum Output {}
+#[derive(Copy, Clone, Debug, Hash, PartialEq, Eq)]
+pub struct Descriptor<'tcx> {
+    pub ty: Ty<'tcx>,
+    pub set: u32,
+    pub binding: u32,
+}
 
-impl<'tcx> Global<'tcx> {
-    pub fn output<'a>(entry_point: &EntryPoint<'a, 'tcx>, ty: Ty<'tcx>) -> Option<Self> {
-        if let TypeVariants::TyAdt(adt, substs) = ty.sty {
-            let attrs = entry_point.mcx.tcx.get_attrs(adt.did);
-            extract_attr(&attrs, "spirv", |s| match s {
-                "Output" => Some(()),
-                _ => None,
-            }).get(0)?;
-            let f = adt.all_fields().collect_vec();
-            let fields: Vec<_> = adt.all_fields()
-                .map(|field| field.ty(entry_point.mcx.tcx, substs))
-                .collect();
-            assert!(fields.len() == 2, "Input should have two fields");
-            let location_ty = fields[1];
-            let location = extract_location(entry_point.mcx.tcx, location_ty)
-                .expect("Unable to extract location");
-            Some(Global { ty, location })
-        } else {
-            None
-        }
-    }
-    pub fn input<'a>(entry_point: &EntryPoint<'a, 'tcx>, ty: Ty<'tcx>) -> Option<Self> {
-        if let TypeVariants::TyAdt(adt, substs) = ty.sty {
-            let attrs = entry_point.mcx.tcx.get_attrs(adt.did);
-            extract_attr(&attrs, "spirv", |s| match s {
-                "Input" => Some(()),
-                _ => None,
-            }).get(0)?;
-            let f = adt.all_fields().collect_vec();
-            let fields: Vec<_> = adt.all_fields()
-                .map(|field| field.ty(entry_point.mcx.tcx, substs))
-                .collect();
-            assert!(fields.len() == 2, "Input should have two fields");
-            let location_ty = fields[1];
-            let location = extract_location(entry_point.mcx.tcx, location_ty)
-                .expect("Unable to extract location");
-            Some(Global { ty, location })
-        } else {
-            None
-        }
+impl<'tcx> Output<'tcx> {
+    fn new<'a>(entry_point: &EntryPoint<'a, 'tcx>, ty: Ty<'tcx>) -> Option<Self> {
+        let (adt, substs) = get_builtin_adt(entry_point.mcx.tcx, ty, "Output")?;
+        let f = adt.all_fields().collect_vec();
+        let fields: Vec<_> = adt.all_fields()
+            .map(|field| field.ty(entry_point.mcx.tcx, substs))
+            .collect();
+        assert!(fields.len() == 2, "Output should have two fields");
+        let location_ty = fields[1];
+        let location =
+            extract_location(entry_point.mcx.tcx, location_ty).expect("Unable to extract location");
+        Some(Output { ty, location })
     }
 }
-impl<'tcx> Entry<'tcx, Input> {
+
+impl<'tcx> Descriptor<'tcx> {
+    fn new<'a>(entry_point: &EntryPoint<'a, 'tcx>, ty: Ty<'tcx>) -> Option<Self> {
+        let (adt, substs) = get_builtin_adt(entry_point.mcx.tcx, ty, "Descriptor")?;
+        let f = adt.all_fields().collect_vec();
+        let fields: Vec<_> = adt.all_fields()
+            .map(|field| field.ty(entry_point.mcx.tcx, substs))
+            .collect();
+        assert_eq!(fields.len(), 3, "Descriptor should have 3 fields");
+        let binding_ty = fields[1];
+        let set_ty = fields[2];
+        let binding =
+            extract_location(entry_point.mcx.tcx, binding_ty).expect("Unable to extract location");
+        let set =
+            extract_location(entry_point.mcx.tcx, set_ty).expect("Unable to extract location");
+        Some(Descriptor { ty, binding, set })
+    }
+}
+
+use rustc::ty::AdtDef;
+fn get_builtin_adt<'a, 'tcx>(
+    tcx: TyCtxt<'a, 'tcx, 'tcx>,
+    ty: Ty<'tcx>,
+    attribute: &str,
+) -> Option<(&'tcx AdtDef, &'tcx Substs<'tcx>)> {
+    if let TypeVariants::TyAdt(adt, substs) = ty.sty {
+        let attrs = tcx.get_attrs(adt.did);
+        extract_attr(&attrs, "spirv", |s| {
+            if attribute == s {
+                Some((adt, substs))
+            } else {
+                None
+            }
+        }).get(0)
+            .map(|i| *i)
+    } else {
+        None
+    }
+}
+impl<'tcx> Input<'tcx> {
+    fn new<'a>(entry_point: &EntryPoint<'a, 'tcx>, ty: Ty<'tcx>) -> Option<Self> {
+        let (adt, substs) = get_builtin_adt(entry_point.mcx.tcx, ty, "Input")?;
+        let f = adt.all_fields().collect_vec();
+        let fields: Vec<_> = adt.all_fields()
+            .map(|field| field.ty(entry_point.mcx.tcx, substs))
+            .collect();
+        assert!(fields.len() == 2, "Input should have two fields");
+        let location_ty = fields[1];
+        let location =
+            extract_location(entry_point.mcx.tcx, location_ty).expect("Unable to extract location");
+        Some(Input { ty, location })
+    }
+}
+
+impl<'tcx> Global<'tcx> for Input<'tcx> {
+    fn ty(&self) -> Ty<'tcx> {
+        self.ty
+    }
+}
+
+impl<'tcx> Global<'tcx> for Output<'tcx> {
+    fn ty(&self) -> Ty<'tcx> {
+        self.ty
+    }
+}
+
+// impl<'tcx> Location for Input<'tcx> {
+//     fn location(&self) -> u32 {
+//         self.location
+//     }
+// }
+
+// impl<'tcx> Location for Output<'tcx> {
+//     fn location(&self) -> u32 {
+//         self.location
+//     }
+// }
+
+impl<'tcx> Global<'tcx> for Descriptor<'tcx> {
+    fn ty(&self) -> Ty<'tcx> {
+        self.ty
+    }
+}
+
+pub trait Global<'tcx>: Hash + Eq {
+    fn ty(&self) -> Ty<'tcx>;
+}
+// pub trait Location: Global {
+//     fn location(&self) -> u32;
+// }
+impl<'tcx> Entry<'tcx, Input<'tcx>> {
     pub fn input<'a>(entry_points: &[EntryPoint<'a, 'tcx>], stx: &mut SpirvCtx<'a, 'tcx>) -> Self {
         let set: HashSet<_> = entry_points
             .iter()
@@ -224,45 +301,85 @@ impl<'tcx> Entry<'tcx, Input> {
             .collect();
         Self::create(set, stx, spirv::StorageClass::Input)
     }
-    fn compute_variables<'a>(
-        &self,
-        entry: &EntryPoint<'a, 'tcx>,
-    ) -> Vec<GlobalVar<'a>> {
+
+    fn variable_iter<'borrow, 'a>(
+        &'borrow self,
+        entry: &'borrow EntryPoint<'a, 'tcx>,
+    ) -> impl Iterator<Item = (mir::Local, GlobalVar<'tcx>)> + 'borrow {
         entry
-            .input_iter()
-            .map(|input| *self.global_vars.get(&input.ty).expect("Entry compute"))
-            .collect()
+            .mcx
+            .mir
+            .args_iter()
+            .filter_map(move |local| {
+                let ty = entry.mcx.mir.local_decls[local].ty;
+                Input::new(entry, ty).map(|input| (local, input))
+            })
+            .map(move |(local, input)| {
+                (local, *self.global_vars.get(&input).expect("Entry compute"))
+            })
     }
 }
-impl<'tcx, T> Entry<'tcx, T> {
+impl<'tcx> Entry<'tcx, Descriptor<'tcx>> {
+    pub fn descriptor<'a>(
+        entry_points: &[EntryPoint<'a, 'tcx>],
+        stx: &mut SpirvCtx<'a, 'tcx>,
+    ) -> Self {
+        let set: HashSet<_> = entry_points
+            .iter()
+            .flat_map(EntryPoint::descriptor_iter)
+            .collect();
+        Self::create(set, stx, spirv::StorageClass::UniformConstant)
+    }
+
+    fn variable_iter<'borrow, 'a>(
+        &'borrow self,
+        entry: &'borrow EntryPoint<'a, 'tcx>,
+    ) -> impl Iterator<Item = (mir::Local, GlobalVar<'tcx>)> + 'borrow {
+        entry
+            .mcx
+            .mir
+            .args_iter()
+            .filter_map(move |local| {
+                let ty = entry.mcx.mir.local_decls[local].ty;
+                Descriptor::new(entry, ty).map(|input| (local, input))
+            })
+            .map(move |(local, descriptor)| {
+                (
+                    local,
+                    *self.global_vars.get(&descriptor).expect("Entry compute"),
+                )
+            })
+    }
+}
+
+impl<'tcx, T> Entry<'tcx, T>
+where
+    T: Global<'tcx>,
+{
     pub fn create<'a>(
-        set: HashSet<Global<'tcx>>,
+        set: HashSet<T>,
         stx: &mut SpirvCtx<'a, 'tcx>,
         storage_class: spirv::StorageClass,
-    ) -> Entry<'tcx, T> {
+    ) -> Self {
         let global_vars: HashMap<_, _> = set.into_iter()
             .map(|global| {
-                let spirv_ty = stx.to_ty_as_ptr(global.ty, storage_class);
+                let spirv_ty = stx.to_ty_as_ptr(global.ty(), storage_class);
                 let var = stx.builder
                     .variable(spirv_ty.word, None, storage_class, None);
                 let global_var = GlobalVar {
                     var,
-                    ty: global.ty,
+                    ty: global.ty(),
                     storage_class: storage_class,
-                    location: global.location,
+                    location: 0,
                 };
-                (global.ty, global_var)
+                (global, global_var)
             })
             .collect();
-        Entry {
-            _var: PhantomData,
-            next_id: 0,
-            global_vars,
-        }
+        Entry { global_vars }
     }
 }
 
-impl<'tcx> Entry<'tcx, Output> {
+impl<'tcx> Entry<'tcx, Output<'tcx>> {
     pub fn output<'a>(entry_points: &[EntryPoint<'a, 'tcx>], stx: &mut SpirvCtx<'a, 'tcx>) -> Self {
         let set: HashSet<_> = entry_points
             .iter()
@@ -271,14 +388,16 @@ impl<'tcx> Entry<'tcx, Output> {
         Self::create(set, stx, spirv::StorageClass::Output)
     }
 
-    fn compute_variables<'a>(
-        &self,
-        entry: &EntryPoint<'a, 'tcx>,
-    ) -> Vec<GlobalVar<'a>> {
-        entry
-            .output_iter()
-            .map(|input| *self.global_vars.get(&input.ty).expect("Entry compute"))
-            .collect()
+    fn variable_iter<'borrow, 'a>(
+        &'borrow self,
+        entry: &'borrow EntryPoint<'a, 'tcx>,
+    ) -> impl Iterator<Item = (mir::Local, GlobalVar<'tcx>)> + 'borrow {
+        let ty = entry.mcx.mir.return_ty();
+        let output = Output::new(entry, ty).expect("Should be output");
+        Some((
+            mir::Local::new(0),
+            *self.global_vars.get(&output).expect("Entry compute"),
+        )).into_iter()
     }
 }
 
@@ -468,9 +587,10 @@ pub fn trans_spirv<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, items: &'a FxHashSet<M
         });
     let entry_input = Entry::input(&entry_instances, &mut ctx);
     let entry_output = Entry::output(&entry_instances, &mut ctx);
+    let entry_descriptor = Entry::descriptor(&entry_instances, &mut ctx);
 
     entry_instances.iter().for_each(|e| {
-        RlslVisitor::trans_entry(&e, &entry_input, &entry_output, &mut ctx);
+        RlslVisitor::trans_entry(&e, &entry_input, &entry_output, &entry_descriptor, &mut ctx);
     });
     fn_instances
         .iter()
@@ -629,10 +749,12 @@ impl<'b, 'a, 'tcx: 'a> RlslVisitor<'b, 'a, 'tcx> {
     }
     pub fn trans_entry(
         entry_point: &EntryPoint<'a, 'tcx>,
-        entry_input: &Entry<'tcx, Input>,
-        entry_output: &Entry<'tcx, Output>,
+        entry_input: &Entry<'tcx, Input<'tcx>>,
+        entry_output: &Entry<'tcx, Output<'tcx>>,
+        entry_descriptor: &Entry<'tcx, Descriptor<'tcx>>,
         scx: &mut SpirvCtx<'a, 'tcx>,
     ) {
+        println!("{:?}", entry_descriptor);
         use mir::visit::Visitor;
         let def_id = entry_point.mcx.def_id;
         let mir = entry_point.mcx.mir;
@@ -665,26 +787,44 @@ impl<'b, 'a, 'tcx: 'a> RlslVisitor<'b, 'a, 'tcx> {
             )
             .expect("begin fn");
         scx.builder.begin_basic_block(None).expect("block");
-        let inputs = entry_input.compute_variables(&entry_point);
-        let outputs = entry_output.compute_variables(&entry_point);
-        // println!("{:?}", outputs);
-        // Build the variable map from the global input variables
-        let mut variable_map: HashMap<mir::Local, SpirvVar<'tcx>> = entry_point
-            .args()
-            .into_iter()
-            .enumerate()
-            .map(|(idx, arg)| {
-                let ty = mir.local_decls[arg].ty;
-                let var = inputs[idx];
-                (arg, SpirvVar::new(var.var, false, ty, var.storage_class))
+        let inputs_iter = entry_input.variable_iter(&entry_point);
+        let output_iter = entry_output.variable_iter(&entry_point);
+        let descriptor_iter = entry_descriptor.variable_iter(&entry_point);
+        let mut variable_map: HashMap<mir::Local, SpirvVar<'tcx>> = inputs_iter
+            .chain(output_iter)
+            .chain(descriptor_iter)
+            .map(|(local, global)| {
+                (
+                    local,
+                    SpirvVar::new(global.var, false, global.ty, global.storage_class),
+                )
             })
             .collect();
+        // println!("{:?}", outputs);
+        // Build the variable map from the global input variables
+        // entry_point;
+        //     .args()
+        //     .into_iter()
+        //     .enumerate()
+        //     .filter_map(|(idx, local)|{
+        //         let ty = mir.local_decls[arg].ty;
+        //         Input::new(entry_point, ty)
+        //     })
+        //     .map(|(idx, input)| {
+        //         let var = inputs[idx];
+        //         (arg, SpirvVar::new(var.var, false, ty, var.storage_class))
+        //     })
+        //     .collect();
         // Only add the per vertex variable in the vertex shader
         if entry_point.entry_type == IntrinsicEntry::Vertex {
             let first_local = mir::Local::new(1);
             let per_vertex = scx.get_per_vertex(mir.local_decls[first_local].ty);
             variable_map.insert(first_local, per_vertex);
         }
+        let outputs = entry_output
+            .variable_iter(entry_point)
+            .map(|(_, gv)| gv)
+            .collect_vec();
         let output_var = outputs[0];
         // Insert the return variable
         variable_map.insert(
@@ -703,7 +843,10 @@ impl<'b, 'a, 'tcx: 'a> RlslVisitor<'b, 'a, 'tcx> {
             variable_map,
             scx,
         ).visit_mir(entry_point.mcx.mir);
-        let mut inputs_raw = inputs.iter().map(|gv| gv.var).collect_vec();
+        let mut inputs_raw = entry_input
+            .variable_iter(entry_point)
+            .map(|(local, gv)| gv.var)
+            .collect_vec();
         inputs_raw.extend(outputs.iter().map(|gv| gv.var));
         let name = entry_point.mcx.tcx.item_name(def_id);
         let model = match entry_point.entry_type {

@@ -104,6 +104,12 @@ impl<Location, T> Output<Location, T> {
         Output { _location: std::marker::PhantomData, data }
     }
 }
+#[spirv(Descriptor)]
+pub struct Descriptor<Binding: Sized, Set: Sized, T> {
+    pub data: T,
+    pub _location: std::marker::PhantomData<Binding>,
+    pub _binding: std::marker::PhantomData<Set>,
+}
 
 #[spirv(Const0)]
 pub enum N0 {}
