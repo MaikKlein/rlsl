@@ -34,6 +34,15 @@ impl<T> Vec4<T> {
     }
 }
 
+#[spirv(Vec3)]
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Vec3<T> {
+    pub x: T,
+    pub y: T,
+    pub z: T,
+}
+
 #[spirv(Vec2)]
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -116,3 +125,6 @@ pub enum N0 {}
 
 #[spirv(Const1)]
 pub enum N1 {}
+
+#[spirv(Const2)]
+pub enum N2 {}

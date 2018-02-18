@@ -319,6 +319,114 @@ impl<'tcx> Entry<'tcx, Input<'tcx>> {
             })
     }
 }
+
+#[derive(Debug, Clone)]
+pub enum Layout<'tcx> {
+    Single(SingleLayout<'tcx>),
+    Composition(Vec<Box<Layout<'tcx>>>),
+}
+
+impl<'tcx> Layout<'tcx> {
+    pub fn size(&self) -> usize {
+        self.size_impl().0
+    }
+    pub fn offsets(&self) -> Vec<usize> {
+        self.size_impl().1
+    }
+    pub fn size_impl(&self) -> (usize, Vec<usize>) {
+        match *self {
+            Layout::Single(single) => (single.size, Vec::new()),
+            Layout::Composition(ref comp) => {
+                let mut offset = 0;
+                let offsets = comp.iter()
+                    .map(|layout| {
+                        offset = layout.offset(offset);
+                        let old_offset = offset;
+                        offset += layout.size();
+                        old_offset
+                    })
+                    .collect_vec();
+                (offset, offsets)
+            }
+        }
+    }
+
+    pub fn align(&self) -> usize {
+        match *self {
+            Layout::Single(single) => single.align,
+            Layout::Composition(ref comp) => {
+                let max_align = comp.iter().map(|layout| layout.align()).max().unwrap_or(0);
+                max_align.max(16).min(16)
+            }
+        }
+    }
+
+    pub fn single(&self) -> Option<SingleLayout<'tcx>> {
+        match *self {
+            Layout::Single(single) => Some(single),
+            _ => None,
+        }
+    }
+
+    pub fn offset(&self, starting_offset: usize) -> usize {
+        let align = self.align();
+        (align - (starting_offset % align)) % align + starting_offset
+    }
+}
+
+#[derive(Debug, Copy, Clone)]
+pub struct SingleLayout<'tcx> {
+    pub ty: Ty<'tcx>,
+    pub size: usize,
+    pub align: usize,
+}
+use syntax::ast;
+pub fn std140_layout<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, ty: Ty<'tcx>) -> Layout<'tcx> {
+    if let Some(intrinsic) = IntrinsicType::from_ty(tcx, ty) {
+        match intrinsic {
+            IntrinsicType::TyVec(ty_vec) => {
+                let multiplier = match ty_vec.dim {
+                    2 => 2,
+                    3 => 4,
+                    4 => 4,
+                    _ => unreachable!(),
+                };
+                let inner_layout = std140_layout(tcx, ty_vec.ty);
+                let single = SingleLayout {
+                    ty,
+                    size: inner_layout.size() * ty_vec.dim,
+                    align: inner_layout.align() * multiplier,
+                };
+                return Layout::Single(single);
+            }
+        }
+    }
+
+    match ty.sty {
+        TypeVariants::TyFloat(float_ty) => {
+            assert!(float_ty == ast::FloatTy::F32, "F64 is not supported");
+            let single = SingleLayout {
+                ty,
+                size: 4,
+                align: 4,
+            };
+            Layout::Single(single)
+        }
+        TypeVariants::TyAdt(adt, substs) => {
+            if adt.is_struct() {
+                let comp = adt.all_fields()
+                    .map(|field| field.ty(tcx, substs))
+                    .filter(|ty| !ty.is_phantom_data())
+                    .map(|ty| Box::new(std140_layout(tcx, ty)))
+                    .collect_vec();
+                Layout::Composition(comp)
+            } else {
+                unimplemented!()
+            }
+        }
+        ref rest => unimplemented!("{:?}", rest),
+    }
+}
 impl<'tcx> Entry<'tcx, Descriptor<'tcx>> {
     pub fn descriptor<'a>(
         entry_points: &[EntryPoint<'a, 'tcx>],
@@ -433,7 +541,7 @@ pub struct RlslVisitor<'b, 'a: 'b, 'tcx: 'a> {
 #[derive(Debug, Copy, Clone)]
 pub struct TyVec<'tcx> {
     pub ty: Ty<'tcx>,
-    pub dim: usize
+    pub dim: usize,
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -461,7 +569,7 @@ impl<'tcx> TyVec<'tcx> {
                 .nth(0)
                 .expect("A Vec should have at least one field");
             let field_ty = field.ty(tcx, substs);
-            Some(TyVec{ty: field_ty, dim})
+            Some(TyVec { ty: field_ty, dim })
         } else {
             None
         }
