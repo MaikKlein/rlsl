@@ -304,7 +304,25 @@ impl<'a, 'tcx> SpirvCtx<'a, 'tcx> {
                                 .map(|ty| self.to_ty(ty, storage_class).word)
                                 .collect();
                             let spirv_struct = self.builder.type_struct(&field_ty_spirv);
+                            if let Some(layout) = ::std140_layout(self.tcx, ty) {
+                                layout
+                                    .offsets()
+                                    .iter()
+                                    .enumerate()
+                                    .for_each(|(idx, &offset)| {
+                                        self.builder.member_decorate(
+                                            spirv_struct,
+                                            idx as u32,
+                                            spirv::Decoration::Offset,
+                                            &[rspirv::mr::Operand::LiteralInt32(offset as u32)],
+                                        );
+                                    });
+                            }
                             // TODO: Proper input
+                            if let Some(descriptor) = ::Descriptor::new(self.tcx, ty) {
+                                self.builder
+                                    .decorate(spirv_struct, spirv::Decoration::Block, &[]);
+                            }
                             if needs_block {
                                 self.builder
                                     .decorate(spirv_struct, spirv::Decoration::Block, &[]);

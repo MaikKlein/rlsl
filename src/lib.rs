@@ -114,13 +114,13 @@ impl<'a, 'tcx> EntryPoint<'a, 'tcx> {
     pub fn descriptor_iter(&'a self) -> impl Iterator<Item = Descriptor<'tcx>> + 'a {
         self.mcx.mir.args_iter().filter_map(move |local| {
             let ty = self.mcx.mir.local_decls[local].ty;
-            Descriptor::new(self, ty)
+            Descriptor::new(self.mcx.tcx, ty)
         })
     }
 
     pub fn output_iter(&'a self) -> impl Iterator<Item = Output<'tcx>> + 'a {
         use std::iter::once;
-        once(self.mcx.mir.return_ty()).filter_map(move |ty| Output::new(self, ty))
+        once(self.mcx.mir.return_ty()).filter_map(move |ty| Output::new(self.mcx.tcx, ty))
     }
 
     pub fn args(&self) -> Vec<mir::Local> {
@@ -190,34 +190,31 @@ pub struct Descriptor<'tcx> {
 }
 
 impl<'tcx> Output<'tcx> {
-    fn new<'a>(entry_point: &EntryPoint<'a, 'tcx>, ty: Ty<'tcx>) -> Option<Self> {
-        let (adt, substs) = get_builtin_adt(entry_point.mcx.tcx, ty, "Output")?;
+    fn new<'a>(tcx: TyCtxt<'a, 'tcx, 'tcx>, ty: Ty<'tcx>) -> Option<Self> {
+        let (adt, substs) = get_builtin_adt(tcx, ty, "Output")?;
         let f = adt.all_fields().collect_vec();
         let fields: Vec<_> = adt.all_fields()
-            .map(|field| field.ty(entry_point.mcx.tcx, substs))
+            .map(|field| field.ty(tcx, substs))
             .collect();
         assert!(fields.len() == 2, "Output should have two fields");
         let location_ty = fields[1];
-        let location =
-            extract_location(entry_point.mcx.tcx, location_ty).expect("Unable to extract location");
+        let location = extract_location(tcx, location_ty).expect("Unable to extract location");
         Some(Output { ty, location })
     }
 }
 
 impl<'tcx> Descriptor<'tcx> {
-    fn new<'a>(entry_point: &EntryPoint<'a, 'tcx>, ty: Ty<'tcx>) -> Option<Self> {
-        let (adt, substs) = get_builtin_adt(entry_point.mcx.tcx, ty, "Descriptor")?;
+    fn new<'a>(tcx: TyCtxt<'a, 'tcx, 'tcx>, ty: Ty<'tcx>) -> Option<Self> {
+        let (adt, substs) = get_builtin_adt(tcx, ty, "Descriptor")?;
         let f = adt.all_fields().collect_vec();
         let fields: Vec<_> = adt.all_fields()
-            .map(|field| field.ty(entry_point.mcx.tcx, substs))
+            .map(|field| field.ty(tcx, substs))
             .collect();
         assert_eq!(fields.len(), 3, "Descriptor should have 3 fields");
         let binding_ty = fields[1];
         let set_ty = fields[2];
-        let binding =
-            extract_location(entry_point.mcx.tcx, binding_ty).expect("Unable to extract location");
-        let set =
-            extract_location(entry_point.mcx.tcx, set_ty).expect("Unable to extract location");
+        let binding = extract_location(tcx, binding_ty).expect("Unable to extract location");
+        let set = extract_location(tcx, set_ty).expect("Unable to extract location");
         Some(Descriptor { ty, binding, set })
     }
 }
@@ -330,20 +327,22 @@ impl<'tcx> Layout<'tcx> {
     pub fn size(&self) -> usize {
         self.size_impl().0
     }
+
     pub fn offsets(&self) -> Vec<usize> {
         self.size_impl().1
     }
-    pub fn size_impl(&self) -> (usize, Vec<usize>) {
+
+    fn size_impl(&self) -> (usize, Vec<usize>) {
         match *self {
             Layout::Single(single) => (single.size, Vec::new()),
             Layout::Composition(ref comp) => {
                 let mut offset = 0;
                 let offsets = comp.iter()
                     .map(|layout| {
-                        offset = layout.offset(offset);
-                        let old_offset = offset;
-                        offset += layout.size();
-                        old_offset
+                        let align = layout.align();
+                        let aligned_offset = (align - (offset % align)) % align + offset;
+                        offset = aligned_offset + layout.size();
+                        aligned_offset
                     })
                     .collect_vec();
                 (offset, offsets)
@@ -360,18 +359,6 @@ impl<'tcx> Layout<'tcx> {
             }
         }
     }
-
-    pub fn single(&self) -> Option<SingleLayout<'tcx>> {
-        match *self {
-            Layout::Single(single) => Some(single),
-            _ => None,
-        }
-    }
-
-    pub fn offset(&self, starting_offset: usize) -> usize {
-        let align = self.align();
-        (align - (starting_offset % align)) % align + starting_offset
-    }
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -381,7 +368,7 @@ pub struct SingleLayout<'tcx> {
     pub align: usize,
 }
 use syntax::ast;
-pub fn std140_layout<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, ty: Ty<'tcx>) -> Layout<'tcx> {
+pub fn std140_layout<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, ty: Ty<'tcx>) -> Option<Layout<'tcx>> {
     if let Some(intrinsic) = IntrinsicType::from_ty(tcx, ty) {
         match intrinsic {
             IntrinsicType::TyVec(ty_vec) => {
@@ -391,13 +378,14 @@ pub fn std140_layout<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, ty: Ty<'tcx>) -> Lay
                     4 => 4,
                     _ => unreachable!(),
                 };
-                let inner_layout = std140_layout(tcx, ty_vec.ty);
-                let single = SingleLayout {
-                    ty,
-                    size: inner_layout.size() * ty_vec.dim,
-                    align: inner_layout.align() * multiplier,
-                };
-                return Layout::Single(single);
+                return std140_layout(tcx, ty_vec.ty).map(|inner_layout| {
+                    let single = SingleLayout {
+                        ty,
+                        size: inner_layout.size() * ty_vec.dim,
+                        align: inner_layout.align() * multiplier,
+                    };
+                    Layout::Single(single)
+                });
             }
         }
     }
@@ -410,21 +398,23 @@ pub fn std140_layout<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, ty: Ty<'tcx>) -> Lay
                 size: 4,
                 align: 4,
             };
-            Layout::Single(single)
+            Some(Layout::Single(single))
         }
         TypeVariants::TyAdt(adt, substs) => {
             if adt.is_struct() {
                 let comp = adt.all_fields()
                     .map(|field| field.ty(tcx, substs))
                     .filter(|ty| !ty.is_phantom_data())
-                    .map(|ty| Box::new(std140_layout(tcx, ty)))
+                    .map(|ty| {
+                        Box::new(std140_layout(tcx, ty).expect("No layout inside Composition"))
+                    })
                     .collect_vec();
-                Layout::Composition(comp)
+                Some(Layout::Composition(comp))
             } else {
-                unimplemented!()
+                None
             }
         }
-        ref rest => unimplemented!("{:?}", rest),
+        _ => None,
     }
 }
 impl<'tcx> Entry<'tcx, Descriptor<'tcx>> {
@@ -436,7 +426,7 @@ impl<'tcx> Entry<'tcx, Descriptor<'tcx>> {
             .iter()
             .flat_map(EntryPoint::descriptor_iter)
             .collect();
-        Self::create(set, stx, spirv::StorageClass::UniformConstant)
+        Self::create(set, stx, spirv::StorageClass::Uniform)
     }
 
     fn variable_iter<'borrow, 'a>(
@@ -449,7 +439,7 @@ impl<'tcx> Entry<'tcx, Descriptor<'tcx>> {
             .args_iter()
             .filter_map(move |local| {
                 let ty = entry.mcx.mir.local_decls[local].ty;
-                Descriptor::new(entry, ty).map(|input| (local, input))
+                Descriptor::new(entry.mcx.tcx, ty).map(|input| (local, input))
             })
             .map(move |(local, descriptor)| {
                 (
@@ -501,7 +491,7 @@ impl<'tcx> Entry<'tcx, Output<'tcx>> {
         entry: &'borrow EntryPoint<'a, 'tcx>,
     ) -> impl Iterator<Item = (mir::Local, GlobalVar<'tcx>)> + 'borrow {
         let ty = entry.mcx.mir.return_ty();
-        let output = Output::new(entry, ty).expect("Should be output");
+        let output = Output::new(entry.mcx.tcx, ty).expect("Should be output");
         Some((
             mir::Local::new(0),
             *self.global_vars.get(&output).expect("Entry compute"),
@@ -884,7 +874,6 @@ impl<'b, 'a, 'tcx: 'a> RlslVisitor<'b, 'a, 'tcx> {
         entry_descriptor: &Entry<'tcx, Descriptor<'tcx>>,
         scx: &mut SpirvCtx<'a, 'tcx>,
     ) {
-        println!("{:?}", entry_descriptor);
         use mir::visit::Visitor;
         let def_id = entry_point.mcx.def_id;
         let mir = entry_point.mcx.mir;
@@ -917,9 +906,40 @@ impl<'b, 'a, 'tcx: 'a> RlslVisitor<'b, 'a, 'tcx> {
             )
             .expect("begin fn");
         scx.builder.begin_basic_block(None).expect("block");
+        entry_point.descriptor_iter().for_each(|input| {
+            if let TypeVariants::TyAdt(adt, substs) = input.ty.sty {
+                let ty = adt.all_fields()
+                    .nth(0)
+                    .expect("field")
+                    .ty(entry_point.mcx.tcx, substs);
+                let layout = ::std140_layout(entry_point.mcx.tcx, ty);
+                // println!(
+                //     "ty {:?} {} {} {:?}",
+                //     input.ty,
+                //     layout.size(),
+                //     layout.align(),
+                //     layout.offsets()
+                // );
+            }
+        });
         let inputs_iter = entry_input.variable_iter(&entry_point);
         let output_iter = entry_output.variable_iter(&entry_point);
         let descriptor_iter = entry_descriptor.variable_iter(&entry_point);
+        entry_descriptor
+            .global_vars
+            .iter()
+            .for_each(|(descriptor, global)| {
+                scx.builder.decorate(
+                    global.var,
+                    spirv::Decoration::DescriptorSet,
+                    &[rspirv::mr::Operand::LiteralInt32(descriptor.set)],
+                );
+                scx.builder.decorate(
+                    global.var,
+                    spirv::Decoration::Binding,
+                    &[rspirv::mr::Operand::LiteralInt32(descriptor.binding)],
+                );
+            });
         let mut variable_map: HashMap<mir::Local, SpirvVar<'tcx>> = inputs_iter
             .chain(output_iter)
             .chain(descriptor_iter)
@@ -930,6 +950,9 @@ impl<'b, 'a, 'tcx: 'a> RlslVisitor<'b, 'a, 'tcx> {
                 )
             })
             .collect();
+
+        //let descriptor_iter = entry_descriptor.variable_iter(&entry_point);
+
         // println!("{:?}", outputs);
         // Build the variable map from the global input variables
         // entry_point;
@@ -1205,6 +1228,13 @@ impl<'b, 'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'b, 'a, 
         location: mir::Location,
     ) {
         self.super_assign(block, lvalue, rvalue, location);
+        let lvalue_ty = lvalue
+            .ty(&self.mcx.mir.local_decls, self.scx.tcx)
+            .to_ty(self.scx.tcx);
+        let lvalue_ty = self.mcx.monomorphize(&lvalue_ty);
+        if lvalue_ty.is_phantom_data(){
+            return;
+        }
         let ty = rvalue.ty(&self.mcx.mir.local_decls, self.scx.tcx);
         if let TypeVariants::TyTuple(ref slice, _) = ty.sty {
             if slice.len() == 0 {
@@ -1213,10 +1243,6 @@ impl<'b, 'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'b, 'a, 
         }
         let ty = self.mcx.monomorphize(&ty);
         let spirv_ty = self.to_ty_fn(ty);
-        let lvalue_ty = lvalue
-            .ty(&self.mcx.mir.local_decls, self.scx.tcx)
-            .to_ty(self.scx.tcx);
-        let lvalue_ty = self.mcx.monomorphize(&lvalue_ty);
         let lvalue_ty_spirv = self.to_ty_fn(lvalue_ty);
         let expr = match rvalue {
             &mir::Rvalue::BinaryOp(op, ref l, ref r)

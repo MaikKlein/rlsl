@@ -135,7 +135,7 @@ fn main() {
     args.extend_from_slice(&["-L".into(), l]);
     //args.extend_from_slice(&["--cfg".into(), "spirv".into()]);
     args.extend_from_slice(&["-Z".into(), "always-encode-mir".into()]);
-    //args.extend_from_slice(&["-Z".into(), "mir-opt-level=3".into()]);
+    args.extend_from_slice(&["-Z".into(), "mir-opt-level=3".into()]);
     let mut calls = RlslCompilerCalls;
     let _ = run(move || run_compiler(&args, &mut calls, None, None));
 }

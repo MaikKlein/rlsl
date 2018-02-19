@@ -30,6 +30,12 @@ impl<'a, 'tcx> SpirvCtx<'a, 'tcx> {
                     .expect("fadd");
                 SpirvValue(add)
             }
+            mir::BinOp::Sub => {
+                let add = self.builder
+                    .fsub(spirv_ty.word, None, left, right)
+                    .expect("fsub");
+                SpirvValue(add)
+            }
             mir::BinOp::Gt => {
                 let gt = self.builder
                     .ugreater_than(spirv_ty.word, None, left, right)
