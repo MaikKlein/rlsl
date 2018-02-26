@@ -4,13 +4,14 @@
 #![feature(conservative_impl_trait)]
 #![feature(rustc_diagnostic_macros)]
 
+extern crate byteorder;
+
 extern crate arena;
 extern crate env_logger;
 extern crate getopts;
 extern crate itertools;
 extern crate log;
 extern crate rspirv;
-#[macro_use]
 extern crate rustc;
 extern crate rustc_borrowck;
 extern crate rustc_const_math;
@@ -22,14 +23,13 @@ extern crate rustc_mir;
 extern crate rustc_passes;
 extern crate rustc_plugin;
 extern crate rustc_resolve;
-#[macro_use]
 extern crate rustc_typeck;
 extern crate spirv_headers as spirv;
 #[macro_use]
 extern crate syntax;
 extern crate syntax_pos;
 pub mod trans;
-use rustc::ty::layout::{HasDataLayout, LayoutOf, TargetDataLayout, TyLayout};
+use rustc::ty::layout::LayoutOf;
 use rustc_data_structures::indexed_vec::Idx;
 use std::collections::HashMap;
 use rustc::{hir, mir};
@@ -37,7 +37,6 @@ use rustc_data_structures::fx::FxHashSet;
 use rustc::mir::mono::MonoItem;
 use rustc::ty::{Binder, Instance, ParamEnv, Ty, TyCtxt, TypeVariants, TypeckTables};
 use rustc::mir::visit::{TyContext, Visitor};
-use syntax_pos::DUMMY_SP;
 pub mod context;
 pub mod ty;
 pub mod collector;
@@ -52,6 +51,13 @@ pub enum IntrinsicFn {
 }
 register_diagnostics! {
     E1337,
+}
+
+pub fn remove_ptr_ty<'tcx>(ty: Ty<'tcx>) -> Ty<'tcx> {
+    match ty.sty {
+        TypeVariants::TyRef(_, type_and_mut) => remove_ptr_ty(type_and_mut.ty),
+        _ => ty,
+    }
 }
 
 pub struct TyErrorVisitor {
@@ -525,6 +531,7 @@ pub struct RlslVisitor<'b, 'a: 'b, 'tcx: 'a> {
     pub constants: HashMap<mir::Constant<'tcx>, SpirvVar<'tcx>>,
     pub label_blocks: HashMap<mir::BasicBlock, SpirvLabel>,
     pub vars: HashMap<mir::Local, SpirvVar<'tcx>>,
+    pub references: HashMap<mir::Place<'tcx>, mir::Place<'tcx>>,
     pub instance_ty: InstanceType,
 }
 
@@ -604,13 +611,13 @@ where
         .collect::<Vec<_>>()
 }
 
-#[repr(u32)]
-pub enum GlslExtId {
-    Round = 1,
-    Sqrt = 31,
-    Sin = 13,
-    Cos = 14,
-}
+// #[repr(u32)]
+// pub enum GlslExtId {
+//     Round = 1,
+//     Sqrt = 31,
+//     Sin = 13,
+//     Cos = 14,
+// }
 
 pub enum SpirvFunctionCall {
     Function(SpirvFn),
@@ -621,11 +628,6 @@ pub fn trans_spirv<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, items: &'a FxHashSet<M
     use rustc::mir::visit::Visitor;
     //struct_span_err!(tcx.sess, DUMMY_SP, E1337, "Test not allowed").emit();
 
-    // let entry_fn = tcx.sess
-    //     .entry_fn
-    //     .borrow()
-    //     .map(|(node_id, _)| tcx.hir.local_def_id(node_id))
-    //     .expect("entry");
     let mut ctx = SpirvCtx::new(tcx);
     items
         .iter()
@@ -636,19 +638,14 @@ pub fn trans_spirv<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, items: &'a FxHashSet<M
             None
         })
         .for_each(|instance| {
-            //            let a = tcx.def_path(instance.def_id())
-            //                .data
-            //                .into_iter()
-            //                .map(|elem| elem.data.to_string())
-            //                .collect::<Vec<_>>();
-            //let a = hir.as_local_node_id(instance.def_id()).map(|n| tcx.node_path_str(n));
-            //println!("a = {:?}", a);
             if tcx.is_foreign_item(instance.def_id()) {
                 let intrinsic_name = &*tcx.item_name(instance.def_id());
+                use spirv::GLOp::*;
                 let id = match intrinsic_name {
-                    "sqrtf32" => Some(GlslExtId::Sqrt),
-                    "sinf32" => Some(GlslExtId::Sin),
-                    "cosf32" => Some(GlslExtId::Cos),
+                    "sqrtf32" => Some(Sqrt),
+                    "sinf32" => Some(Sin),
+                    "cosf32" => Some(Cos),
+                    "absf32" => Some(FAbs),
                     _ => None,
                 };
                 if let Some(id) = id {
@@ -681,6 +678,13 @@ pub fn trans_spirv<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, items: &'a FxHashSet<M
             None
         })
         .collect();
+    // write_dot(&instances);
+    instances.iter().for_each(|mcx| {
+        //println!("{:?}", mcx.def_id);
+        // println!("{}", mcx.tcx.def_symbol_name(mcx.def_id));
+        // println!("{}", mcx.tcx.item_name(mcx.def_id));
+        //println!("{:#?}", mcx.mir);
+    });
 
     if TyErrorVisitor::has_error(&instances) {
         return;
@@ -764,14 +768,89 @@ impl AccessChain {
     }
 }
 
-impl<'b, 'a, 'tcx: 'a> RlslVisitor<'b, 'a, 'tcx> {
+fn write_dot(mcxs: &[MirContext]) {
+    use std::fs::File;
+    use std::io::Write;
+    use rustc_mir::util::write_mir_fn_graphviz;
+    let path = std::env::current_dir().expect("dir").join("shader.dot");
+    let mut file = File::create(&path).expect("file");
+    for mcx in mcxs {
+        write_mir_fn_graphviz(mcx.tcx, mcx.def_id, mcx.mir, &mut file);
+    }
+}
+
+use rustc::middle::const_val::ConstVal;
+impl<'b, 'a, 'tcx> RlslVisitor<'b, 'a, 'tcx> {
+    pub fn load_operand<'r>(&mut self, operand: &'r mir::Operand<'tcx>) -> SpirvOperand<'tcx> {
+        let mir = self.mcx.mir;
+        let mcx = self.mcx;
+        let local_decls = &mir.local_decls;
+        let ty = operand.ty(local_decls, self.mcx.tcx);
+        let ty = mcx.monomorphize(&ty);
+        let spirv_ty = self.to_ty_fn(ty);
+        match operand {
+            &mir::Operand::Copy(ref place) | &mir::Operand::Move(ref place) => {
+                if let Some(ref_place) = self.references.get(place).map(|p| p.clone()) {
+                    let access_chain = AccessChain::compute(&ref_place);
+                    assert!(
+                        access_chain.indices.len() == 0,
+                        "Access chain should be empty"
+                    );
+                    let spirv_var = *self.vars.get(&access_chain.base).expect("Local");
+                    SpirvOperand::new(ty, SpirvOperandVariant::Variable(spirv_var))
+                } else {
+                    let access_chain = AccessChain::compute(place);
+                    let spirv_var = *self.vars.get(&access_chain.base).expect("Local");
+                    if access_chain.indices.is_empty() {
+                        SpirvOperand::new(ty, SpirvOperandVariant::Variable(spirv_var))
+                    } else {
+                        let spirv_ty_ptr = self.scx.to_ty_as_ptr(ty, spirv_var.storage_class);
+                        let indices: Vec<_> = access_chain
+                            .indices
+                            .iter()
+                            .map(|&i| self.scx.constant_u32(mcx, i as u32).0)
+                            .collect();
+                        let access = self.scx
+                            .builder
+                            .access_chain(spirv_ty_ptr.word, None, spirv_var.word, &indices)
+                            .expect("access_chain");
+                        let load = self.scx
+                            .builder
+                            .load(spirv_ty.word, None, access, None, &[])
+                            .expect("load");
+                        SpirvOperand::new(ty, SpirvOperandVariant::Value(SpirvValue(load)))
+                    }
+                }
+            }
+            &mir::Operand::Constant(ref constant) => match constant.literal {
+                mir::Literal::Value { ref value } => {
+                    let expr = match value.val {
+                        ConstVal::Float(f) => {
+                            let val = SpirvConstVal::Float(f);
+                            self.scx.constant(mcx, val)
+                        }
+                        ConstVal::Integral(int) => {
+                            let val = SpirvConstVal::Integer(int);
+                            self.scx.constant(mcx, val)
+                        }
+                        ConstVal::Bool(b) => {
+                            let val = SpirvConstVal::Bool(b);
+                            self.scx.constant(mcx, val)
+                        }
+                        ref rest => unimplemented!("{:?}", rest),
+                    };
+                    SpirvOperand::new(ty, SpirvOperandVariant::Value(expr))
+                }
+                ref rest => unimplemented!("{:?}", rest),
+            },
+        }
+    }
     pub fn trans_fn(mcx: MirContext<'a, 'tcx>, scx: &mut SpirvCtx<'a, 'tcx>) {
         use mir::visit::Visitor;
         let ret_ty = mcx.monomorphize(&mcx.mir.return_ty());
         let ret_ty_spirv = scx.to_ty_fn(ret_ty);
         let def_id = mcx.def_id;
 
-        // If a param is not a ptr, we need to turn it into a ptr
         let args_ty: Vec<_> = mcx.mir
             .args_iter()
             .map(|l| mcx.monomorphize(&mcx.mir.local_decls[l].ty))
@@ -824,25 +903,30 @@ impl<'b, 'a, 'tcx: 'a> RlslVisitor<'b, 'a, 'tcx> {
                 let local_arg = mir::Local::new(index + 1);
                 let local_decl = &mcx.mir.local_decls[local_arg];
                 let local_ty = mcx.monomorphize(&local_decl.ty);
-                let spirv_var_ty = scx.to_ty_as_ptr_fn(local_ty);
-                let spirv_var = scx.builder.variable(
-                    spirv_var_ty.word,
-                    None,
-                    spirv::StorageClass::Function,
-                    None,
-                );
-                scx.builder
-                    .store(spirv_var, param, None, &[])
-                    .expect("store");
-                (
-                    local_arg,
+                let spirv_var = if is_ptr(local_ty) {
+                    // If the parameter is a pointer, we pass the variable directly
+                    SpirvVar::new(param, true, local_decl.ty, spirv::StorageClass::Function)
+                } else {
+                    // Otherwise we need to allocate a new variable because a non ptr type can not
+                    // be accessed with `OpAccessChain`
+                    let spirv_var_ty = scx.to_ty_as_ptr_fn(local_ty);
+                    let spirv_var = scx.builder.variable(
+                        spirv_var_ty.word,
+                        None,
+                        spirv::StorageClass::Function,
+                        None,
+                    );
+                    scx.builder
+                        .store(spirv_var, param, None, &[])
+                        .expect("store");
                     SpirvVar::new(
                         spirv_var,
-                        false,
+                        true,
                         local_decl.ty,
                         spirv::StorageClass::Function,
-                    ),
-                )
+                    )
+                };
+                (local_arg, spirv_var)
             })
             .collect();
         {
@@ -882,6 +966,10 @@ impl<'b, 'a, 'tcx: 'a> RlslVisitor<'b, 'a, 'tcx> {
             let first_local = mir::Local::new(1);
             let per_vertex = scx.get_per_vertex(mir.local_decls[first_local].ty);
         }
+        if entry_point.entry_type == IntrinsicEntry::Fragment {
+            let first_local = mir::Local::new(1);
+            let per_fragment = scx.get_per_fragment(mir.local_decls[first_local].ty);
+        }
         let void = scx.tcx.mk_nil();
         let fn_sig = scx.tcx.mk_fn_sig(
             [].into_iter(),
@@ -913,13 +1001,6 @@ impl<'b, 'a, 'tcx: 'a> RlslVisitor<'b, 'a, 'tcx> {
                     .expect("field")
                     .ty(entry_point.mcx.tcx, substs);
                 let layout = ::std140_layout(entry_point.mcx.tcx, ty);
-                // println!(
-                //     "ty {:?} {} {} {:?}",
-                //     input.ty,
-                //     layout.size(),
-                //     layout.align(),
-                //     layout.offsets()
-                // );
             }
         });
         let inputs_iter = entry_input.variable_iter(&entry_point);
@@ -973,6 +1054,11 @@ impl<'b, 'a, 'tcx: 'a> RlslVisitor<'b, 'a, 'tcx> {
             let first_local = mir::Local::new(1);
             let per_vertex = scx.get_per_vertex(mir.local_decls[first_local].ty);
             variable_map.insert(first_local, per_vertex);
+        }
+        if entry_point.entry_type == IntrinsicEntry::Fragment {
+            let first_local = mir::Local::new(1);
+            let per_fragment = scx.get_per_fragment(mir.local_decls[first_local].ty);
+            variable_map.insert(first_local, per_fragment);
         }
         let outputs = entry_output
             .variable_iter(entry_point)
@@ -1053,9 +1139,16 @@ impl<'b, 'a, 'tcx: 'a> RlslVisitor<'b, 'a, 'tcx> {
             .collect();
         let mut local_vars: HashMap<_, _> = mcx.mir
             .vars_and_temps_iter()
+            .filter(|&local_var| {
+                // Don't generate variables for ptrs
+                let local_decl = &mcx.mir.local_decls[local_var];
+                let local_ty = mcx.monomorphize(&local_decl.ty);
+                !is_ptr(local_ty)
+            })
             .map(|local_var| {
                 let local_decl = &mcx.mir.local_decls[local_var];
                 let local_ty = mcx.monomorphize(&local_decl.ty);
+                let local_ty = remove_ptr_ty(local_ty);
                 let spirv_var_ty = scx.to_ty_as_ptr_fn(local_ty);
                 let spirv_var = scx.builder.variable(
                     spirv_var_ty.word,
@@ -1092,6 +1185,7 @@ impl<'b, 'a, 'tcx: 'a> RlslVisitor<'b, 'a, 'tcx> {
             constants: HashMap::new(),
             label_blocks,
             vars: variable_map,
+            references: HashMap::new(),
         };
         visitor
     }
@@ -1099,6 +1193,7 @@ impl<'b, 'a, 'tcx: 'a> RlslVisitor<'b, 'a, 'tcx> {
 fn is_ptr(ty: Ty) -> bool {
     ty.is_unsafe_ptr() || ty.is_mutable_pointer() || ty.is_region_ptr()
 }
+
 // TODO: More than two cases
 pub fn find_merge_block(
     mir: &mir::Mir,
@@ -1157,7 +1252,7 @@ impl<'tcx> Monomorphize<'tcx> for Ty<'tcx> {
     }
 }
 
-impl<'b, 'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'b, 'a, 'tcx> {
+impl<'b, 'a, 'tcx> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'b, 'a, 'tcx> {
     fn visit_basic_block_data(&mut self, block: mir::BasicBlock, data: &mir::BasicBlockData<'tcx>) {
         {
             let spirv_label = self.label_blocks.get(&block).expect("no spirv label");
@@ -1168,6 +1263,10 @@ impl<'b, 'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'b, 'a, 
         }
 
         self.super_basic_block_data(block, data);
+    }
+    fn visit_ty(&mut self, ty: &Ty<'tcx>, _: TyContext) {
+        self.super_ty(ty);
+        //println!("{:?}", ty);
     }
     fn visit_statement(
         &mut self,
@@ -1232,7 +1331,7 @@ impl<'b, 'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'b, 'a, 
             .ty(&self.mcx.mir.local_decls, self.scx.tcx)
             .to_ty(self.scx.tcx);
         let lvalue_ty = self.mcx.monomorphize(&lvalue_ty);
-        if lvalue_ty.is_phantom_data(){
+        if lvalue_ty.is_phantom_data() || lvalue_ty.is_nil() {
             return;
         }
         let ty = rvalue.ty(&self.mcx.mir.local_decls, self.scx.tcx);
@@ -1244,23 +1343,19 @@ impl<'b, 'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'b, 'a, 
         let ty = self.mcx.monomorphize(&ty);
         let spirv_ty = self.to_ty_fn(ty);
         let lvalue_ty_spirv = self.to_ty_fn(lvalue_ty);
+        if let &mir::Rvalue::Ref(_, _, ref place) = rvalue {
+            assert!(is_ptr(lvalue_ty), "LValue should be a ptr");
+            self.references.insert(lvalue.clone(), place.clone());
+            // Don't do anything
+            return;
+        }
         let expr = match rvalue {
             &mir::Rvalue::BinaryOp(op, ref l, ref r)
-            | &mir::Rvalue::CheckedBinaryOp(op, ref l, ref r) => {
-                self.scx.binary_op(self.mcx, &self.vars, spirv_ty, op, l, r)
-            }
+            | &mir::Rvalue::CheckedBinaryOp(op, ref l, ref r) => self.binary_op(spirv_ty, op, l, r),
             &mir::Rvalue::Use(ref operand) => {
-                let is_ptr = lvalue_ty.is_unsafe_ptr() || lvalue_ty.is_mutable_pointer()
-                    || lvalue_ty.is_region_ptr();
-
-                let operand = self.scx.load_operand(self.mcx, &self.vars, operand);
-                if is_ptr && operand.is_param() {
-                    SpirvValue(operand.expect_var().word)
-                } else {
-                    let load = operand.load_raw(&mut self.scx, spirv_ty);
-                    let expr = SpirvValue(load);
-                    expr
-                }
+                let load = self.load_operand(operand).load(self.scx);
+                let expr = SpirvValue(load);
+                expr
             }
 
             //            &mir::Rvalue::NullaryOp(..) => {}
@@ -1282,11 +1377,7 @@ impl<'b, 'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'b, 'a, 
                             None
                         } else {
                             let spirv_ty = self.to_ty_fn(ty);
-                            Some(
-                                self.scx
-                                    .load_operand(self.mcx, &self.vars, op)
-                                    .load_raw(self.scx, spirv_ty),
-                            )
+                            Some(self.load_operand(op).load(self.scx))
                         }
                     })
                     .collect();
@@ -1296,23 +1387,6 @@ impl<'b, 'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'b, 'a, 
                         .composite_construct(lvalue_ty_spirv.word, None, &spirv_operands)
                         .expect("composite"),
                 )
-            }
-            &mir::Rvalue::Ref(_, _, ref lvalue) => {
-                let is_ptr = lvalue_ty.is_unsafe_ptr() || lvalue_ty.is_mutable_pointer()
-                    || lvalue_ty.is_region_ptr();
-                match lvalue {
-                    &mir::Place::Local(local) => {
-                        let var = self.vars.get(&local).expect("no local");
-                        if is_ptr {
-                            //self.ctx.builder.load(self.ctx.from_ty(var.ty))
-                            // TODO
-                            SpirvValue(var.word)
-                        } else {
-                            SpirvValue(var.word)
-                        }
-                    }
-                    rest => unimplemented!("{:?}", rest),
-                }
             }
             &mir::Rvalue::Discriminant(ref lvalue) => {
                 let local = match lvalue {
@@ -1463,9 +1537,7 @@ impl<'b, 'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'b, 'a, 
                 let mir = self.mcx.mir;
                 let spirv_ty = self.to_ty_fn(switch_ty);
                 let selector = if switch_ty.is_bool() {
-                    let load = self.scx
-                        .load_operand(self.mcx, &self.vars, discr)
-                        .load_raw(self.scx, spirv_ty);
+                    let load = self.load_operand(discr).load(self.scx);
                     let target_ty = self.mcx.tcx.mk_mach_uint(syntax::ast::UintTy::U32);
                     let target_ty_spirv = self.to_ty_fn(target_ty);
                     self.scx
@@ -1473,9 +1545,7 @@ impl<'b, 'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'b, 'a, 
                         .bitcast(target_ty_spirv.word, None, load)
                         .expect("bitcast")
                 } else {
-                    self.scx
-                        .load_operand(self.mcx, &self.vars, discr)
-                        .load_raw(self.scx, spirv_ty)
+                    self.load_operand(discr).load(self.scx)
                 };
                 let default_label = *self.label_blocks
                     .get(targets.last().unwrap())
@@ -1509,10 +1579,13 @@ impl<'b, 'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'b, 'a, 
                 ref destination,
                 ..
             } => {
+                use syntax::abi::Abi;
                 let local_decls = &self.mcx.mir.local_decls;
                 match func {
                     &mir::Operand::Constant(ref constant) => {
-                        let ret_ty_binder = constant.ty.fn_sig(self.scx.tcx).output();
+                        let fn_sig = constant.ty.fn_sig(self.scx.tcx);
+                        let abi = fn_sig.abi();
+                        let ret_ty_binder = fn_sig.output();
                         let ret_ty = ret_ty_binder.skip_binder();
                         let ret_ty = self.mcx.monomorphize(ret_ty);
                         let spirv_ty = self.to_ty_fn(ret_ty);
@@ -1525,23 +1598,85 @@ impl<'b, 'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'b, 'a, 
                                     ParamEnv::empty(rustc::traits::Reveal::All),
                                     def_id,
                                     &mono_substs,
-                                ).unwrap();
-                                let arg_operand_loads: Vec<_> = args.iter()
-                                    .map(|arg| {
-                                        let operand =
-                                            self.scx.load_operand(self.mcx, &self.vars, arg);
-                                        let arg_ty = arg.ty(local_decls, self.scx.tcx);
-                                        let arg_ty = self.mcx.monomorphize(&arg_ty);
-                                        let arg_ty_spirv = self.to_ty_fn(arg_ty);
-                                        operand.load_raw(&mut self.scx, arg_ty_spirv)
-                                    })
-                                    .collect();
+                                ).expect("resolve instance call");
                                 let fn_call = self.scx
                                     .get_function_call(
                                         resolve_instance.def_id(),
                                         resolve_instance.substs,
                                     )
                                     .expect("function call");
+                                let args_ty = args.iter()
+                                    .map(|arg| {
+                                        let ty = arg.ty(local_decls, self.mcx.tcx);
+                                        ty
+                                    })
+                                    .collect_vec();
+                                // Split the rust-call tupled arguments off.
+                                let (first_args, untuple) =
+                                    if abi == Abi::RustCall && !args.is_empty() {
+                                        let (tup, args) = args.split_last().unwrap();
+                                        (args, Some(tup))
+                                    } else {
+                                        (&args[..], None)
+                                    };
+                                let mut arg_operand_loads: Vec<_> = first_args
+                                    .iter()
+                                    .map(|operand| {
+                                        let ty = operand.ty(local_decls, self.mcx.tcx);
+                                        let ty = self.mcx.monomorphize(&ty);
+                                        let spirv_operand = self.load_operand(operand);
+                                        if is_ptr(ty) {
+                                            spirv_operand
+                                                .to_variable()
+                                                .expect("should be a variable")
+                                                .word
+                                        } else {
+                                            spirv_operand.load(self.scx)
+                                        }
+                                    })
+                                    .collect();
+                                if let Some(tup) = untuple {
+                                    let ty = tup.ty(local_decls, self.mcx.tcx);
+                                    let ty = self.mcx.monomorphize(&ty);
+                                    let spirv_ty_ptr = self.to_ty_as_ptr_fn(ty);
+                                    let tuple_var = self.load_operand(tup)
+                                        .to_variable()
+                                        .expect("Should be a variable");
+                                    match ty.sty {
+                                        TypeVariants::TyTuple(slice, b) => {
+                                            let tuple_iter =
+                                                slice.iter().enumerate().map(|(idx, field_ty)| {
+                                                    let field_ty_spv = self.to_ty_fn(field_ty);
+                                                    let field_ty_ptr_spv =
+                                                        self.to_ty_as_ptr_fn(field_ty);
+                                                    let spirv_idx = self.constant_u32(idx as u32).0;
+                                                    let field = self.scx
+                                                        .builder
+                                                        .access_chain(
+                                                            field_ty_ptr_spv.word,
+                                                            None,
+                                                            tuple_var.word,
+                                                            &[spirv_idx],
+                                                        )
+                                                        .expect("access chain");
+                                                    self.scx
+                                                        .builder
+                                                        .load(
+                                                            field_ty_spv.word,
+                                                            None,
+                                                            field,
+                                                            None,
+                                                            &[],
+                                                        )
+                                                        .expect("load")
+                                                });
+                                            arg_operand_loads.extend(tuple_iter);
+                                        }
+                                        _ => panic!("tup"),
+                                    }
+                                }
+                                // println!("{:?}", args_ty);
+                                // println!("{:?}", arg_operand_loads);
                                 let spirv_fn_call = match fn_call {
                                     SpirvFunctionCall::Function(spirv_fn) => {
                                         let fn_call = self.scx
@@ -1575,20 +1710,23 @@ impl<'b, 'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'b, 'a, 
                                         }
                                     },
                                 };
-                                if let (&Some(ref dest), Some(spirv_fn_call)) =
-                                    (destination, spirv_fn_call)
-                                {
-                                    let &(ref lvalue, _) = dest;
-                                    match lvalue {
-                                        &mir::Place::Local(local) => {
-                                            let var = self.vars.get(&local).expect("local");
-                                            self.scx
-                                                .builder
-                                                .store(var.word, spirv_fn_call, None, &[])
-                                                .expect("store");
-                                        }
-                                        rest => unimplemented!("{:?}", rest),
-                                    };
+                                // only write op store if the result is not nil
+                                if !ret_ty.is_nil() {
+                                    if let (&Some(ref dest), Some(spirv_fn_call)) =
+                                        (destination, spirv_fn_call)
+                                    {
+                                        let &(ref lvalue, _) = dest;
+                                        match lvalue {
+                                            &mir::Place::Local(local) => {
+                                                let var = self.vars.get(&local).expect("local");
+                                                self.scx
+                                                    .builder
+                                                    .store(var.word, spirv_fn_call, None, &[])
+                                                    .expect("store");
+                                            }
+                                            rest => unimplemented!("{:?}", rest),
+                                        };
+                                    }
                                 }
                             }
                         }
@@ -1612,7 +1750,84 @@ impl<'b, 'a, 'tcx: 'a> rustc::mir::visit::Visitor<'tcx> for RlslVisitor<'b, 'a, 
                 let target_label = self.label_blocks.get(&target).expect("no label");
                 self.scx.builder.branch(target_label.0).expect("label");
             }
+            &mir::TerminatorKind::Resume | &mir::TerminatorKind::Unreachable => {
+                // println!("block {:#?}", self.mcx.mir.basic_blocks()[block]);
+                // let target_label = self.label_blocks.get(&block).expect("no label");
+                // self.scx.builder.branch(target_label.0).expect("resume");
+                self.scx.builder.unreachable();
+            }
             rest => unimplemented!("{:?}", rest),
         };
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum SpirvRvalue {
+}
+
+impl<'b, 'a, 'tcx> RlslVisitor<'b, 'a, 'tcx> {
+    pub fn binary_op(
+        &mut self,
+        spirv_ty: SpirvTy,
+        op: mir::BinOp,
+        l: &mir::Operand<'tcx>,
+        r: &mir::Operand<'tcx>,
+    ) -> SpirvValue {
+        // TODO: Different types
+        let left = self.load_operand(l).load(self.scx);
+        let right = self.load_operand(r).load(self.scx);
+        // TODO: Impl ops
+        match op {
+            mir::BinOp::Mul => {
+                let add = self.scx
+                    .builder
+                    .fmul(spirv_ty.word, None, left, right)
+                    .expect("fmul");
+                SpirvValue(add)
+            }
+            mir::BinOp::Add => {
+                let add = self.scx
+                    .builder
+                    .fadd(spirv_ty.word, None, left, right)
+                    .expect("fadd");
+                SpirvValue(add)
+            }
+            mir::BinOp::Sub => {
+                let add = self.scx
+                    .builder
+                    .fsub(spirv_ty.word, None, left, right)
+                    .expect("fsub");
+                SpirvValue(add)
+            }
+            mir::BinOp::Div => {
+                let add = self.scx
+                    .builder
+                    .fdiv(spirv_ty.word, None, left, right)
+                    .expect("fsub");
+                SpirvValue(add)
+            }
+            mir::BinOp::Gt => {
+                let gt = self.scx
+                    .builder
+                    .ugreater_than(spirv_ty.word, None, left, right)
+                    .expect("g");
+                SpirvValue(gt)
+            }
+            mir::BinOp::Shl => {
+                let shl = self.scx
+                    .builder
+                    .shift_left_logical(spirv_ty.word, None, left, right)
+                    .expect("shl");
+                SpirvValue(shl)
+            }
+            mir::BinOp::BitOr => {
+                let bit_or = self.scx
+                    .builder
+                    .bitwise_or(spirv_ty.word, None, left, right)
+                    .expect("bitwise or");
+                SpirvValue(bit_or)
+            }
+            rest => unimplemented!("{:?}", rest),
+        }
     }
 }

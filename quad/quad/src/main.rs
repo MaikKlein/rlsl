@@ -191,6 +191,7 @@ fn main() {
     // instantiate backend
     let (_instance, mut adapters, mut surface) = {
         let instance = back::Instance::create("gfx-rs quad", 1);
+        println!("TEST");
         let surface = instance.create_surface(&window);
         let adapters = instance.enumerate_adapters();
         (instance, adapters, surface)
@@ -241,7 +242,15 @@ fn main() {
     //             stage_flags: ShaderStageFlags::FRAGMENT,
     //         },
     //     ],
-    let set_layout = device.create_descriptor_set_layout(&[]);
+    let set_layout = device.create_descriptor_set_layout(&[
+            pso::DescriptorSetLayoutBinding {
+                binding: 0,
+                ty: pso::DescriptorType::UniformBuffer,
+                count: 1,
+                stage_flags: ShaderStageFlags::FRAGMENT,
+            },
+        ]);
+    //let set_layout = device.create_descriptor_set_layout(&[]);
 
     let pipeline_layout =
         device.create_pipeline_layout(Some(&set_layout), &[(pso::ShaderStageFlags::VERTEX, 0..8)]);
@@ -277,20 +286,16 @@ fn main() {
     //
 
     // // Descriptors
-    // let mut desc_pool = device.create_descriptor_pool(
-    //     1, // sets
-    //     &[
-    //         pso::DescriptorRangeDesc {
-    //             ty: pso::DescriptorType::SampledImage,
-    //             count: 1,
-    //         },
-    //         pso::DescriptorRangeDesc {
-    //             ty: pso::DescriptorType::Sampler,
-    //             count: 1,
-    //         },
-    //     ],
-    // );
-    // let desc_set = desc_pool.allocate_set(&set_layout);
+    let mut desc_pool = device.create_descriptor_pool(
+        1, // sets
+        &[
+            pso::DescriptorRangeDesc {
+                ty: pso::DescriptorType::UniformBuffer,
+                count: 1,
+            },
+        ],
+    );
+    let desc_set = desc_pool.allocate_set(&set_layout);
 
     // Framebuffer and render target creation
     let (frame_images, framebuffers) = match backbuffer {
@@ -374,7 +379,20 @@ fn main() {
     // let image_mem_reqs = device.get_buffer_requirements(&image_buffer_unbound);
     // let image_upload_memory = device.allocate_memory(upload_type, image_mem_reqs.size).unwrap();
     // let image_upload_buffer = device.bind_buffer_memory(&image_upload_memory, 0, image_buffer_unbound).unwrap();
+    //
+    let color_size=  std::mem::size_of::<[f32;4]>() as u64;
+    let color_buffer_unbound = device.create_buffer(color_size, buffer::Usage::UNIFORM).unwrap();
+    let color_mem_reqs = device.get_buffer_requirements(&color_buffer_unbound);
+    let color_upload_memory = device.allocate_memory(upload_type, color_mem_reqs.size).unwrap();
+    let color_upload_buffer = device.bind_buffer_memory(&color_upload_memory, 0, color_buffer_unbound).unwrap();
 
+    {
+        let mut data = device
+            .acquire_mapping_writer::<[f32;4]>(&color_upload_memory, 0..color_size)
+            .unwrap();
+        data[0] = [1.0, 1.0, 1.0, 1.0];
+        device.release_mapping_writer(data);
+    }
     // copy image data into staging buffer
     // {
     //     let mut data = device
@@ -412,20 +430,14 @@ fn main() {
     //     )
     // );
 
-    // device.update_descriptor_sets::<_,Range<_>>(&[
-    //     pso::DescriptorSetWrite {
-    //         set: &desc_set,
-    //         binding: 0,
-    //         array_offset: 0,
-    //         write: pso::DescriptorWrite::SampledImage(vec![(&image_srv, i::ImageLayout::Undefined)]),
-    //     },
-    //     pso::DescriptorSetWrite {
-    //         set: &desc_set,
-    //         binding: 1,
-    //         array_offset: 0,
-    //         write: pso::DescriptorWrite::Sampler(vec![&sampler]),
-    //     },
-    // ]);
+    device.update_descriptor_sets::<_,Range<_>>(&[
+        pso::DescriptorSetWrite {
+            set: &desc_set,
+            binding: 0,
+            array_offset: 0,
+            write: pso::DescriptorWrite::UniformBuffer(vec![(&color_upload_buffer, 0..1)]),
+        },
+    ]);
 
     // Rendering setup
     let viewport = command::Viewport {
@@ -490,7 +502,7 @@ fn main() {
     // }
 
     //
-    let pipelines: Vec<_> = ["blue_frag", "color_frag", "red_frag"]
+    let pipelines: Vec<_> = ["color_frag"]
         .iter()
         .map(|name| create_graphics_pipeline(&device, &pipeline_layout, &render_pass, name))
         .collect();
@@ -527,7 +539,7 @@ fn main() {
                 cmd_buffer.set_scissors(&[viewport.rect]);
                 cmd_buffer.bind_graphics_pipeline(&pipeline);
                 cmd_buffer.bind_vertex_buffers(pso::VertexBufferSet(vec![(&vertex_buffer, 0)]));
-                //cmd_buffer.bind_graphics_descriptor_sets(&pipeline_layout, 0, Some(&desc_set)); //TODO
+                cmd_buffer.bind_graphics_descriptor_sets(&pipeline_layout, 0, Some(&desc_set)); //TODO
 
                 {
                     let mut encoder = cmd_buffer.begin_renderpass_inline(

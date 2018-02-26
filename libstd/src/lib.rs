@@ -38,6 +38,7 @@ pub mod intrinsics {
         pub fn sqrtf32(x: f32) -> f32;
         pub fn cosf32(x: f32) -> f32;
         pub fn sinf32(x: f32) -> f32;
+        pub fn absf32(x: f32) -> f32;
     }
 }
 
@@ -58,6 +59,11 @@ pub mod f32 {
         #[inline]
         pub fn cos(self) -> f32 {
             unsafe { intrinsics::cosf32(self) }
+        }
+
+        #[inline]
+        pub fn abs(self) -> f32 {
+            unsafe { intrinsics::absf32(self) }
         }
     }
 }
@@ -82,7 +88,7 @@ macro_rules! panic {
     };
 }
 
-pub trait Pipeline{
+pub trait Pipeline {
     type VertexInput;
     type VertexOutput;
 }

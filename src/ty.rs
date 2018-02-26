@@ -1,51 +1,47 @@
 use rustc_const_math::{ConstFloat, ConstInt};
 use spirv;
 use rustc::ty;
+use rustc::ty::Ty;
 use context::SpirvCtx;
 
 #[derive(Copy, Clone, Debug, Hash, Eq, PartialEq)]
 pub enum SpirvConstVal {
     Float(ConstFloat),
     Integer(ConstInt),
+    Bool(bool),
 }
-#[derive(Debug)]
-pub enum SpirvOperand<'tcx> {
+#[derive(Debug, Clone)]
+pub struct SpirvOperand<'tcx> {
+    pub ty: Ty<'tcx>,
+    pub variant: SpirvOperandVariant<'tcx>,
+}
+
+#[derive(Debug, Clone)]
+pub enum SpirvOperandVariant<'tcx> {
     Variable(SpirvVar<'tcx>),
     Value(SpirvValue),
 }
 impl<'tcx> SpirvOperand<'tcx> {
-    pub fn is_param(&self) -> bool {
-        match self {
-            &SpirvOperand::Variable(ref var) => var.is_param(),
-            _ => false,
+    pub fn new(ty: Ty<'tcx>, variant: SpirvOperandVariant<'tcx>) -> SpirvOperand<'tcx> {
+        SpirvOperand { ty, variant }
+    }
+
+    pub fn to_variable(self) -> Option<SpirvVar<'tcx>> {
+        match self.variant {
+            SpirvOperandVariant::Variable(var) => Some(var),
+            _ => None,
         }
     }
-    pub fn expect_var(self) -> SpirvVar<'tcx> {
-        match self {
-            SpirvOperand::Variable(var) => var,
-            _ => panic!("Expected var"),
-        }
-    }
-    pub fn load_raw<'a, 'b>(self, ctx: &'b mut SpirvCtx<'a, 'tcx>, ty: SpirvTy) -> spirv::Word {
-        match self {
-            SpirvOperand::Variable(var) => {
-                if var.is_ptr() {
-                    // If the variable is a ptr, then we need to load the value
-                    ctx.builder
-                        .load(ty.word, None, var.word, None, &[])
-                        .expect("load")
-                } else {
-                    // Otherwise we can just use the value
-                    var.word
-                }
+
+    pub fn load<'a, 'b>(self, scx: &'b mut SpirvCtx<'a, 'tcx>) -> spirv::Word {
+        match self.variant {
+            SpirvOperandVariant::Variable(var) => {
+                let spirv_ty = scx.to_ty_fn(self.ty);
+                scx.builder
+                    .load(spirv_ty.word, None, var.word, None, &[])
+                    .expect("load")
             }
-            SpirvOperand::Value(expr) => expr.0,
-        }
-    }
-    pub fn into_raw_word(self) -> spirv::Word {
-        match self {
-            SpirvOperand::Variable(var) => var.word,
-            SpirvOperand::Value(expr) => expr.0,
+            SpirvOperandVariant::Value(expr) => expr.0,
         }
     }
 }
