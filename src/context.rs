@@ -9,31 +9,30 @@ use rspirv::mr::Builder;
 use syntax;
 use rustc::mir;
 use rustc::ty::{subst, TyCtxt};
-use {Enum, SpirvVar};
-use {Intrinsic, IntrinsicType, SpirvConstVal, SpirvFn, SpirvFunctionCall, SpirvTy, SpirvValue};
-use rustc::ty::Ty;
+use {Enum, Variable};
+use {Intrinsic, IntrinsicType, ConstValue, Function, FunctionCall, Ty, Value};
 use rustc::ty::subst::Substs;
 use self::hir::def_id::DefId;
 
-pub struct SpirvCtx<'a, 'tcx: 'a> {
-    per_vertex: Option<SpirvVar<'tcx>>,
-    per_fragment: Option<SpirvVar<'tcx>>,
+pub struct CodegenCx<'a, 'tcx: 'a> {
+    per_vertex: Option<Variable<'tcx>>,
+    per_fragment: Option<Variable<'tcx>>,
     pub tcx: ty::TyCtxt<'a, 'tcx, 'tcx>,
     pub builder: Builder,
-    pub ty_cache: HashMap<ty::Ty<'tcx>, SpirvTy>,
-    pub ty_ptr_cache: HashMap<(ty::Ty<'tcx>, spirv::StorageClass), SpirvTy>,
-    pub const_cache: HashMap<SpirvConstVal, SpirvValue>,
-    pub forward_fns: HashMap<(hir::def_id::DefId, &'a Substs<'tcx>), SpirvFn>,
+    pub ty_cache: HashMap<ty::Ty<'tcx>, Ty>,
+    pub ty_ptr_cache: HashMap<(ty::Ty<'tcx>, spirv::StorageClass), Ty>,
+    pub const_cache: HashMap<ConstValue, Value>,
+    pub forward_fns: HashMap<(hir::def_id::DefId, &'a Substs<'tcx>), Function>,
     pub intrinsic_fns: HashMap<hir::def_id::DefId, Intrinsic>,
     pub debug_symbols: bool,
     pub glsl_ext_id: spirv::Word,
 }
 
-impl<'a, 'tcx> SpirvCtx<'a, 'tcx> {
-    pub fn to_ty_fn(&mut self, ty: Ty<'tcx>) -> SpirvTy {
+impl<'a, 'tcx> CodegenCx<'a, 'tcx> {
+    pub fn to_ty_fn(&mut self, ty: ty::Ty<'tcx>) -> Ty {
         self.to_ty(ty, spirv::StorageClass::Function)
     }
-    pub fn to_ty_as_ptr_fn(&mut self, ty: Ty<'tcx>) -> SpirvTy {
+    pub fn to_ty_as_ptr_fn(&mut self, ty: ty::Ty<'tcx>) -> Ty {
         self.to_ty_as_ptr(ty, spirv::StorageClass::Function)
     }
     /// Tries to get a function id, if it fails it looks for an intrinsic id
@@ -41,43 +40,43 @@ impl<'a, 'tcx> SpirvCtx<'a, 'tcx> {
         &self,
         def_id: DefId,
         substs: &'a Substs<'tcx>,
-    ) -> Option<SpirvFunctionCall> {
+    ) -> Option<FunctionCall> {
         self.forward_fns
             .get(&(def_id, substs))
-            .map(|&spirv_fn| SpirvFunctionCall::Function(spirv_fn))
+            .map(|&spirv_fn| FunctionCall::Function(spirv_fn))
             .or(self.intrinsic_fns
                 .get(&def_id)
-                .map(|&id| SpirvFunctionCall::Intrinsic(id)))
+                .map(|&id| FunctionCall::Intrinsic(id)))
     }
 
-    pub fn constant_f32(&mut self, mcx: MirContext<'a, 'tcx>, value: f32) -> SpirvValue {
+    pub fn constant_f32(&mut self, mcx: MirContext<'a, 'tcx>, value: f32) -> Value {
         use std::convert::TryFrom;
-        let val = SpirvConstVal::Float(ConstFloat::from_u128(
+        let val = ConstValue::Float(ConstFloat::from_u128(
             TryFrom::try_from(value.to_bits()).expect("Could not convert from f32 to u128"),
             syntax::ast::FloatTy::F32,
         ));
         self.constant(mcx, val)
     }
 
-    pub fn constant_u32(&mut self, mcx: MirContext<'a, 'tcx>, value: u32) -> SpirvValue {
-        let val = SpirvConstVal::Integer(ConstInt::U32(value));
+    pub fn constant_u32(&mut self, mcx: MirContext<'a, 'tcx>, value: u32) -> Value {
+        let val = ConstValue::Integer(ConstInt::U32(value));
         self.constant(mcx, val)
     }
 
-    pub fn constant(&mut self, mcx: MirContext<'a, 'tcx>, val: SpirvConstVal) -> SpirvValue {
+    pub fn constant(&mut self, mcx: MirContext<'a, 'tcx>, val: ConstValue) -> Value {
         if let Some(val) = self.const_cache.get(&val) {
             return *val;
         }
         let spirv_val = match val {
-            SpirvConstVal::Integer(const_int) => {
+            ConstValue::Integer(const_int) => {
                 use rustc::ty::util::IntTypeExt;
                 let ty = const_int.int_type().to_ty(self.tcx);
                 let spirv_ty = self.to_ty(ty, spirv::StorageClass::Function);
                 let value = const_int.to_u128_unchecked() as u32;
                 self.builder.constant_u32(spirv_ty.word, value)
             }
-            SpirvConstVal::Bool(b) => self.constant_u32(mcx, b as u32).0,
-            SpirvConstVal::Float(const_float) => {
+            ConstValue::Bool(b) => self.constant_u32(mcx, b as u32).0,
+            ConstValue::Float(const_float) => {
                 use rustc::infer::unify_key::ToType;
                 let value: f32 = unsafe { ::std::mem::transmute(const_float.bits as u32) };
                 let ty = const_float.ty.to_type(self.tcx);
@@ -85,7 +84,7 @@ impl<'a, 'tcx> SpirvCtx<'a, 'tcx> {
                 self.builder.constant_f32(spirv_ty.word, value)
             }
         };
-        let spirv_expr = SpirvValue(spirv_val);
+        let spirv_expr = Value(spirv_val);
         self.const_cache.insert(val, spirv_expr);
         spirv_expr
     }
@@ -93,7 +92,7 @@ impl<'a, 'tcx> SpirvCtx<'a, 'tcx> {
         &mut self,
         ty: rustc::ty::Ty<'tcx>,
         storage_class: spirv::StorageClass,
-    ) -> SpirvTy {
+    ) -> Ty {
         use rustc::ty::TypeVariants;
         let ty = match ty.sty {
             TypeVariants::TyRef(_, type_and_mut) => {
@@ -115,7 +114,7 @@ impl<'a, 'tcx> SpirvCtx<'a, 'tcx> {
         {
             return *ty;
         }
-        let spirv_type: SpirvTy = match ty.sty {
+        let spirv_type: Ty = match ty.sty {
             // TODO: Proper TyNever
             TypeVariants::TyNever => {
                 let ty = self.tcx.mk_nil();
@@ -338,7 +337,7 @@ impl<'a, 'tcx> SpirvCtx<'a, 'tcx> {
         &mut self,
         ty: ty::Ty<'tcx>,
         storage_class: spirv::StorageClass,
-    ) -> SpirvTy {
+    ) -> Ty {
         let t = ty::TypeAndMut {
             ty,
             mutbl: rustc::hir::Mutability::MutMutable,
@@ -385,7 +384,7 @@ impl<'a, 'tcx> SpirvCtx<'a, 'tcx> {
         f.write_all(&bytes).expect("write bytes");
     }
     // TODO: Hack to get the correct type for PerVertex
-    pub fn get_per_fragment(&mut self, ty: Ty<'tcx>) -> SpirvVar<'tcx> {
+    pub fn get_per_fragment(&mut self, ty: ty::Ty<'tcx>) -> Variable<'tcx> {
         self.per_fragment.unwrap_or_else(|| {
             let is_fragment = ty.ty_to_def_id()
                 .map(|def_id| {
@@ -408,12 +407,12 @@ impl<'a, 'tcx> SpirvCtx<'a, 'tcx> {
             let var =
                 self.builder
                     .variable(spirv_ty_ptr.word, None, spirv::StorageClass::Input, None);
-            let var = SpirvVar::new(var, false, ty, spirv::StorageClass::Input);
+            let var = Variable::new(var, false, ty, spirv::StorageClass::Input);
             self.per_fragment = Some(var);
             var
         })
     }
-    pub fn get_per_vertex(&mut self, ty: Ty<'tcx>) -> SpirvVar<'tcx> {
+    pub fn get_per_vertex(&mut self, ty: ty::Ty<'tcx>) -> Variable<'tcx> {
         use rustc::ty::TypeVariants;
         assert!(::is_per_vertex(self.tcx, ty), "Not PerVertex");
         self.per_vertex.unwrap_or_else(|| {
@@ -438,17 +437,17 @@ impl<'a, 'tcx> SpirvCtx<'a, 'tcx> {
             let var =
                 self.builder
                     .variable(spirv_ty_ptr.word, None, spirv::StorageClass::Output, None);
-            let var = SpirvVar::new(var, false, struct_ty, spirv::StorageClass::Output);
+            let var = Variable::new(var, false, struct_ty, spirv::StorageClass::Output);
             self.per_vertex = Some(var);
             var
         })
     }
-    pub fn new(tcx: ty::TyCtxt<'a, 'tcx, 'tcx>) -> SpirvCtx<'a, 'tcx> {
+    pub fn new(tcx: ty::TyCtxt<'a, 'tcx, 'tcx>) -> CodegenCx<'a, 'tcx> {
         let mut builder = Builder::new();
         builder.capability(spirv::Capability::Shader);
         let glsl_ext_id = builder.ext_inst_import("GLSL.std.450");
         builder.memory_model(spirv::AddressingModel::Logical, spirv::MemoryModel::GLSL450);
-        SpirvCtx {
+        CodegenCx {
             debug_symbols: true,
             builder,
             per_vertex: None,

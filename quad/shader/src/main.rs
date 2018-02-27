@@ -11,7 +11,7 @@ fn color_frag(
     let uv = uv.data;
     let time = time.data;
     let offset = Vec3::new(0.0, 2.0, 4.0);
-    let coord = uv.extend(uv.y)
+    let coord = uv.extend(uv.x)
         .add(offset)
         .map(move |f| f32::cos(time + f) * 0.5)
         .add(Vec3::single(0.5))

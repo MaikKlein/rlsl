@@ -1,13 +1,13 @@
-use RlslVisitor;
+use FunctionCx;
 use rustc::mir;
 use rustc::ty::layout::Integer;
-use SpirvConstVal;
+use ConstValue;
 use rustc_const_math::ConstInt;
 use rustc::ty::ParamEnv;
 use rustc::traits::Reveal;
 use Enum;
 pub fn trans_statement<'scope, 'a: 'scope, 'tcx: 'a>(
-    visitor: &mut RlslVisitor<'scope, 'a, 'tcx>,
+    visitor: &mut FunctionCx<'scope, 'a, 'tcx>,
     _: mir::BasicBlock,
     statement: &mir::Statement<'tcx>,
     _: mir::Location,
@@ -32,7 +32,7 @@ pub fn trans_statement<'scope, 'a: 'scope, 'tcx: 'a>(
         let index = visitor.constant_u32(discr_index as u32).0;
 
         // FIXME check for the real type
-        let variant_const_val = SpirvConstVal::Integer(ConstInt::U32(variant_index as u32));
+        let variant_const_val = ConstValue::Integer(ConstInt::U32(variant_index as u32));
         let variant = visitor.constant(variant_const_val).0;
         let access = visitor
             .scx
