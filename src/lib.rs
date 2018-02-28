@@ -710,49 +710,6 @@ pub fn trans_spirv<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, items: &'a FxHashSet<M
     ctx.build_module();
 }
 
-#[derive(Debug)]
-pub struct AccessChain {
-    pub base: mir::Local,
-    pub indices: Vec<usize>,
-}
-
-impl AccessChain {
-    pub fn compute<'r, 'tcx>(lvalue: &'r mir::Place<'tcx>) -> Self {
-        fn access_chain_indices<'r, 'tcx>(
-            lvalue: &'r mir::Place<'tcx>,
-            mut indices: Vec<usize>,
-        ) -> (&'r mir::Place<'tcx>, Vec<usize>) {
-            if let &mir::Place::Projection(ref proj) = lvalue {
-                match proj.elem {
-                    mir::ProjectionElem::Field(field, _) => {
-                        indices.push(field.index());
-                        access_chain_indices(&proj.base, indices)
-                    }
-                    mir::ProjectionElem::Downcast(_, id) => {
-                        indices.push(id);
-                        access_chain_indices(&proj.base, indices)
-                    }
-                    // TODO: Is this actually correct?
-                    _ => access_chain_indices(&proj.base, indices),
-                }
-            } else {
-                (lvalue, indices)
-            }
-        }
-        let indices = Vec::new();
-        let (base, mut indices) = access_chain_indices(lvalue, indices);
-        let local = match base {
-            &mir::Place::Local(local) => local,
-            _ => panic!("Should be local"),
-        };
-        indices.reverse();
-        AccessChain {
-            base: local,
-            indices,
-        }
-    }
-}
-
 fn write_dot(mcxs: &[MirContext]) {
     use std::fs::File;
     use rustc_mir::util::write_mir_fn_graphviz;
@@ -771,39 +728,16 @@ impl<'b, 'a, 'tcx> FunctionCx<'b, 'a, 'tcx> {
         let local_decls = &mir.local_decls;
         let ty = operand.ty(local_decls, self.mcx.tcx);
         let ty = mcx.monomorphize(&ty);
+        let ty = remove_ptr_ty(ty);
         let spirv_ty = self.to_ty_fn(ty);
         match operand {
             &mir::Operand::Copy(ref place) | &mir::Operand::Move(ref place) => {
                 if let Some(ref_place) = self.references.get(place).map(|p| p.clone()) {
-                    let access_chain = AccessChain::compute(&ref_place);
-                    assert!(
-                        access_chain.indices.len() == 0,
-                        "Access chain should be empty"
-                    );
-                    let spirv_var = *self.vars.get(&access_chain.base).expect("Local");
+                    let spirv_var = Variable::access_chain(self, &ref_place);
                     Operand::new(ty, OperandVariant::Variable(spirv_var))
                 } else {
-                    let access_chain = AccessChain::compute(place);
-                    let spirv_var = *self.vars.get(&access_chain.base).expect("Local");
-                    if access_chain.indices.is_empty() {
-                        Operand::new(ty, OperandVariant::Variable(spirv_var))
-                    } else {
-                        let spirv_ty_ptr = self.scx.to_ty_as_ptr(ty, spirv_var.storage_class);
-                        let indices: Vec<_> = access_chain
-                            .indices
-                            .iter()
-                            .map(|&i| self.scx.constant_u32(mcx, i as u32).word)
-                            .collect();
-                        let access = self.scx
-                            .builder
-                            .access_chain(spirv_ty_ptr.word, None, spirv_var.word, &indices)
-                            .expect("access_chain");
-                        let load = self.scx
-                            .builder
-                            .load(spirv_ty.word, None, access, None, &[])
-                            .expect("load");
-                        Operand::new(ty, OperandVariant::Value(Value::new(load)))
-                    }
+                    let spirv_var = Variable::access_chain(self, place);
+                    Operand::new(ty, OperandVariant::Variable(spirv_var))
                 }
             }
             &mir::Operand::Constant(ref constant) => match constant.literal {
@@ -1251,11 +1185,7 @@ impl<'b, 'a, 'tcx> rustc::mir::visit::Visitor<'tcx> for FunctionCx<'b, 'a, 'tcx>
         let expr = match rvalue {
             &mir::Rvalue::BinaryOp(op, ref l, ref r)
             | &mir::Rvalue::CheckedBinaryOp(op, ref l, ref r) => self.binary_op(spirv_ty, op, l, r),
-            &mir::Rvalue::Use(ref operand) => {
-                let load = self.load_operand(operand).load(self.scx);
-                let expr = Value::new(load.word);
-                expr
-            }
+            &mir::Rvalue::Use(ref operand) => self.load_operand(operand).load(self.scx),
 
             &mir::Rvalue::Aggregate(_, ref operands) => {
                 // If there are no operands, then it should be 0 sized and we can
@@ -1321,32 +1251,33 @@ impl<'b, 'a, 'tcx> rustc::mir::visit::Visitor<'tcx> for FunctionCx<'b, 'a, 'tcx>
             rest => unimplemented!("{:?}", rest),
         };
 
-        let access_chain = AccessChain::compute(lvalue);
-        let spirv_var = *self.vars.get(&access_chain.base).expect("Local");
-        let store = if access_chain.indices.is_empty() {
-            spirv_var.word
-        } else {
-            let spirv_ty_ptr = self.to_ty_as_ptr_fn(ty);
-            let var = *self.vars
-                .get(&access_chain.base)
-                .expect("access chain local");
-            // TODO: Better way to get the correct storage class
-            let spirv_ty_ptr = self.to_ty_as_ptr(ty, var.storage_class);
-            let indices: Vec<_> = access_chain
-                .indices
-                .iter()
-                .map(|&i| self.constant_u32(i as u32).word)
-                .collect();
-            let access = self.scx
-                .builder
-                .access_chain(spirv_ty_ptr.word, None, spirv_var.word, &indices)
-                .expect("access_chain");
-            access
-        };
-        self.scx
-            .builder
-            .store(store, expr.word, None, &[])
-            .expect("store");
+        let variable = Variable::access_chain(self, lvalue);
+        variable.store(self.scx, expr);
+        // let store = if access_chain.indices.is_empty() {
+        //     spirv_var.word
+        // } else {
+        //     let spirv_ty_ptr = self.to_ty_as_ptr_fn(ty);
+        //     let var = *self.vars
+        //         .get(&access_chain.base)
+        //         .expect("access chain local");
+        //     // TODO: Better way to get the correct storage class
+        //     let spirv_ty_ptr = self.to_ty_as_ptr(ty, var.storage_class);
+        //     let indices: Vec<_> = access_chain
+        //         .indices
+        //         .iter()
+        //         .map(|&i| self.constant_u32(i as u32).word)
+        //         .collect();
+        //     let access = self.scx
+        //         .builder
+        //         .access_chain(spirv_ty_ptr.word, None, spirv_var.word, &indices)
+        //         .expect("access_chain");
+        //     access
+        // };
+        // self.scx
+        //     .builder
+        //     .store(store, expr.word, None, &[])
+        //
+        //     .expect("store");
         //        match lvalue {
         //            &mir::Place::Local(local) => {
         //                let var = self.vars.get(&local).expect("local");

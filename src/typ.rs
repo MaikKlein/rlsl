@@ -1,7 +1,9 @@
 use rustc_const_math::{ConstFloat, ConstInt};
 use spirv;
 use rustc::ty;
+use rustc::mir;
 use context::CodegenCx;
+use {FunctionCx};
 
 #[derive(Copy, Clone, Debug, Hash, Eq, PartialEq)]
 pub enum ConstValue {
@@ -63,14 +65,14 @@ impl<'tcx> Param<'tcx> {
         storage_class: spirv::StorageClass,
     ) -> Variable<'tcx> {
         if ::is_ptr(self.ty) {
+            let ty = ::remove_ptr_ty(self.ty);
             Variable {
                 word: self.word,
-                ty: self.ty,
+                ty,
                 storage_class,
             }
         } else {
-            let ty = ::remove_ptr_ty(self.ty);
-            let variable = Variable::alloca(cx, ty, storage_class);
+            let variable = Variable::alloca(cx, self.ty, storage_class);
             let load = self.load(cx);
             variable.store(cx, load);
             variable
@@ -102,6 +104,64 @@ impl<'tcx> Param<'tcx> {
 }
 
 impl<'tcx> Variable<'tcx> {
+    pub fn access_chain<'fx, 'a>(
+        fx: &mut FunctionCx<'fx, 'a, 'tcx>,
+        lvalue: &mir::Place<'tcx>,
+    ) -> Variable<'tcx> {
+        use rustc_data_structures::indexed_vec::Idx;
+        fn access_chain_indices<'r, 'tcx>(
+            lvalue: &'r mir::Place<'tcx>,
+            mut indices: Vec<usize>,
+        ) -> (&'r mir::Place<'tcx>, Vec<usize>) {
+            if let &mir::Place::Projection(ref proj) = lvalue {
+                match proj.elem {
+                    mir::ProjectionElem::Field(field, _) => {
+                        indices.push(field.index());
+                        access_chain_indices(&proj.base, indices)
+                    }
+                    mir::ProjectionElem::Downcast(_, id) => {
+                        indices.push(id);
+                        access_chain_indices(&proj.base, indices)
+                    }
+                    // TODO: Is this actually correct?
+                    _ => access_chain_indices(&proj.base, indices),
+                }
+            } else {
+                (lvalue, indices)
+            }
+        }
+        let indices = Vec::new();
+        let (base, mut indices) = access_chain_indices(lvalue, indices);
+        let local = match base {
+            &mir::Place::Local(local) => local,
+            _ => panic!("Should be local"),
+        };
+        let variable = *fx.vars.get(&local).expect("Access chain");
+        indices.reverse();
+        if indices.is_empty() {
+            variable
+        } else {
+            let lvalue_ty = lvalue
+                .ty(&fx.mcx.mir.local_decls, fx.scx.tcx)
+                .to_ty(fx.scx.tcx);
+            let lvalue_ty = fx.mcx.monomorphize(&lvalue_ty);
+            let lvalue_ty = ::remove_ptr_ty(lvalue_ty);
+            let spirv_ty_ptr = fx.scx.to_ty_as_ptr(lvalue_ty, variable.storage_class);
+            let indices: Vec<_> = indices
+                .iter()
+                .map(|&i| fx.constant_u32(i as u32).word)
+                .collect();
+            let access = fx.scx
+                .builder
+                .access_chain(spirv_ty_ptr.word, None, variable.word, &indices)
+                .expect("access_chain");
+            Variable {
+                word: access,
+                ty: lvalue_ty,
+                storage_class: variable.storage_class,
+            }
+        }
+    }
     pub fn load<'a>(&self, cx: &mut CodegenCx<'a, 'tcx>) -> Value {
         let spirv_ty = cx.to_ty(self.ty, self.storage_class);
         let load = cx.builder

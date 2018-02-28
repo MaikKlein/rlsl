@@ -9,7 +9,7 @@ fn color_frag(
     time: Descriptor<N2, N0, f32>,
 ) -> Output<N0, Vec4<f32>> {
     let uv = uv.data;
-    let time = time.data;
+    let mut time = time.data;
     let offset = Vec3::new(0.0, 2.0, 4.0);
     let coord = uv.extend(uv.x)
         .add(offset)
@@ -29,25 +29,6 @@ fn vertex(
     Output::new(uv.data)
 }
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 //#[spirv(fragment)]
 //fn test_frag(
 //    frag: Fragment,
@@ -61,13 +42,13 @@ fn vertex(
 //    Output::new(coord)
 //}
 
-//fn test(f: f32) -> f32 {
-//    f + 1.0
-//}
+fn test(f: f32) -> f32 {
+    f + 1.0
+}
 
-// fn test_mut(f: &mut f32){
-//     *f +=1.0;
-// }
+fn test_mut(f: &mut f32) {
+    *f += 1.0;
+}
 //fn test_add(f: &mut f32){
 //    *f += 0.5f32;
 //}
