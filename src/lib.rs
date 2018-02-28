@@ -1079,7 +1079,7 @@ impl<'b, 'a, 'tcx> FunctionCx<'b, 'a, 'tcx> {
                 // Don't generate variables for ptrs
                 let local_decl = &mcx.mir.local_decls[local_var];
                 let local_ty = mcx.monomorphize(&local_decl.ty);
-                if !is_ptr(local_ty) {
+                if is_ptr(local_ty) {
                     return None;
                 }
                 let local_ty = remove_ptr_ty(local_ty);
