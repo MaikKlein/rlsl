@@ -1253,7 +1253,7 @@ impl<'b, 'a, 'tcx> rustc::mir::visit::Visitor<'tcx> for FunctionCx<'b, 'a, 'tcx>
             | &mir::Rvalue::CheckedBinaryOp(op, ref l, ref r) => self.binary_op(spirv_ty, op, l, r),
             &mir::Rvalue::Use(ref operand) => {
                 let load = self.load_operand(operand).load(self.scx);
-                let expr = Value::new(load);
+                let expr = Value::new(load.word);
                 expr
             }
 
@@ -1273,7 +1273,7 @@ impl<'b, 'a, 'tcx> rustc::mir::visit::Visitor<'tcx> for FunctionCx<'b, 'a, 'tcx>
                             None
                         } else {
                             let spirv_ty = self.to_ty_fn(ty);
-                            Some(self.load_operand(op).load(self.scx))
+                            Some(self.load_operand(op).load(self.scx).word)
                         }
                     })
                     .collect();
@@ -1433,7 +1433,8 @@ impl<'b, 'a, 'tcx> rustc::mir::visit::Visitor<'tcx> for FunctionCx<'b, 'a, 'tcx>
                 let mir = self.mcx.mir;
                 let spirv_ty = self.to_ty_fn(switch_ty);
                 let selector = if switch_ty.is_bool() {
-                    let load = self.load_operand(discr).load(self.scx);
+                    // TODO bitcast api
+                    let load = self.load_operand(discr).load(self.scx).word;
                     let target_ty = self.mcx.tcx.mk_mach_uint(syntax::ast::UintTy::U32);
                     let target_ty_spirv = self.to_ty_fn(target_ty);
                     self.scx
@@ -1441,7 +1442,7 @@ impl<'b, 'a, 'tcx> rustc::mir::visit::Visitor<'tcx> for FunctionCx<'b, 'a, 'tcx>
                         .bitcast(target_ty_spirv.word, None, load)
                         .expect("bitcast")
                 } else {
-                    self.load_operand(discr).load(self.scx)
+                    self.load_operand(discr).load(self.scx).word
                 };
                 let default_label = *self.label_blocks
                     .get(targets.last().unwrap())
@@ -1527,7 +1528,7 @@ impl<'b, 'a, 'tcx> rustc::mir::visit::Visitor<'tcx> for FunctionCx<'b, 'a, 'tcx>
                                                 .expect("should be a variable")
                                                 .word
                                         } else {
-                                            spirv_operand.load(self.scx)
+                                            spirv_operand.load(self.scx).word
                                         }
                                     })
                                     .collect();
@@ -1668,8 +1669,8 @@ impl<'b, 'a, 'tcx> FunctionCx<'b, 'a, 'tcx> {
         r: &mir::Operand<'tcx>,
     ) -> Value {
         // TODO: Different types
-        let left = self.load_operand(l).load(self.scx);
-        let right = self.load_operand(r).load(self.scx);
+        let left = self.load_operand(l).load(self.scx).word;
+        let right = self.load_operand(r).load(self.scx).word;
         // TODO: Impl ops
         match op {
             mir::BinOp::Mul => {
