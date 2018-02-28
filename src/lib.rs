@@ -274,19 +274,6 @@ impl<'tcx> Global<'tcx> for Output<'tcx> {
         self.ty
     }
 }
-
-// impl<'tcx> Location for Input<'tcx> {
-//     fn location(&self) -> u32 {
-//         self.location
-//     }
-// }
-
-// impl<'tcx> Location for Output<'tcx> {
-//     fn location(&self) -> u32 {
-//         self.location
-//     }
-// }
-
 impl<'tcx> Global<'tcx> for Descriptor<'tcx> {
     fn ty(&self) -> ty::Ty<'tcx> {
         self.ty
@@ -296,9 +283,6 @@ impl<'tcx> Global<'tcx> for Descriptor<'tcx> {
 pub trait Global<'tcx>: Hash + Eq {
     fn ty(&self) -> ty::Ty<'tcx>;
 }
-// pub trait Location: Global {
-//     fn location(&self) -> u32;
-// }
 impl<'tcx> Entry<'tcx, Input<'tcx>> {
     pub fn input<'a>(entry_points: &[EntryPoint<'a, 'tcx>], stx: &mut CodegenCx<'a, 'tcx>) -> Self {
         let set: HashSet<_> = entry_points
@@ -621,14 +605,6 @@ where
         .collect::<Vec<_>>()
 }
 
-// #[repr(u32)]
-// pub enum GlslExtId {
-//     Round = 1,
-//     Sqrt = 31,
-//     Sin = 13,
-//     Cos = 14,
-// }
-
 pub enum FunctionCall {
     Function(Function),
     Intrinsic(Intrinsic),
@@ -892,16 +868,7 @@ impl<'b, 'a, 'tcx> FunctionCx<'b, 'a, 'tcx> {
             .map(|local_arg| {
                 let local_decl = &mcx.mir.local_decls[local_arg];
                 let local_ty = mcx.monomorphize(&local_decl.ty);
-                // let spirv_arg_ty = scx.to_ty_fn(local_ty);
-                // let spirv_param = scx.builder
-                //     .function_parameter(spirv_arg_ty.word)
-                //     .expect("fn param");
-
-                // if let Some(name) = local_decl.name {
-                //     scx.name_from_str(name.as_str().as_ref(), spirv_param);
-                // }
-                // spirv_param
-                Param::alloca(local_ty, scx)
+                Param::alloca(scx, local_ty)
             })
             .collect();
         scx.builder.begin_basic_block(None).expect("block");
@@ -914,7 +881,7 @@ impl<'b, 'a, 'tcx> FunctionCx<'b, 'a, 'tcx> {
                 let local_ty = mcx.monomorphize(&local_decl.ty);
                 (
                     local_arg,
-                    param.to_variable(spirv::StorageClass::Function, scx),
+                    param.to_variable(scx, spirv::StorageClass::Function),
                 )
             })
             .collect();
@@ -923,7 +890,7 @@ impl<'b, 'a, 'tcx> FunctionCx<'b, 'a, 'tcx> {
             let local = mir::Local::new(0);
             let local_decl = &mcx.mir.local_decls[local];
             let ty = mcx.monomorphize(&local_decl.ty);
-            let variable = Variable::alloca(ty, spirv::StorageClass::Function, scx);
+            let variable = Variable::alloca(scx, ty, spirv::StorageClass::Function);
             // TODO DEBUG
             //scx.name_from_str("retvar", spirv_var);
             args_map.insert(local, variable);
@@ -1015,23 +982,6 @@ impl<'b, 'a, 'tcx> FunctionCx<'b, 'a, 'tcx> {
             })
             .collect();
 
-        //let descriptor_iter = entry_descriptor.variable_iter(&entry_point);
-
-        // println!("{:?}", outputs);
-        // Build the variable map from the global input variables
-        // entry_point;
-        //     .args()
-        //     .into_iter()
-        //     .enumerate()
-        //     .filter_map(|(idx, local)|{
-        //         let ty = mir.local_decls[arg].ty;
-        //         Input::new(entry_point, ty)
-        //     })
-        //     .map(|(idx, input)| {
-        //         let var = inputs[idx];
-        //         (arg, SpirvVar::new(var.var, false, ty, var.storage_class))
-        //     })
-        //     .collect();
         // Only add the per vertex variable in the vertex shader
         if entry_point.entry_type == IntrinsicEntry::Vertex {
             let first_local = mir::Local::new(1);
@@ -1125,28 +1075,16 @@ impl<'b, 'a, 'tcx> FunctionCx<'b, 'a, 'tcx> {
             .collect();
         let mut local_vars: HashMap<_, _> = mcx.mir
             .vars_and_temps_iter()
-            .filter(|&local_var| {
+            .filter_map(|local_var| {
                 // Don't generate variables for ptrs
                 let local_decl = &mcx.mir.local_decls[local_var];
                 let local_ty = mcx.monomorphize(&local_decl.ty);
-                !is_ptr(local_ty)
-            })
-            .map(|local_var| {
-                let local_decl = &mcx.mir.local_decls[local_var];
-                let local_ty = mcx.monomorphize(&local_decl.ty);
+                if !is_ptr(local_ty) {
+                    return None;
+                }
                 let local_ty = remove_ptr_ty(local_ty);
-                // let spirv_var_ty = scx.to_ty_as_ptr_fn(local_ty);
-                // let spirv_var = scx.builder.variable(
-                //     spirv_var_ty.word,
-                //     None,
-                //     spirv::StorageClass::Function,
-                //     None,
-                // );
-                // if let Some(name) = local_decl.name {
-                //     scx.name_from_str(name.as_str().as_ref(), spirv_var);
-                // }
-                let variable = Variable::alloca(local_ty, spirv::StorageClass::Function, scx);
-                (local_var, variable)
+                let variable = Variable::alloca(scx, local_ty, spirv::StorageClass::Function);
+                Some((local_var, variable))
             })
             .collect();
         {
@@ -1257,24 +1195,6 @@ impl<'b, 'a, 'tcx> rustc::mir::visit::Visitor<'tcx> for FunctionCx<'b, 'a, 'tcx>
         trans::statement::trans_statement(self, block, statement, location);
     }
     fn visit_mir(&mut self, mir: &mir::Mir<'tcx>) {
-        //        let inrinsic_fn = self.mtx
-        //            .stx
-        //            .attrs_from_def_id(self.mtx.def_id)
-        //            .and_then(intrinsic_fn);
-        //        match intrinsic_fn {
-        //            IntrinsicFn::Dot => {
-        //                let spirv_ret_ty = self.mtx.from_ty(mir.return_ty);
-        //                let first_arg_local = mir.args_iter().nth(0).expect("arg");
-        //                let local_decl = &mir.local_decls[first_arg_local];
-        //                let spirv_arg_ty = self.mtx.from_ty(local_decl.ty);
-        //
-        //                //self.mtx.stx.builder.dot
-        //            }
-        //        }
-        //let attr = self.mtx.tcx.get_attrs(self.mtx.def_id);
-
-        //println!("attr = {:?}", attr);
-        //self.super_mir(mir);
         use mir::traversal::reverse_postorder;
         let order = reverse_postorder(mir);
         for (bb, data) in order {
@@ -1337,9 +1257,6 @@ impl<'b, 'a, 'tcx> rustc::mir::visit::Visitor<'tcx> for FunctionCx<'b, 'a, 'tcx>
                 expr
             }
 
-            //            &mir::Rvalue::NullaryOp(..) => {}
-            //            &mir::Rvalue::CheckedBinaryOp(..) => {}
-            //            &mir::Rvalue::Discriminant(..) => {}
             &mir::Rvalue::Aggregate(_, ref operands) => {
                 // If there are no operands, then it should be 0 sized and we can
                 // abort.
@@ -1731,9 +1648,6 @@ impl<'b, 'a, 'tcx> rustc::mir::visit::Visitor<'tcx> for FunctionCx<'b, 'a, 'tcx>
                 self.scx.builder.branch(target_label.0).expect("label");
             }
             &mir::TerminatorKind::Resume | &mir::TerminatorKind::Unreachable => {
-                // println!("block {:#?}", self.mcx.mir.basic_blocks()[block]);
-                // let target_label = self.label_blocks.get(&block).expect("no label");
-                // self.scx.builder.branch(target_label.0).expect("resume");
                 self.scx.builder.unreachable();
             }
             rest => unimplemented!("{:?}", rest),
