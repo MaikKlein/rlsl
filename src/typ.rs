@@ -3,7 +3,7 @@ use spirv;
 use rustc::ty;
 use rustc::mir;
 use context::CodegenCx;
-use {FunctionCx};
+use FunctionCx;
 
 #[derive(Copy, Clone, Debug, Hash, Eq, PartialEq)]
 pub enum ConstValue {

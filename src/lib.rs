@@ -1253,70 +1253,6 @@ impl<'b, 'a, 'tcx> rustc::mir::visit::Visitor<'tcx> for FunctionCx<'b, 'a, 'tcx>
 
         let variable = Variable::access_chain(self, lvalue);
         variable.store(self.scx, expr);
-        // let store = if access_chain.indices.is_empty() {
-        //     spirv_var.word
-        // } else {
-        //     let spirv_ty_ptr = self.to_ty_as_ptr_fn(ty);
-        //     let var = *self.vars
-        //         .get(&access_chain.base)
-        //         .expect("access chain local");
-        //     // TODO: Better way to get the correct storage class
-        //     let spirv_ty_ptr = self.to_ty_as_ptr(ty, var.storage_class);
-        //     let indices: Vec<_> = access_chain
-        //         .indices
-        //         .iter()
-        //         .map(|&i| self.constant_u32(i as u32).word)
-        //         .collect();
-        //     let access = self.scx
-        //         .builder
-        //         .access_chain(spirv_ty_ptr.word, None, spirv_var.word, &indices)
-        //         .expect("access_chain");
-        //     access
-        // };
-        // self.scx
-        //     .builder
-        //     .store(store, expr.word, None, &[])
-        //
-        //     .expect("store");
-        //        match lvalue {
-        //            &mir::Place::Local(local) => {
-        //                let var = self.vars.get(&local).expect("local");
-        //                self.mtx
-        //                    .stx
-        //                    .builder
-        //                    .store(var.word, expr.0, None, &[])
-        //                    .expect("store");
-        //            }
-        //            &mir::Place::Projection(ref proj) => match &proj.elem {
-        //                &mir::ProjectionElem::Field(field, ty) => match &proj.base {
-        //                    &mir::Place::Local(local) => {
-        //                        let var = self.vars.get(&local).expect("local");
-        //                        let spirv_ty_ptr = self.mtx.from_ty_as_ptr(ty);
-        //                        let index_ty = self.mtx.stx.tcx.mk_mach_uint(syntax::ast::UintTy::U32);
-        //                        let spirv_index_ty = self.mtx.from_ty(index_ty);
-        //                        let index = self.mtx
-        //                            .stx
-        //                            .builder
-        //                            .constant_u32(spirv_index_ty.word, field.index() as u32);
-        //                        let field_access = self.mtx
-        //                            .stx
-        //                            .builder
-        //                            .in_bounds_access_chain(spirv_ty_ptr.word, None, var.word, &[index])
-        //                            .expect("access chain");
-        //                        let spirv_ptr = self.mtx.from_ty(ty);
-        //                        //let load = self.ctx.builder.load(spirv_ptr.word, None, field_access, None, &[]).expect("load");
-        //                        self.mtx
-        //                            .stx
-        //                            .builder
-        //                            .store(field_access, expr.0, None, &[])
-        //                            .expect("store");
-        //                    }
-        //                    rest => unimplemented!("{:?}", rest),
-        //                },
-        //                rest => unimplemented!("{:?}", rest),
-        //            },
-        //            rest => unimplemented!("{:?}", rest),
-        //        };
     }
 
     fn visit_terminator_kind(
@@ -1409,158 +1345,133 @@ impl<'b, 'a, 'tcx> rustc::mir::visit::Visitor<'tcx> for FunctionCx<'b, 'a, 'tcx>
             } => {
                 use syntax::abi::Abi;
                 let local_decls = &self.mcx.mir.local_decls;
-                match func {
-                    &mir::Operand::Constant(ref constant) => {
-                        let fn_sig = constant.ty.fn_sig(self.scx.tcx);
-                        let abi = fn_sig.abi();
-                        let ret_ty_binder = fn_sig.output();
-                        let ret_ty = ret_ty_binder.skip_binder();
-                        let ret_ty = self.mcx.monomorphize(ret_ty);
-                        let spirv_ty = self.to_ty_fn(ret_ty);
-                        if let mir::Literal::Value { ref value } = constant.literal {
-                            use rustc::middle::const_val::ConstVal;
-                            if let ConstVal::Function(def_id, ref substs) = value.val {
-                                let mono_substs = self.mcx.monomorphize(substs);
-                                let resolve_instance = Instance::resolve(
-                                    self.scx.tcx,
-                                    ParamEnv::empty(rustc::traits::Reveal::All),
-                                    def_id,
-                                    &mono_substs,
-                                ).expect("resolve instance call");
-                                let fn_call = self.scx
-                                    .get_function_call(
-                                        resolve_instance.def_id(),
-                                        resolve_instance.substs,
-                                    )
-                                    .expect("function call");
-                                let args_ty = args.iter()
-                                    .map(|arg| {
-                                        let ty = arg.ty(local_decls, self.mcx.tcx);
-                                        ty
-                                    })
-                                    .collect_vec();
-                                // Split the rust-call tupled arguments off.
-                                let (first_args, untuple) =
-                                    if abi == Abi::RustCall && !args.is_empty() {
-                                        let (tup, args) = args.split_last().unwrap();
-                                        (args, Some(tup))
-                                    } else {
-                                        (&args[..], None)
-                                    };
-                                let mut arg_operand_loads: Vec<_> = first_args
-                                    .iter()
-                                    .map(|operand| {
-                                        let ty = operand.ty(local_decls, self.mcx.tcx);
-                                        let ty = self.mcx.monomorphize(&ty);
-                                        let spirv_operand = self.load_operand(operand);
-                                        if is_ptr(ty) {
-                                            spirv_operand
-                                                .to_variable()
-                                                .expect("should be a variable")
-                                                .word
-                                        } else {
-                                            spirv_operand.load(self.scx).word
-                                        }
-                                    })
-                                    .collect();
-                                if let Some(tup) = untuple {
-                                    let ty = tup.ty(local_decls, self.mcx.tcx);
-                                    let ty = self.mcx.monomorphize(&ty);
-                                    let spirv_ty_ptr = self.to_ty_as_ptr_fn(ty);
-                                    let tuple_var = self.load_operand(tup)
-                                        .to_variable()
-                                        .expect("Should be a variable");
-                                    match ty.sty {
-                                        TypeVariants::TyTuple(slice, b) => {
-                                            let tuple_iter =
-                                                slice.iter().enumerate().map(|(idx, field_ty)| {
-                                                    let field_ty_spv = self.to_ty_fn(field_ty);
-                                                    let field_ty_ptr_spv =
-                                                        self.to_ty_as_ptr_fn(field_ty);
-                                                    let spirv_idx =
-                                                        self.constant_u32(idx as u32).word;
-                                                    let field = self.scx
-                                                        .builder
-                                                        .access_chain(
-                                                            field_ty_ptr_spv.word,
-                                                            None,
-                                                            tuple_var.word,
-                                                            &[spirv_idx],
-                                                        )
-                                                        .expect("access chain");
-                                                    self.scx
-                                                        .builder
-                                                        .load(
-                                                            field_ty_spv.word,
-                                                            None,
-                                                            field,
-                                                            None,
-                                                            &[],
-                                                        )
-                                                        .expect("load")
-                                                });
-                                            arg_operand_loads.extend(tuple_iter);
-                                        }
-                                        _ => panic!("tup"),
-                                    }
-                                }
-                                // println!("{:?}", args_ty);
-                                // println!("{:?}", arg_operand_loads);
-                                let spirv_fn_call = match fn_call {
-                                    FunctionCall::Function(spirv_fn) => {
-                                        let fn_call = self.scx
-                                            .builder
-                                            .function_call(
-                                                spirv_ty.word,
-                                                None,
-                                                spirv_fn.0,
-                                                &arg_operand_loads,
-                                            )
-                                            .expect("fn call");
-                                        Some(fn_call)
-                                    }
-                                    FunctionCall::Intrinsic(intrinsic) => match intrinsic {
-                                        Intrinsic::GlslExt(id) => {
-                                            let ext_fn = self.scx
-                                                .builder
-                                                .ext_inst(
-                                                    spirv_ty.word,
-                                                    None,
-                                                    self.scx.glsl_ext_id,
-                                                    id,
-                                                    &arg_operand_loads,
-                                                )
-                                                .expect("ext instr");
-                                            Some(ext_fn)
-                                        }
-                                        Intrinsic::Abort => {
-                                            self.scx.builder.unreachable().expect("unreachable");
-                                            None
-                                        }
-                                    },
-                                };
-                                // only write op store if the result is not nil
-                                if !ret_ty.is_nil() {
-                                    if let (&Some(ref dest), Some(spirv_fn_call)) =
-                                        (destination, spirv_fn_call)
-                                    {
-                                        let &(ref lvalue, _) = dest;
-                                        match lvalue {
-                                            &mir::Place::Local(local) => {
-                                                let var = self.vars.get(&local).expect("local");
-                                                self.scx
-                                                    .builder
-                                                    .store(var.word, spirv_fn_call, None, &[])
-                                                    .expect("store");
-                                            }
-                                            rest => unimplemented!("{:?}", rest),
-                                        };
-                                    }
-                                }
-                            }
+                let fn_ty = func.ty(self.mcx.mir, self.mcx.tcx);
+                let (def_id, substs) = match fn_ty.sty {
+                    TypeVariants::TyFnDef(def_id, ref substs) => (def_id, substs),
+                    _ => panic!("Not a function"),
+                };
+
+                let tcx = self.mcx.tcx;
+                let fn_sig = fn_ty.fn_sig(tcx);
+                let abi = fn_sig.abi();
+                let ret_ty_binder = fn_sig.output();
+                let ret_ty = ret_ty_binder.skip_binder();
+                let ret_ty = self.mcx.monomorphize(ret_ty);
+                let spirv_ty = self.to_ty_fn(ret_ty);
+                let mono_substs = self.mcx.monomorphize(substs);
+                let resolve_instance = Instance::resolve(
+                    self.scx.tcx,
+                    ParamEnv::empty(rustc::traits::Reveal::All),
+                    def_id,
+                    &mono_substs,
+                ).expect("resolve instance call");
+                let fn_call = self.scx
+                    .get_function_call(resolve_instance.def_id(), resolve_instance.substs)
+                    .expect("function call");
+                let args_ty = args.iter()
+                    .map(|arg| {
+                        let ty = arg.ty(local_decls, self.mcx.tcx);
+                        ty
+                    })
+                    .collect_vec();
+                // Split the rust-call tupled arguments off.
+                let (first_args, untuple) = if abi == Abi::RustCall && !args.is_empty() {
+                    let (tup, args) = args.split_last().unwrap();
+                    (args, Some(tup))
+                } else {
+                    (&args[..], None)
+                };
+                let mut arg_operand_loads: Vec<_> = first_args
+                    .iter()
+                    .map(|operand| {
+                        let ty = operand.ty(local_decls, self.mcx.tcx);
+                        let ty = self.mcx.monomorphize(&ty);
+                        let spirv_operand = self.load_operand(operand);
+                        if is_ptr(ty) {
+                            spirv_operand
+                                .to_variable()
+                                .expect("should be a variable")
+                                .word
+                        } else {
+                            spirv_operand.load(self.scx).word
                         }
+                    })
+                    .collect();
+                if let Some(tup) = untuple {
+                    let ty = tup.ty(local_decls, self.mcx.tcx);
+                    let ty = self.mcx.monomorphize(&ty);
+                    let spirv_ty_ptr = self.to_ty_as_ptr_fn(ty);
+                    let tuple_var = self.load_operand(tup)
+                        .to_variable()
+                        .expect("Should be a variable");
+                    match ty.sty {
+                        TypeVariants::TyTuple(slice, b) => {
+                            let tuple_iter = slice.iter().enumerate().map(|(idx, field_ty)| {
+                                let field_ty_spv = self.to_ty_fn(field_ty);
+                                let field_ty_ptr_spv = self.to_ty_as_ptr_fn(field_ty);
+                                let spirv_idx = self.constant_u32(idx as u32).word;
+                                let field = self.scx
+                                    .builder
+                                    .access_chain(
+                                        field_ty_ptr_spv.word,
+                                        None,
+                                        tuple_var.word,
+                                        &[spirv_idx],
+                                    )
+                                    .expect("access chain");
+                                self.scx
+                                    .builder
+                                    .load(field_ty_spv.word, None, field, None, &[])
+                                    .expect("load")
+                            });
+                            arg_operand_loads.extend(tuple_iter);
+                        }
+                        _ => panic!("tup"),
                     }
-                    _ => (),
+                }
+                let spirv_fn_call = match fn_call {
+                    FunctionCall::Function(spirv_fn) => {
+                        let fn_call = self.scx
+                            .builder
+                            .function_call(spirv_ty.word, None, spirv_fn.0, &arg_operand_loads)
+                            .expect("fn call");
+                        Some(fn_call)
+                    }
+                    FunctionCall::Intrinsic(intrinsic) => match intrinsic {
+                        Intrinsic::GlslExt(id) => {
+                            let ext_fn = self.scx
+                                .builder
+                                .ext_inst(
+                                    spirv_ty.word,
+                                    None,
+                                    self.scx.glsl_ext_id,
+                                    id,
+                                    &arg_operand_loads,
+                                )
+                                .expect("ext instr");
+                            Some(ext_fn)
+                        }
+                        Intrinsic::Abort => {
+                            self.scx.builder.unreachable().expect("unreachable");
+                            None
+                        }
+                    },
+                };
+                // only write op store if the result is not nil
+                if !ret_ty.is_nil() {
+                    if let (&Some(ref dest), Some(spirv_fn_call)) = (destination, spirv_fn_call) {
+                        let &(ref lvalue, _) = dest;
+                        match lvalue {
+                            &mir::Place::Local(local) => {
+                                let var = self.vars.get(&local).expect("local");
+                                self.scx
+                                    .builder
+                                    .store(var.word, spirv_fn_call, None, &[])
+                                    .expect("store");
+                            }
+                            rest => unimplemented!("{:?}", rest),
+                        };
+                    }
                 }
                 let destination = destination.as_ref().expect("Fn call is diverging");
                 let &(_, target_block) = destination;
