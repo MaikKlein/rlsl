@@ -40,11 +40,10 @@ pub mod context;
 pub mod collector;
 pub mod typ;
 use rustc::ty;
-use self::context::{MirContext, CodegenCx};
+use self::context::{CodegenCx, MirContext};
 use self::typ::*;
 use rustc::ty::subst::Substs;
 use std::collections::HashMap;
-
 
 use itertools::{Either, Itertools};
 #[derive(Copy, Clone, Debug)]
@@ -378,7 +377,10 @@ pub struct SingleLayout<'tcx> {
     pub align: usize,
 }
 use syntax::ast;
-pub fn std140_layout<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, ty: ty::Ty<'tcx>) -> Option<Layout<'tcx>> {
+pub fn std140_layout<'a, 'tcx>(
+    tcx: TyCtxt<'a, 'tcx, 'tcx>,
+    ty: ty::Ty<'tcx>,
+) -> Option<Layout<'tcx>> {
     if let Some(intrinsic) = IntrinsicType::from_ty(tcx, ty) {
         match intrinsic {
             IntrinsicType::TyVec(ty_vec) => {
@@ -488,7 +490,10 @@ where
 }
 
 impl<'tcx> Entry<'tcx, Output<'tcx>> {
-    pub fn output<'a>(entry_points: &[EntryPoint<'a, 'tcx>], stx: &mut CodegenCx<'a, 'tcx>) -> Self {
+    pub fn output<'a>(
+        entry_points: &[EntryPoint<'a, 'tcx>],
+        stx: &mut CodegenCx<'a, 'tcx>,
+    ) -> Self {
         let set: HashSet<_> = entry_points
             .iter()
             .flat_map(EntryPoint::output_iter)
@@ -630,7 +635,6 @@ pub enum FunctionCall {
 }
 
 pub fn trans_spirv<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, items: &'a FxHashSet<MonoItem<'tcx>>) {
-    use rustc::mir::visit::Visitor;
     //struct_span_err!(tcx.sess, DUMMY_SP, E1337, "Test not allowed").emit();
 
     let mut ctx = CodegenCx::new(tcx);
@@ -775,7 +779,6 @@ impl AccessChain {
 
 fn write_dot(mcxs: &[MirContext]) {
     use std::fs::File;
-    use std::io::Write;
     use rustc_mir::util::write_mir_fn_graphviz;
     let path = std::env::current_dir().expect("dir").join("shader.dot");
     let mut file = File::create(&path).expect("file");
@@ -813,7 +816,7 @@ impl<'b, 'a, 'tcx> FunctionCx<'b, 'a, 'tcx> {
                         let indices: Vec<_> = access_chain
                             .indices
                             .iter()
-                            .map(|&i| self.scx.constant_u32(mcx, i as u32).0)
+                            .map(|&i| self.scx.constant_u32(mcx, i as u32).word)
                             .collect();
                         let access = self.scx
                             .builder
@@ -823,7 +826,7 @@ impl<'b, 'a, 'tcx> FunctionCx<'b, 'a, 'tcx> {
                             .builder
                             .load(spirv_ty.word, None, access, None, &[])
                             .expect("load");
-                        Operand::new(ty, OperandVariant::Value(Value(load)))
+                        Operand::new(ty, OperandVariant::Value(Value::new(load)))
                     }
                 }
             }
@@ -889,15 +892,16 @@ impl<'b, 'a, 'tcx> FunctionCx<'b, 'a, 'tcx> {
             .map(|local_arg| {
                 let local_decl = &mcx.mir.local_decls[local_arg];
                 let local_ty = mcx.monomorphize(&local_decl.ty);
-                let spirv_arg_ty = scx.to_ty_fn(local_ty);
-                let spirv_param = scx.builder
-                    .function_parameter(spirv_arg_ty.word)
-                    .expect("fn param");
+                // let spirv_arg_ty = scx.to_ty_fn(local_ty);
+                // let spirv_param = scx.builder
+                //     .function_parameter(spirv_arg_ty.word)
+                //     .expect("fn param");
 
-                if let Some(name) = local_decl.name {
-                    scx.name_from_str(name.as_str().as_ref(), spirv_param);
-                }
-                spirv_param
+                // if let Some(name) = local_decl.name {
+                //     scx.name_from_str(name.as_str().as_ref(), spirv_param);
+                // }
+                // spirv_param
+                Param::alloca(local_ty, scx)
             })
             .collect();
         scx.builder.begin_basic_block(None).expect("block");
@@ -908,30 +912,10 @@ impl<'b, 'a, 'tcx> FunctionCx<'b, 'a, 'tcx> {
                 let local_arg = mir::Local::new(index + 1);
                 let local_decl = &mcx.mir.local_decls[local_arg];
                 let local_ty = mcx.monomorphize(&local_decl.ty);
-                let spirv_var = if is_ptr(local_ty) {
-                    // If the parameter is a pointer, we pass the variable directly
-                    Variable::new(param, true, local_decl.ty, spirv::StorageClass::Function)
-                } else {
-                    // Otherwise we need to allocate a new variable because a non ptr type can not
-                    // be accessed with `OpAccessChain`
-                    let spirv_var_ty = scx.to_ty_as_ptr_fn(local_ty);
-                    let spirv_var = scx.builder.variable(
-                        spirv_var_ty.word,
-                        None,
-                        spirv::StorageClass::Function,
-                        None,
-                    );
-                    scx.builder
-                        .store(spirv_var, param, None, &[])
-                        .expect("store");
-                    Variable::new(
-                        spirv_var,
-                        true,
-                        local_decl.ty,
-                        spirv::StorageClass::Function,
-                    )
-                };
-                (local_arg, spirv_var)
+                (
+                    local_arg,
+                    param.to_variable(spirv::StorageClass::Function, scx),
+                )
             })
             .collect();
         {
@@ -939,20 +923,10 @@ impl<'b, 'a, 'tcx> FunctionCx<'b, 'a, 'tcx> {
             let local = mir::Local::new(0);
             let local_decl = &mcx.mir.local_decls[local];
             let ty = mcx.monomorphize(&local_decl.ty);
-            let spirv_var_ty = scx.to_ty_as_ptr_fn(ty);
-            let spirv_var =
-                scx.builder
-                    .variable(spirv_var_ty.word, None, spirv::StorageClass::Function, None);
-            scx.name_from_str("retvar", spirv_var);
-            args_map.insert(
-                local,
-                Variable::new(
-                    spirv_var,
-                    false,
-                    local_decl.ty,
-                    spirv::StorageClass::Function,
-                ),
-            );
+            let variable = Variable::alloca(ty, spirv::StorageClass::Function, scx);
+            // TODO DEBUG
+            //scx.name_from_str("retvar", spirv_var);
+            args_map.insert(local, variable);
         }
         FunctionCx::new(InstanceType::Fn, mcx, args_map, scx).visit_mir(mcx.mir);
     }
@@ -1032,7 +1006,11 @@ impl<'b, 'a, 'tcx> FunctionCx<'b, 'a, 'tcx> {
             .map(|(local, global)| {
                 (
                     local,
-                    Variable::new(global.var, false, global.ty, global.storage_class),
+                    Variable {
+                        word: global.var,
+                        ty: global.ty,
+                        storage_class: global.storage_class,
+                    },
                 )
             })
             .collect();
@@ -1073,12 +1051,11 @@ impl<'b, 'a, 'tcx> FunctionCx<'b, 'a, 'tcx> {
         // Insert the return variable
         variable_map.insert(
             mir::Local::new(0),
-            Variable::new(
-                output_var.var,
-                false,
-                mir.return_ty(),
-                output_var.storage_class,
-            ),
+            Variable {
+                word: output_var.var,
+                ty: mir.return_ty(),
+                storage_class: output_var.storage_class,
+            },
         );
 
         FunctionCx::new(
@@ -1102,19 +1079,23 @@ impl<'b, 'a, 'tcx> FunctionCx<'b, 'a, 'tcx> {
         scx.builder
             .execution_mode(spirv_function, spirv::ExecutionMode::OriginUpperLeft, &[]);
     }
-    pub fn to_ty(&mut self, ty: ty::Ty<'tcx>, storage_class: spirv::StorageClass) -> Ty {
+    pub fn to_ty(&mut self, ty: ty::Ty<'tcx>, storage_class: spirv::StorageClass) -> Ty<'tcx> {
         let ty = self.mcx.monomorphize(&ty);
         self.scx.to_ty(ty, storage_class)
     }
-    pub fn to_ty_as_ptr(&mut self, ty: ty::Ty<'tcx>, storage_class: spirv::StorageClass) -> Ty {
+    pub fn to_ty_as_ptr(
+        &mut self,
+        ty: ty::Ty<'tcx>,
+        storage_class: spirv::StorageClass,
+    ) -> Ty<'tcx> {
         let ty = self.mcx.monomorphize(&ty);
         self.scx.to_ty_as_ptr(ty, storage_class)
     }
-    pub fn to_ty_fn(&mut self, ty: ty::Ty<'tcx>) -> Ty {
+    pub fn to_ty_fn(&mut self, ty: ty::Ty<'tcx>) -> Ty<'tcx> {
         let ty = self.mcx.monomorphize(&ty);
         self.scx.to_ty(ty, spirv::StorageClass::Function)
     }
-    pub fn to_ty_as_ptr_fn(&mut self, ty: ty::Ty<'tcx>) -> Ty {
+    pub fn to_ty_as_ptr_fn(&mut self, ty: ty::Ty<'tcx>) -> Ty<'tcx> {
         let ty = self.mcx.monomorphize(&ty);
         self.scx.to_ty_as_ptr(ty, spirv::StorageClass::Function)
     }
@@ -1154,25 +1135,18 @@ impl<'b, 'a, 'tcx> FunctionCx<'b, 'a, 'tcx> {
                 let local_decl = &mcx.mir.local_decls[local_var];
                 let local_ty = mcx.monomorphize(&local_decl.ty);
                 let local_ty = remove_ptr_ty(local_ty);
-                let spirv_var_ty = scx.to_ty_as_ptr_fn(local_ty);
-                let spirv_var = scx.builder.variable(
-                    spirv_var_ty.word,
-                    None,
-                    spirv::StorageClass::Function,
-                    None,
-                );
-                if let Some(name) = local_decl.name {
-                    scx.name_from_str(name.as_str().as_ref(), spirv_var);
-                }
-                (
-                    local_var,
-                    Variable::new(
-                        spirv_var,
-                        false,
-                        local_decl.ty,
-                        spirv::StorageClass::Function,
-                    ),
-                )
+                // let spirv_var_ty = scx.to_ty_as_ptr_fn(local_ty);
+                // let spirv_var = scx.builder.variable(
+                //     spirv_var_ty.word,
+                //     None,
+                //     spirv::StorageClass::Function,
+                //     None,
+                // );
+                // if let Some(name) = local_decl.name {
+                //     scx.name_from_str(name.as_str().as_ref(), spirv_var);
+                // }
+                let variable = Variable::alloca(local_ty, spirv::StorageClass::Function, scx);
+                (local_var, variable)
             })
             .collect();
         {
@@ -1359,7 +1333,7 @@ impl<'b, 'a, 'tcx> rustc::mir::visit::Visitor<'tcx> for FunctionCx<'b, 'a, 'tcx>
             | &mir::Rvalue::CheckedBinaryOp(op, ref l, ref r) => self.binary_op(spirv_ty, op, l, r),
             &mir::Rvalue::Use(ref operand) => {
                 let load = self.load_operand(operand).load(self.scx);
-                let expr = Value(load);
+                let expr = Value::new(load);
                 expr
             }
 
@@ -1386,7 +1360,7 @@ impl<'b, 'a, 'tcx> rustc::mir::visit::Visitor<'tcx> for FunctionCx<'b, 'a, 'tcx>
                         }
                     })
                     .collect();
-                Value(
+                Value::new(
                     self.scx
                         .builder
                         .composite_construct(lvalue_ty_spirv.word, None, &spirv_operands)
@@ -1404,7 +1378,7 @@ impl<'b, 'a, 'tcx> rustc::mir::visit::Visitor<'tcx> for FunctionCx<'b, 'a, 'tcx>
                 let discr_ty = self.mcx.monomorphize(&enum_data.discr_ty);
                 let discr_ty_spirv = self.to_ty_fn(discr_ty);
                 let discr_ty_spirv_ptr = self.to_ty_as_ptr_fn(discr_ty);
-                let index = self.constant_u32(enum_data.index as u32).0;
+                let index = self.constant_u32(enum_data.index as u32).word;
                 let access = self.scx
                     .builder
                     .access_chain(discr_ty_spirv_ptr.word, None, var.word, &[index])
@@ -1420,7 +1394,7 @@ impl<'b, 'a, 'tcx> rustc::mir::visit::Visitor<'tcx> for FunctionCx<'b, 'a, 'tcx>
                     .bitcast(target_ty_spirv.word, None, load)
                     .expect("bitcast");
 
-                Value(cast)
+                Value::new(cast)
             }
             &mir::Rvalue::Cast(_, ref op, ty) => {
                 let op_ty = op.ty(&self.mcx.mir.local_decls, self.mcx.tcx);
@@ -1444,7 +1418,7 @@ impl<'b, 'a, 'tcx> rustc::mir::visit::Visitor<'tcx> for FunctionCx<'b, 'a, 'tcx>
             let indices: Vec<_> = access_chain
                 .indices
                 .iter()
-                .map(|&i| self.constant_u32(i as u32).0)
+                .map(|&i| self.constant_u32(i as u32).word)
                 .collect();
             let access = self.scx
                 .builder
@@ -1454,7 +1428,7 @@ impl<'b, 'a, 'tcx> rustc::mir::visit::Visitor<'tcx> for FunctionCx<'b, 'a, 'tcx>
         };
         self.scx
             .builder
-            .store(store, expr.0, None, &[])
+            .store(store, expr.word, None, &[])
             .expect("store");
         //        match lvalue {
         //            &mir::Place::Local(local) => {
@@ -1654,7 +1628,8 @@ impl<'b, 'a, 'tcx> rustc::mir::visit::Visitor<'tcx> for FunctionCx<'b, 'a, 'tcx>
                                                     let field_ty_spv = self.to_ty_fn(field_ty);
                                                     let field_ty_ptr_spv =
                                                         self.to_ty_as_ptr_fn(field_ty);
-                                                    let spirv_idx = self.constant_u32(idx as u32).0;
+                                                    let spirv_idx =
+                                                        self.constant_u32(idx as u32).word;
                                                     let field = self.scx
                                                         .builder
                                                         .access_chain(
@@ -1788,49 +1763,49 @@ impl<'b, 'a, 'tcx> FunctionCx<'b, 'a, 'tcx> {
                     .builder
                     .fmul(spirv_ty.word, None, left, right)
                     .expect("fmul");
-                Value(add)
+                Value::new(add)
             }
             mir::BinOp::Add => {
                 let add = self.scx
                     .builder
                     .fadd(spirv_ty.word, None, left, right)
                     .expect("fadd");
-                Value(add)
+                Value::new(add)
             }
             mir::BinOp::Sub => {
                 let add = self.scx
                     .builder
                     .fsub(spirv_ty.word, None, left, right)
                     .expect("fsub");
-                Value(add)
+                Value::new(add)
             }
             mir::BinOp::Div => {
                 let add = self.scx
                     .builder
                     .fdiv(spirv_ty.word, None, left, right)
                     .expect("fsub");
-                Value(add)
+                Value::new(add)
             }
             mir::BinOp::Gt => {
                 let gt = self.scx
                     .builder
                     .ugreater_than(spirv_ty.word, None, left, right)
                     .expect("g");
-                Value(gt)
+                Value::new(gt)
             }
             mir::BinOp::Shl => {
                 let shl = self.scx
                     .builder
                     .shift_left_logical(spirv_ty.word, None, left, right)
                     .expect("shl");
-                Value(shl)
+                Value::new(shl)
             }
             mir::BinOp::BitOr => {
                 let bit_or = self.scx
                     .builder
                     .bitwise_or(spirv_ty.word, None, left, right)
                     .expect("bitwise or");
-                Value(bit_or)
+                Value::new(bit_or)
             }
             rest => unimplemented!("{:?}", rest),
         }

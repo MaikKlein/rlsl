@@ -10,17 +10,18 @@ use syntax;
 use rustc::mir;
 use rustc::ty::{subst, TyCtxt};
 use {Enum, Variable};
-use {Intrinsic, IntrinsicType, ConstValue, Function, FunctionCall, Ty, Value};
+use {ConstValue, Function, FunctionCall, Intrinsic, IntrinsicType, Ty, Value};
 use rustc::ty::subst::Substs;
 use self::hir::def_id::DefId;
+use ConstructTy;
 
 pub struct CodegenCx<'a, 'tcx: 'a> {
     per_vertex: Option<Variable<'tcx>>,
     per_fragment: Option<Variable<'tcx>>,
     pub tcx: ty::TyCtxt<'a, 'tcx, 'tcx>,
     pub builder: Builder,
-    pub ty_cache: HashMap<ty::Ty<'tcx>, Ty>,
-    pub ty_ptr_cache: HashMap<(ty::Ty<'tcx>, spirv::StorageClass), Ty>,
+    pub ty_cache: HashMap<ty::Ty<'tcx>, Ty<'tcx>>,
+    pub ty_ptr_cache: HashMap<(ty::Ty<'tcx>, spirv::StorageClass), Ty<'tcx>>,
     pub const_cache: HashMap<ConstValue, Value>,
     pub forward_fns: HashMap<(hir::def_id::DefId, &'a Substs<'tcx>), Function>,
     pub intrinsic_fns: HashMap<hir::def_id::DefId, Intrinsic>,
@@ -29,10 +30,10 @@ pub struct CodegenCx<'a, 'tcx: 'a> {
 }
 
 impl<'a, 'tcx> CodegenCx<'a, 'tcx> {
-    pub fn to_ty_fn(&mut self, ty: ty::Ty<'tcx>) -> Ty {
+    pub fn to_ty_fn(&mut self, ty: ty::Ty<'tcx>) -> Ty<'tcx> {
         self.to_ty(ty, spirv::StorageClass::Function)
     }
-    pub fn to_ty_as_ptr_fn(&mut self, ty: ty::Ty<'tcx>) -> Ty {
+    pub fn to_ty_as_ptr_fn(&mut self, ty: ty::Ty<'tcx>) -> Ty<'tcx> {
         self.to_ty_as_ptr(ty, spirv::StorageClass::Function)
     }
     /// Tries to get a function id, if it fails it looks for an intrinsic id
@@ -75,7 +76,7 @@ impl<'a, 'tcx> CodegenCx<'a, 'tcx> {
                 let value = const_int.to_u128_unchecked() as u32;
                 self.builder.constant_u32(spirv_ty.word, value)
             }
-            ConstValue::Bool(b) => self.constant_u32(mcx, b as u32).0,
+            ConstValue::Bool(b) => self.constant_u32(mcx, b as u32).word,
             ConstValue::Float(const_float) => {
                 use rustc::infer::unify_key::ToType;
                 let value: f32 = unsafe { ::std::mem::transmute(const_float.bits as u32) };
@@ -84,7 +85,7 @@ impl<'a, 'tcx> CodegenCx<'a, 'tcx> {
                 self.builder.constant_f32(spirv_ty.word, value)
             }
         };
-        let spirv_expr = Value(spirv_val);
+        let spirv_expr = Value::new(spirv_val);
         self.const_cache.insert(val, spirv_expr);
         spirv_expr
     }
@@ -92,7 +93,7 @@ impl<'a, 'tcx> CodegenCx<'a, 'tcx> {
         &mut self,
         ty: rustc::ty::Ty<'tcx>,
         storage_class: spirv::StorageClass,
-    ) -> Ty {
+    ) -> Ty<'tcx> {
         use rustc::ty::TypeVariants;
         let ty = match ty.sty {
             TypeVariants::TyRef(_, type_and_mut) => {
@@ -120,21 +121,23 @@ impl<'a, 'tcx> CodegenCx<'a, 'tcx> {
                 let ty = self.tcx.mk_nil();
                 self.to_ty(ty, storage_class)
             }
-            TypeVariants::TyBool => self.builder.type_bool().into(),
+            TypeVariants::TyBool => self.builder.type_bool().construct_ty(ty),
             TypeVariants::TyInt(int_ty) => self.builder
                 .type_int(int_ty.bit_width().unwrap_or(32) as u32, 1)
-                .into(),
+                .construct_ty(ty),
             TypeVariants::TyUint(uint_ty) => self.builder
                 .type_int(uint_ty.bit_width().unwrap_or(32) as u32, 0)
-                .into(),
+                .construct_ty(ty),
             TypeVariants::TyFloat(f_ty) => {
                 use syntax::ast::FloatTy;
                 match f_ty {
-                    FloatTy::F32 => self.builder.type_float(32).into(),
+                    FloatTy::F32 => self.builder.type_float(32).construct_ty(ty),
                     FloatTy::F64 => panic!("f64 is not supported"),
                 }
             }
-            TypeVariants::TyTuple(slice, _) if slice.len() == 0 => self.builder.type_void().into(),
+            TypeVariants::TyTuple(slice, _) if slice.len() == 0 => {
+                self.builder.type_void().construct_ty(ty)
+            }
             TypeVariants::TyTuple(slice, _) => {
                 let field_ty_spirv: Vec<_> = slice
                     .iter()
@@ -142,7 +145,7 @@ impl<'a, 'tcx> CodegenCx<'a, 'tcx> {
                     .collect();
 
                 let spirv_struct = self.builder.type_struct(&field_ty_spirv);
-                spirv_struct.into()
+                spirv_struct.construct_ty(ty)
             }
             TypeVariants::TyFnPtr(sig) => {
                 let ty = self.tcx
@@ -153,13 +156,15 @@ impl<'a, 'tcx> CodegenCx<'a, 'tcx> {
                     .iter()
                     .map(|ty| self.to_ty(ty, storage_class).word)
                     .collect();
-                self.builder.type_function(ret_ty.word, &input_ty).into()
+                self.builder
+                    .type_function(ret_ty.word, &input_ty)
+                    .construct_ty(ty)
             }
             TypeVariants::TyRawPtr(type_and_mut) => {
                 let inner = self.to_ty(type_and_mut.ty, storage_class);
                 self.builder
                     .type_pointer(None, storage_class, inner.word)
-                    .into()
+                    .construct_ty(ty)
             }
             TypeVariants::TyParam(_) => panic!("TyParam should have been monomorphized"),
             TypeVariants::TyAdt(adt, substs) => {
@@ -209,14 +214,14 @@ impl<'a, 'tcx> CodegenCx<'a, 'tcx> {
                                 }
                                 self.name_from_def_id(adt.did, spirv_struct);
                             }
-                            spirv_struct.into()
+                            spirv_struct.construct_ty(ty)
                         } else {
                             // If we have an enum, but without an layout it should be enum Foo {}
                             // TODO: Empty struct correct?
-                            //self.builder.type_struct(&[]).into()
+                            //self.builder.type_struct(&[])
                             let ty = self.tcx.mk_ty(TypeVariants::TyNever);
                             self.to_ty(ty, storage_class)
-                            //self.builder.type_opaque(self.tcx.item_name(adt.did).as_ref()).into()
+                            //self.builder.type_opaque(self.tcx.item_name(adt.did).as_ref())
                         }
                     }
                     ty::AdtKind::Struct => {
@@ -227,12 +232,10 @@ impl<'a, 'tcx> CodegenCx<'a, 'tcx> {
                             let intrinsic_spirv = match intrinsic {
                                 IntrinsicType::TyVec(ty_vec) => {
                                     let spirv_ty = self.to_ty(ty_vec.ty, storage_class);
-                                    self.builder
-                                        .type_vector(spirv_ty.word, ty_vec.dim as u32)
-                                        .into()
+                                    self.builder.type_vector(spirv_ty.word, ty_vec.dim as u32)
                                 }
                             };
-                            intrinsic_spirv
+                            intrinsic_spirv.construct_ty(ty)
                         } else {
                             // let fields_ty = adt.all_fields()
                             //     .map(|field| field.ty(self.tcx, substs))
@@ -308,7 +311,7 @@ impl<'a, 'tcx> CodegenCx<'a, 'tcx> {
                                 }
                             }
                             self.name_from_def_id(adt.did, spirv_struct);
-                            spirv_struct.into()
+                            spirv_struct.construct_ty(ty)
                         }
                     }
                     ref r => unimplemented!("{:?}", r),
@@ -321,7 +324,7 @@ impl<'a, 'tcx> CodegenCx<'a, 'tcx> {
                     .collect();
 
                 let spirv_struct = self.builder.type_struct(&field_ty_spirv);
-                spirv_struct.into()
+                spirv_struct.construct_ty(ty)
             }
             ref r => unimplemented!("{:?}", r),
         };
@@ -337,7 +340,7 @@ impl<'a, 'tcx> CodegenCx<'a, 'tcx> {
         &mut self,
         ty: ty::Ty<'tcx>,
         storage_class: spirv::StorageClass,
-    ) -> Ty {
+    ) -> Ty<'tcx> {
         let t = ty::TypeAndMut {
             ty,
             mutbl: rustc::hir::Mutability::MutMutable,
@@ -396,18 +399,15 @@ impl<'a, 'tcx> CodegenCx<'a, 'tcx> {
                 })
                 .is_some();
             let spirv_ty = self.to_ty(ty, spirv::StorageClass::Input);
-            let spirv_ty_ptr = self.to_ty_as_ptr(ty, spirv::StorageClass::Input);
             assert!(is_fragment, "Not a fragment");
+            let var = Variable::alloca(ty, spirv::StorageClass::Input, self);
+            // TODO
             self.builder.member_decorate(
                 spirv_ty.word,
                 0,
                 spirv::Decoration::BuiltIn,
                 &[rspirv::mr::Operand::BuiltIn(spirv::BuiltIn::FragCoord)],
             );
-            let var =
-                self.builder
-                    .variable(spirv_ty_ptr.word, None, spirv::StorageClass::Input, None);
-            let var = Variable::new(var, false, ty, spirv::StorageClass::Input);
             self.per_fragment = Some(var);
             var
         })
@@ -421,6 +421,7 @@ impl<'a, 'tcx> CodegenCx<'a, 'tcx> {
                 _ => unreachable!(),
             };
             let spirv_ty = self.to_ty(struct_ty, spirv::StorageClass::Output);
+            let var = Variable::alloca(struct_ty, spirv::StorageClass::Output, self);
             self.builder.member_decorate(
                 spirv_ty.word,
                 0,
@@ -433,11 +434,6 @@ impl<'a, 'tcx> CodegenCx<'a, 'tcx> {
                 spirv::Decoration::BuiltIn,
                 &[rspirv::mr::Operand::BuiltIn(spirv::BuiltIn::PointSize)],
             );
-            let spirv_ty_ptr = self.to_ty_as_ptr(struct_ty, spirv::StorageClass::Output);
-            let var =
-                self.builder
-                    .variable(spirv_ty_ptr.word, None, spirv::StorageClass::Output, None);
-            let var = Variable::new(var, false, struct_ty, spirv::StorageClass::Output);
             self.per_vertex = Some(var);
             var
         })

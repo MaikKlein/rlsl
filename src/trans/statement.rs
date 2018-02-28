@@ -1,10 +1,7 @@
 use FunctionCx;
 use rustc::mir;
-use rustc::ty::layout::Integer;
 use ConstValue;
 use rustc_const_math::ConstInt;
-use rustc::ty::ParamEnv;
-use rustc::traits::Reveal;
 use Enum;
 pub fn trans_statement<'scope, 'a: 'scope, 'tcx: 'a>(
     visitor: &mut FunctionCx<'scope, 'a, 'tcx>,
@@ -29,11 +26,11 @@ pub fn trans_statement<'scope, 'a: 'scope, 'tcx: 'a>(
         };
 
         let discr_index = e.index;
-        let index = visitor.constant_u32(discr_index as u32).0;
+        let index = visitor.constant_u32(discr_index as u32).word;
 
         // FIXME check for the real type
         let variant_const_val = ConstValue::Integer(ConstInt::U32(variant_index as u32));
-        let variant = visitor.constant(variant_const_val).0;
+        let variant = visitor.constant(variant_const_val).word;
         let access = visitor
             .scx
             .builder
