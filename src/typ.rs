@@ -201,7 +201,7 @@ impl Value {
     }
 }
 
-#[derive(Copy, Clone, Debug, Hash, Eq, PartialOrd, PartialEq)]
+#[derive(Copy, Clone, Debug, Hash, Eq, PartialEq)]
 pub struct Ty<'tcx> {
     pub word: spirv::Word,
     pub ty: ty::Ty<'tcx>,

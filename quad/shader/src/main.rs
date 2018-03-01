@@ -83,3 +83,4 @@ fn test_mut(f: &mut f32) {
 //         .extend(1.0);
 //     println!("coord {:?}", coord);
 // }
+fn main(){}

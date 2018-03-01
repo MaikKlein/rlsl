@@ -95,6 +95,7 @@ impl<'a, 'tcx> CodegenCx<'a, 'tcx> {
         storage_class: spirv::StorageClass,
     ) -> Ty<'tcx> {
         use rustc::ty::TypeVariants;
+        use syntax::ast::{IntTy, UintTy};
         let ty = match ty.sty {
             TypeVariants::TyRef(_, type_and_mut) => {
                 let t = ty::TypeAndMut {
@@ -109,6 +110,12 @@ impl<'a, 'tcx> CodegenCx<'a, 'tcx> {
             TypeVariants::TyRawPtr(_) => true,
             _ => false,
         };
+        // TODO: Should integer always be 32bit wide?
+        let ty = match ty.sty {
+            TypeVariants::TyInt(_) => self.tcx.mk_ty(TypeVariants::TyInt(IntTy::I32)),
+            TypeVariants::TyUint(_) => self.tcx.mk_ty(TypeVariants::TyUint(UintTy::U32)),
+            _ => ty,
+        };
         if let Some(ty) = self.ty_cache
             .get(ty)
             .or_else(|| self.ty_ptr_cache.get(&(ty, storage_class)))
@@ -122,12 +129,8 @@ impl<'a, 'tcx> CodegenCx<'a, 'tcx> {
                 self.to_ty(ty, storage_class)
             }
             TypeVariants::TyBool => self.builder.type_bool().construct_ty(ty),
-            TypeVariants::TyInt(int_ty) => self.builder
-                .type_int(int_ty.bit_width().unwrap_or(32) as u32, 1)
-                .construct_ty(ty),
-            TypeVariants::TyUint(uint_ty) => self.builder
-                .type_int(uint_ty.bit_width().unwrap_or(32) as u32, 0)
-                .construct_ty(ty),
+            TypeVariants::TyInt(int_ty) => self.builder.type_int(32, 1).construct_ty(ty),
+            TypeVariants::TyUint(uint_ty) => self.builder.type_int(32, 0).construct_ty(ty),
             TypeVariants::TyFloat(f_ty) => {
                 use syntax::ast::FloatTy;
                 match f_ty {

@@ -88,8 +88,8 @@ impl<'tcx> rustc::mir::visit::Visitor<'tcx> for TyErrorVisitor {
 
 pub fn extract_location<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, ty: ty::Ty<'tcx>) -> Option<u32> {
     if let TypeVariants::TyAdt(_, substs) = ty.sty {
-        assert!(substs.len() == 1, "Len should be 1");
-        let inner_ty = substs[0].as_type().expect("Should be ty");
+        //assert!(substs.len() == 1, "Len should be 1");
+        let inner_ty = substs.type_at(0);
         let location_id = inner_ty.ty_to_def_id().expect("id location");
         let attrs = tcx.get_attrs(location_id);
         let val = ::extract_attr(&attrs, "spirv", |s| match s {
@@ -710,16 +710,6 @@ pub fn trans_spirv<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, items: &'a FxHashSet<M
     ctx.build_module();
 }
 
-fn write_dot(mcxs: &[MirContext]) {
-    use std::fs::File;
-    use rustc_mir::util::write_mir_fn_graphviz;
-    let path = std::env::current_dir().expect("dir").join("shader.dot");
-    let mut file = File::create(&path).expect("file");
-    for mcx in mcxs {
-        write_mir_fn_graphviz(mcx.tcx, mcx.def_id, mcx.mir, &mut file);
-    }
-}
-
 use rustc::middle::const_val::ConstVal;
 impl<'b, 'a, 'tcx> FunctionCx<'b, 'a, 'tcx> {
     pub fn load_operand<'r>(&mut self, operand: &'r mir::Operand<'tcx>) -> Operand<'tcx> {
@@ -1072,9 +1062,10 @@ pub struct Enum<'tcx> {
 impl<'tcx> Enum<'tcx> {
     pub fn from_ty<'a>(tcx: TyCtxt<'a, 'tcx, 'tcx>, ty: ty::Ty<'tcx>) -> Option<Enum<'tcx>> {
         use rustc::ty::layout::Variants;
-        let e = (tcx, ParamEnv::empty(rustc::traits::Reveal::All))
-            .layout_of(ty)
-            .ok()
+        let e = tcx.layout_raw(ty::ParamEnvAnd {
+            param_env: ParamEnv::empty(rustc::traits::Reveal::All),
+            value: ty,
+        }).ok()
             .and_then(|layout| {
                 if let Variants::Tagged {
                     ref discr,
