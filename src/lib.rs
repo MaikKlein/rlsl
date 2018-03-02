@@ -510,6 +510,7 @@ fn intrinsic_fn(attrs: &[syntax::ast::Attribute]) -> Option<IntrinsicFn> {
 pub enum Intrinsic {
     GlslExt(spirv::Word),
     Abort,
+    Discard,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -639,6 +640,7 @@ pub fn trans_spirv<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, items: &'a FxHashSet<M
                 }
                 let abort = match intrinsic_name {
                     "abort" => Some(Intrinsic::Abort),
+                    "spirv_discard" => Some(Intrinsic::Discard),
                     _ => None,
                 };
                 if let Some(abort) = abort {
@@ -665,10 +667,11 @@ pub fn trans_spirv<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, items: &'a FxHashSet<M
         .collect();
     // write_dot(&instances);
     instances.iter().for_each(|mcx| {
-        //println!("{:?}", mcx.def_id);
+        // println!("{:?}", mcx.def_id);
+        // let attrs = tcx.get_attrs(mcx.def_id);
+        // println!("{:#?}", attrs);
         // println!("{}", mcx.tcx.def_symbol_name(mcx.def_id));
         // println!("{}", mcx.tcx.item_name(mcx.def_id));
-        //println!("{:#?}", mcx.mir);
     });
 
     if TyErrorVisitor::has_error(&instances) {
@@ -701,9 +704,11 @@ pub fn trans_spirv<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, items: &'a FxHashSet<M
     entry_instances.iter().for_each(|e| {
         FunctionCx::trans_entry(&e, &entry_input, &entry_output, &entry_descriptor, &mut ctx);
     });
+    let entry_fn_node_id = tcx.sess.entry_fn.borrow().expect("entry").0;
+    let entry_fn = tcx.hir.local_def_id(entry_fn_node_id);
     fn_instances
         .iter()
-        //.filter(|mcx| mcx.def_id != entry_fn && tcx.lang_items().start_fn() != Some(mcx.def_id))
+        .filter(|mcx| mcx.def_id != entry_fn && tcx.lang_items().start_fn() != Some(mcx.def_id))
         .for_each(|&mcx| {
             FunctionCx::trans_fn(mcx, &mut ctx);
         });
@@ -1175,7 +1180,7 @@ impl<'b, 'a, 'tcx> rustc::mir::visit::Visitor<'tcx> for FunctionCx<'b, 'a, 'tcx>
         }
         let expr = match rvalue {
             &mir::Rvalue::BinaryOp(op, ref l, ref r)
-            | &mir::Rvalue::CheckedBinaryOp(op, ref l, ref r) => self.binary_op(spirv_ty, op, l, r),
+            | &mir::Rvalue::CheckedBinaryOp(op, ref l, ref r) => self.binary_op(ty, op, l, r),
             &mir::Rvalue::Use(ref operand) => self.load_operand(operand).load(self.scx),
 
             &mir::Rvalue::Aggregate(_, ref operands) => {
@@ -1295,10 +1300,16 @@ impl<'b, 'a, 'tcx> rustc::mir::visit::Visitor<'tcx> for FunctionCx<'b, 'a, 'tcx>
                     let load = self.load_operand(discr).load(self.scx).word;
                     let target_ty = self.mcx.tcx.mk_mach_uint(syntax::ast::UintTy::U32);
                     let target_ty_spirv = self.to_ty_fn(target_ty);
+                    // self.scx
+                    //     .builder
+                    //     .bitcast(target_ty_spirv.word, None, load)
+                    //     .expect("bitcast")
+                    let one = self.scx.constant_u32(self.mcx, 1).word;
+                    let zero = self.scx.constant_u32(self.mcx, 0).word;
                     self.scx
                         .builder
-                        .bitcast(target_ty_spirv.word, None, load)
-                        .expect("bitcast")
+                        .select(target_ty_spirv.word, None, load, one, zero)
+                        .expect("select")
                 } else {
                     self.load_operand(discr).load(self.scx).word
                 };
@@ -1446,6 +1457,10 @@ impl<'b, 'a, 'tcx> rustc::mir::visit::Visitor<'tcx> for FunctionCx<'b, 'a, 'tcx>
                             self.scx.builder.unreachable().expect("unreachable");
                             None
                         }
+                        Intrinsic::Discard => {
+                            self.scx.builder.kill().expect("unreachable");
+                            return;
+                        }
                     },
                 };
                 // only write op store if the result is not nil
@@ -1496,12 +1511,14 @@ pub enum SpirvRvalue {
 impl<'b, 'a, 'tcx> FunctionCx<'b, 'a, 'tcx> {
     pub fn binary_op(
         &mut self,
-        spirv_ty: Ty,
+        return_ty: ty::Ty<'tcx>,
         op: mir::BinOp,
         l: &mir::Operand<'tcx>,
         r: &mir::Operand<'tcx>,
     ) -> Value {
+        let ty = l.ty(&self.mcx.mir.local_decls, self.mcx.tcx);
         // TODO: Different types
+        let spirv_ty = self.to_ty_fn(return_ty);
         let left = self.load_operand(l).load(self.scx).word;
         let right = self.load_operand(r).load(self.scx).word;
         // TODO: Impl ops
@@ -1535,10 +1552,21 @@ impl<'b, 'a, 'tcx> FunctionCx<'b, 'a, 'tcx> {
                 Value::new(add)
             }
             mir::BinOp::Gt => {
-                let gt = self.scx
-                    .builder
-                    .ugreater_than(spirv_ty.word, None, left, right)
-                    .expect("g");
+                let gt = match ty.sty {
+                    TypeVariants::TyInt(_) => self.scx
+                        .builder
+                        .sgreater_than(spirv_ty.word, None, left, right)
+                        .expect("g"),
+                    TypeVariants::TyUint(_) | TypeVariants::TyBool => self.scx
+                        .builder
+                        .ugreater_than(spirv_ty.word, None, left, right)
+                        .expect("g"),
+                    TypeVariants::TyFloat(_) => self.scx
+                        .builder
+                        .ford_greater_than(spirv_ty.word, None, left, right)
+                        .expect("g"),
+                    ref rest => unimplemented!("{:?}", rest),
+                };
                 Value::new(gt)
             }
             mir::BinOp::Shl => {

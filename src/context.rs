@@ -116,6 +116,7 @@ impl<'a, 'tcx> CodegenCx<'a, 'tcx> {
             TypeVariants::TyUint(_) => self.tcx.mk_ty(TypeVariants::TyUint(UintTy::U32)),
             _ => ty,
         };
+
         if let Some(ty) = self.ty_cache
             .get(ty)
             .or_else(|| self.ty_ptr_cache.get(&(ty, storage_class)))
@@ -360,6 +361,7 @@ impl<'a, 'tcx> CodegenCx<'a, 'tcx> {
         });
         item.map(|item| &*item.attrs)
     }
+
     pub fn name_from_def_id(&mut self, def_id: hir::def_id::DefId, id: spirv::Word) {
         if self.debug_symbols {
             //self.builder.name(id, self.tcx.item_name(def_id).as_ref());
@@ -384,6 +386,7 @@ impl<'a, 'tcx> CodegenCx<'a, 'tcx> {
             .iter()
             .flat_map(|val| (0..size_of::<u32>()).map(move |i| ((val >> (8 * i)) & 0xff) as u8))
             .collect();
+
         let mut loader = rspirv::mr::Loader::new();
         //let bytes = b.module().assemble_bytes();
         rspirv::binary::parse_bytes(&bytes, &mut loader);

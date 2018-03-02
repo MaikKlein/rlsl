@@ -20,6 +20,19 @@ pub struct Fragment {
     pub frag_coord: Vec4<f32>,
 }
 
+impl Fragment {
+    #[spirv(discard)]
+    pub fn discard() {
+        unsafe {
+            spirv_discard();
+        }
+    }
+}
+
+extern "C" {
+    fn spirv_discard();
+}
+
 #[spirv(PerVertex)]
 pub struct Vertex {
     pub position: Vec4<f32>,
