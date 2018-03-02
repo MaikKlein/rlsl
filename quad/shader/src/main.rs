@@ -9,25 +9,35 @@ fn color_frag(
     time: Descriptor<N2, N0, f32>,
 ) -> Output<N0, Vec4<f32>> {
     let uv = uv.data;
-    let mut time = time.data;
-    let offset = Vec3::new(0.0, 2.0, 4.0);
-    let coord = uv.extend(uv.x)
-        .add(offset)
-        .map(move |f| f32::cos(time + f) * 0.5)
-        .add(Vec3::single(0.5))
-        .extend(1.0);
-    Output::new(coord)
+    // let mut time = time.data;
+    let offset = Vec3::new(0.0f32, 2.0, 4.0);
+    let right = uv.x > 0.5;
+    let top = uv.y > 0.5;
+
+    let color: Vec3<f32> = match (right, top) {
+        (true, true) => Vec3::new(0.0, 0.0, 1.0),
+        (true, false) => Vec3::new(0.0, 1.0, 0.0),
+        (false, true) => Vec3::new(1.0, 0.0, 0.0),
+        (false, false) => Vec3::new(1.0, 1.0, 1.0),
+    };
+
+    // let coord = uv.extend(uv.x)
+    //     .add(offset)
+    //     .map(move |f| f32::cos(time + f) * 0.5)
+    //     .add(Vec3::single(0.5))
+    //     .extend(1.0);
+    Output::new(color.extend(1.0))
 }
 
-#[spirv(vertex)]
-fn vertex(
-    vertex: &mut Vertex,
-    pos: Input<N0, Vec4<f32>>,
-    uv: Input<N1, Vec2<f32>>,
-) -> Output<N0, Vec2<f32>> {
-    vertex.position = pos.data;
-    Output::new(uv.data)
-}
+// #[spirv(vertex)]
+// fn vertex(
+//     vertex: &mut Vertex,
+//     pos: Input<N0, Vec4<f32>>,
+//     uv: Input<N1, Vec2<f32>>,
+// ) -> Output<N0, Vec2<f32>> {
+//     vertex.position = pos.data;
+//     Output::new(uv.data)
+// }
 
 //#[spirv(fragment)]
 //fn test_frag(
@@ -83,4 +93,4 @@ fn test_mut(f: &mut f32) {
 //         .extend(1.0);
 //     println!("coord {:?}", coord);
 // }
-fn main(){}
+fn main() {}
