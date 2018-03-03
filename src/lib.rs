@@ -1122,6 +1122,7 @@ impl<'b, 'a, 'tcx> rustc::mir::visit::Visitor<'tcx> for FunctionCx<'b, 'a, 'tcx>
     fn visit_basic_block_data(&mut self, block: mir::BasicBlock, data: &mir::BasicBlockData<'tcx>) {
         {
             let spirv_label = self.label_blocks.get(&block).expect("no spirv label");
+            self.scx.builder.name(spirv_label.0, format!("{:?}", block));
             let label = self.scx
                 .builder
                 .begin_basic_block(Some(spirv_label.0))
