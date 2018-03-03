@@ -50,21 +50,21 @@ impl<'a, 'tcx> CodegenCx<'a, 'tcx> {
                 .map(|&id| FunctionCall::Intrinsic(id)))
     }
 
-    pub fn constant_f32(&mut self, mcx: MirContext<'a, 'tcx>, value: f32) -> Value {
+    pub fn constant_f32(&mut self, value: f32) -> Value {
         use std::convert::TryFrom;
         let val = ConstValue::Float(ConstFloat::from_u128(
             TryFrom::try_from(value.to_bits()).expect("Could not convert from f32 to u128"),
             syntax::ast::FloatTy::F32,
         ));
-        self.constant(mcx, val)
+        self.constant(val)
     }
 
-    pub fn constant_u32(&mut self, mcx: MirContext<'a, 'tcx>, value: u32) -> Value {
+    pub fn constant_u32(&mut self, value: u32) -> Value {
         let val = ConstValue::Integer(ConstInt::U32(value));
-        self.constant(mcx, val)
+        self.constant(val)
     }
 
-    pub fn constant(&mut self, mcx: MirContext<'a, 'tcx>, val: ConstValue) -> Value {
+    pub fn constant(&mut self, val: ConstValue) -> Value {
         if let Some(val) = self.const_cache.get(&val) {
             return *val;
         }
@@ -76,7 +76,7 @@ impl<'a, 'tcx> CodegenCx<'a, 'tcx> {
                 let value = const_int.to_u128_unchecked() as u32;
                 self.builder.constant_u32(spirv_ty.word, value)
             }
-            ConstValue::Bool(b) => self.constant_u32(mcx, b as u32).word,
+            ConstValue::Bool(b) => self.constant_u32(b as u32).word,
             ConstValue::Float(const_float) => {
                 use rustc::infer::unify_key::ToType;
                 let value: f32 = unsafe { ::std::mem::transmute(const_float.bits as u32) };
@@ -465,7 +465,114 @@ impl<'a, 'tcx> CodegenCx<'a, 'tcx> {
     }
 }
 
-#[derive(Copy, Clone)]
+#[derive(Clone)]
+pub struct SpirvMir<'a, 'tcx: 'a> {
+    pub def_id: hir::def_id::DefId,
+    pub mir: mir::Mir<'tcx>,
+    pub substs: &'tcx rustc::ty::subst::Substs<'tcx>,
+    pub merge_blocks: HashMap<mir::BasicBlock, mir::BasicBlock>,
+    pub tcx: TyCtxt<'a, 'tcx, 'tcx>,
+}
+
+impl<'a, 'tcx> SpirvMir<'a, 'tcx> {
+    pub fn mir(&self) -> &mir::Mir<'tcx> {
+        &self.mir
+    }
+    pub fn from_mir(mcx: &::MirContext<'a, 'tcx>) -> Self {
+        use mir::visit::Visitor;
+        struct FindMergeBlocks<'a, 'tcx: 'a> {
+            mir: &'a mir::Mir<'tcx>,
+            merge_blocks: HashMap<mir::BasicBlock, mir::BasicBlock>,
+        }
+
+        impl<'a, 'tcx> Visitor<'tcx> for FindMergeBlocks<'a, 'tcx> {
+            fn visit_terminator_kind(
+                &mut self,
+                block: mir::BasicBlock,
+                kind: &mir::TerminatorKind<'tcx>,
+                location: mir::Location,
+            ) {
+                match kind {
+                    &mir::TerminatorKind::SwitchInt {
+                        ref discr,
+                        switch_ty,
+                        ref targets,
+                        ..
+                    } => {
+                        let merge_block =
+                            ::find_merge_block(self.mir, block, targets).expect("no merge block");
+                        self.merge_blocks.insert(block, merge_block);
+                    }
+                    _ => (),
+                };
+            }
+        }
+
+        let mut visitor = FindMergeBlocks {
+            mir: mcx.mir,
+            merge_blocks: HashMap::new(),
+        };
+
+        visitor.visit_mir(mcx.mir);
+        let merge_blocks = visitor.merge_blocks;
+        let mut spirv_mir = mcx.mir.clone();
+        let mut fixed_merge_blocks = HashMap::new();
+        use syntax_pos::DUMMY_SP;
+        for (block, merge_block) in merge_blocks {
+            use rustc_data_structures::control_flow_graph::ControlFlowGraph;
+            use std::collections::HashSet;
+            let pred: HashSet<_> = ControlFlowGraph::predecessors(&spirv_mir, merge_block)
+                .into_iter()
+                .collect();
+            let suc: HashSet<_> = ControlFlowGraph::successors(&spirv_mir, block)
+                .into_iter()
+                .collect();
+            let previous_blocks: HashSet<_> = pred.intersection(&suc).collect();
+            if previous_blocks.is_empty() {
+                fixed_merge_blocks.insert(block, merge_block);
+            } else {
+                let terminator = mir::Terminator {
+                    source_info: mir::SourceInfo {
+                        span: DUMMY_SP,
+                        scope: mir::ARGUMENT_VISIBILITY_SCOPE,
+                    },
+                    kind: mir::TerminatorKind::Goto {
+                        target: merge_block,
+                    },
+                };
+                let goto_data = mir::BasicBlockData::new(Some(terminator));
+                let goto_block = spirv_mir.basic_blocks_mut().push(goto_data);
+                fixed_merge_blocks.insert(block, goto_block);
+                for &previous_block in previous_blocks {
+                    if let mir::TerminatorKind::Goto { ref mut target } = spirv_mir
+                        .basic_blocks_mut()[previous_block]
+                        .terminator_mut()
+                        .kind
+                    {
+                        *target = goto_block;
+                    } else {
+                        panic!("Should be a goto");
+                    }
+                }
+            }
+        }
+        SpirvMir {
+            mir: spirv_mir,
+            merge_blocks: fixed_merge_blocks,
+            substs: mcx.substs,
+            tcx: mcx.tcx,
+            def_id: mcx.def_id,
+        }
+    }
+    pub fn monomorphize<T>(&self, value: &T) -> T
+    where
+        T: rustc::infer::TransNormalize<'tcx>,
+    {
+        self.tcx.trans_apply_param_substs(self.substs, value)
+    }
+}
+
+#[derive(Clone)]
 pub struct MirContext<'a, 'tcx: 'a> {
     pub def_id: hir::def_id::DefId,
     pub tcx: TyCtxt<'a, 'tcx, 'tcx>,
@@ -473,6 +580,9 @@ pub struct MirContext<'a, 'tcx: 'a> {
     pub substs: &'tcx subst::Substs<'tcx>,
 }
 impl<'a, 'tcx> MirContext<'a, 'tcx> {
+    pub fn mir(&self) -> &'a mir::Mir<'tcx> {
+        self.mir
+    }
     pub fn monomorphize<T>(&self, value: &T) -> T
     where
         T: rustc::infer::TransNormalize<'tcx>,

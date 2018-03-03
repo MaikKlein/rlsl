@@ -142,7 +142,7 @@ impl<'tcx> Variable<'tcx> {
             variable
         } else {
             let lvalue_ty = lvalue
-                .ty(&fx.mcx.mir.local_decls, fx.scx.tcx)
+                .ty(&fx.mcx.mir().local_decls, fx.scx.tcx)
                 .to_ty(fx.scx.tcx);
             let lvalue_ty = fx.mcx.monomorphize(&lvalue_ty);
             let lvalue_ty = ::remove_ptr_ty(lvalue_ty);

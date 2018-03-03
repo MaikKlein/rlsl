@@ -20,6 +20,10 @@ fn color_frag(
         (false, true) => Vec3::new(1.0, 0.0, 0.0),
         (false, false) => Vec3::new(1.0, 1.0, 1.0),
     };
+    // let color: Vec3<f32> = match right {
+    //     true => Vec3::new(0.0, 0.0, 1.0),
+    //     false => Vec3::new(0.0, 1.0, 0.0),
+    // };
 
     // let coord = uv.extend(uv.x)
     //     .add(offset)
@@ -52,13 +56,13 @@ fn color_frag(
 //    Output::new(coord)
 //}
 
-fn test(f: f32) -> f32 {
-    f + 1.0
-}
+// fn test(f: f32) -> f32 {
+//     f + 1.0
+// }
 
-fn test_mut(f: &mut f32) {
-    *f += 1.0;
-}
+// fn test_mut(f: &mut f32) {
+//     *f += 1.0;
+// }
 //fn test_add(f: &mut f32){
 //    *f += 0.5f32;
 //}

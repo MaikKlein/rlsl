@@ -40,7 +40,7 @@ pub mod context;
 pub mod collector;
 pub mod typ;
 use rustc::ty;
-use self::context::{CodegenCx, MirContext};
+use self::context::{CodegenCx, MirContext, SpirvMir};
 use self::typ::*;
 use rustc::ty::subst::Substs;
 use std::collections::HashMap;
@@ -71,7 +71,7 @@ impl TyErrorVisitor {
             if visitor.has_error {
                 return true;
             } else {
-                visitor.visit_mir(mcx.mir);
+                visitor.visit_mir(mcx.mir());
             }
         }
         false
@@ -108,33 +108,33 @@ pub fn extract_location<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, ty: ty::Ty<'tcx>)
 
 pub struct EntryPoint<'a, 'tcx: 'a> {
     pub entry_type: IntrinsicEntry,
-    pub mcx: MirContext<'a, 'tcx>,
+    pub mcx: SpirvMir<'a, 'tcx>,
 }
 
 impl<'a, 'tcx> EntryPoint<'a, 'tcx> {
     pub fn input_iter(&'a self) -> impl Iterator<Item = Input<'tcx>> + 'a {
-        self.mcx.mir.args_iter().filter_map(move |local| {
-            let ty = self.mcx.mir.local_decls[local].ty;
+        self.mcx.mir().args_iter().filter_map(move |local| {
+            let ty = self.mcx.mir().local_decls[local].ty;
             Input::new(self, ty)
         })
     }
 
     pub fn descriptor_iter(&'a self) -> impl Iterator<Item = Descriptor<'tcx>> + 'a {
-        self.mcx.mir.args_iter().filter_map(move |local| {
-            let ty = self.mcx.mir.local_decls[local].ty;
+        self.mcx.mir().args_iter().filter_map(move |local| {
+            let ty = self.mcx.mir().local_decls[local].ty;
             Descriptor::new(self.mcx.tcx, ty)
         })
     }
 
     pub fn output_iter(&'a self) -> impl Iterator<Item = Output<'tcx>> + 'a {
         use std::iter::once;
-        once(self.mcx.mir.return_ty()).filter_map(move |ty| Output::new(self.mcx.tcx, ty))
+        once(self.mcx.mir().return_ty()).filter_map(move |ty| Output::new(self.mcx.tcx, ty))
     }
 
     pub fn args(&self) -> Vec<mir::Local> {
         match self.entry_type {
-            IntrinsicEntry::Vertex => self.mcx.mir.args_iter().skip(1).collect(),
-            IntrinsicEntry::Fragment => self.mcx.mir.args_iter().collect(),
+            IntrinsicEntry::Vertex => self.mcx.mir().args_iter().skip(1).collect(),
+            IntrinsicEntry::Fragment => self.mcx.mir().args_iter().collect(),
         }
     }
 }
@@ -298,10 +298,10 @@ impl<'tcx> Entry<'tcx, Input<'tcx>> {
     ) -> impl Iterator<Item = (mir::Local, GlobalVar<'tcx>)> + 'borrow {
         entry
             .mcx
-            .mir
+            .mir()
             .args_iter()
             .filter_map(move |local| {
-                let ty = entry.mcx.mir.local_decls[local].ty;
+                let ty = entry.mcx.mir().local_decls[local].ty;
                 Input::new(entry, ty).map(|input| (local, input))
             })
             .map(move |(local, input)| {
@@ -431,10 +431,10 @@ impl<'tcx> Entry<'tcx, Descriptor<'tcx>> {
     ) -> impl Iterator<Item = (mir::Local, GlobalVar<'tcx>)> + 'borrow {
         entry
             .mcx
-            .mir
+            .mir()
             .args_iter()
             .filter_map(move |local| {
-                let ty = entry.mcx.mir.local_decls[local].ty;
+                let ty = entry.mcx.mir().local_decls[local].ty;
                 Descriptor::new(entry.mcx.tcx, ty).map(|input| (local, input))
             })
             .map(move |(local, descriptor)| {
@@ -489,7 +489,7 @@ impl<'tcx> Entry<'tcx, Output<'tcx>> {
         &'borrow self,
         entry: &'borrow EntryPoint<'a, 'tcx>,
     ) -> impl Iterator<Item = (mir::Local, GlobalVar<'tcx>)> + 'borrow {
-        let ty = entry.mcx.mir.return_ty();
+        let ty = entry.mcx.mir().return_ty();
         let output = Output::new(entry.mcx.tcx, ty).expect("Should be output");
         Some((
             mir::Local::new(0),
@@ -521,10 +521,11 @@ pub enum InstanceType {
 
 pub struct FunctionCx<'b, 'a: 'b, 'tcx: 'a> {
     current_table: Vec<&'a TypeckTables<'tcx>>,
-    pub mcx: MirContext<'a, 'tcx>,
+    pub mcx: &'b context::SpirvMir<'a, 'tcx>,
     pub scx: &'b mut CodegenCx<'a, 'tcx>,
     pub constants: HashMap<mir::Constant<'tcx>, Variable<'tcx>>,
     pub label_blocks: HashMap<mir::BasicBlock, Label>,
+    pub merge_blocks: HashMap<mir::BasicBlock, Label>,
     pub vars: HashMap<mir::Local, Variable<'tcx>>,
     pub references: HashMap<mir::Place<'tcx>, mir::Place<'tcx>>,
     pub instance_ty: InstanceType,
@@ -665,9 +666,16 @@ pub fn trans_spirv<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, items: &'a FxHashSet<M
             None
         })
         .collect();
+    let entry_fn_node_id = tcx.sess.entry_fn.borrow().expect("entry").0;
+    let entry_fn = tcx.hir.local_def_id(entry_fn_node_id);
+    let spirv_instances: Vec<_> = instances
+        .iter()
+        .filter(|mcx| mcx.def_id != entry_fn && tcx.lang_items().start_fn() != Some(mcx.def_id))
+        .map(|mcx| context::SpirvMir::from_mir(mcx))
+        .collect();
     // write_dot(&instances);
-    instances.iter().for_each(|mcx| {
-        // println!("{:?}", mcx.def_id);
+    spirv_instances.iter().for_each(|mcx| {
+        //println!("{:#?}", mcx.mir());
         // let attrs = tcx.get_attrs(mcx.def_id);
         // println!("{:#?}", attrs);
         // println!("{}", mcx.tcx.def_symbol_name(mcx.def_id));
@@ -677,12 +685,12 @@ pub fn trans_spirv<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, items: &'a FxHashSet<M
     if TyErrorVisitor::has_error(&instances) {
         return;
     }
-    for mcx in &instances {
+    for mcx in &spirv_instances {
         ctx.forward_fns
             .insert((mcx.def_id, mcx.substs), Function(ctx.builder.id()));
     }
     let (entry_instances, fn_instances): (Vec<_>, Vec<_>) =
-        instances.iter().partition_map(|&mcx| {
+        spirv_instances.into_iter().partition_map(|mcx| {
             let attrs = tcx.get_attrs(mcx.def_id);
             let entry = extract_attr(&attrs, "spirv", |s| match s {
                 "vertex" => Some(IntrinsicEntry::Vertex),
@@ -690,7 +698,10 @@ pub fn trans_spirv<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, items: &'a FxHashSet<M
                 _ => None,
             }).iter()
                 .nth(0)
-                .map(|&entry_type| EntryPoint { mcx, entry_type });
+                .map(|&entry_type| EntryPoint {
+                    mcx: mcx.clone(),
+                    entry_type,
+                });
             if let Some(entry_point) = entry {
                 Either::Left(entry_point)
             } else {
@@ -702,23 +713,18 @@ pub fn trans_spirv<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, items: &'a FxHashSet<M
     let entry_descriptor = Entry::descriptor(&entry_instances, &mut ctx);
 
     entry_instances.iter().for_each(|e| {
-        FunctionCx::trans_entry(&e, &entry_input, &entry_output, &entry_descriptor, &mut ctx);
+        FunctionCx::trans_entry(e, &entry_input, &entry_output, &entry_descriptor, &mut ctx);
     });
-    let entry_fn_node_id = tcx.sess.entry_fn.borrow().expect("entry").0;
-    let entry_fn = tcx.hir.local_def_id(entry_fn_node_id);
-    fn_instances
-        .iter()
-        .filter(|mcx| mcx.def_id != entry_fn && tcx.lang_items().start_fn() != Some(mcx.def_id))
-        .for_each(|&mcx| {
-            FunctionCx::trans_fn(mcx, &mut ctx);
-        });
+    fn_instances.iter().for_each(|mcx| {
+        FunctionCx::trans_fn(mcx, &mut ctx);
+    });
     ctx.build_module();
 }
 
 use rustc::middle::const_val::ConstVal;
 impl<'b, 'a, 'tcx> FunctionCx<'b, 'a, 'tcx> {
     pub fn load_operand<'r>(&mut self, operand: &'r mir::Operand<'tcx>) -> Operand<'tcx> {
-        let mir = self.mcx.mir;
+        let mir = self.mcx.mir();
         let mcx = self.mcx;
         let local_decls = &mir.local_decls;
         let ty = operand.ty(local_decls, self.mcx.tcx);
@@ -740,15 +746,15 @@ impl<'b, 'a, 'tcx> FunctionCx<'b, 'a, 'tcx> {
                     let expr = match value.val {
                         ConstVal::Float(f) => {
                             let val = ConstValue::Float(f);
-                            self.scx.constant(mcx, val)
+                            self.scx.constant(val)
                         }
                         ConstVal::Integral(int) => {
                             let val = ConstValue::Integer(int);
-                            self.scx.constant(mcx, val)
+                            self.scx.constant(val)
                         }
                         ConstVal::Bool(b) => {
                             let val = ConstValue::Bool(b);
-                            self.scx.constant(mcx, val)
+                            self.scx.constant(val)
                         }
                         ref rest => unimplemented!("{:?}", rest),
                     };
@@ -758,15 +764,15 @@ impl<'b, 'a, 'tcx> FunctionCx<'b, 'a, 'tcx> {
             },
         }
     }
-    pub fn trans_fn(mcx: MirContext<'a, 'tcx>, scx: &mut CodegenCx<'a, 'tcx>) {
+    pub fn trans_fn(mcx: &SpirvMir<'a, 'tcx>, scx: &mut CodegenCx<'a, 'tcx>) {
         use mir::visit::Visitor;
-        let ret_ty = mcx.monomorphize(&mcx.mir.return_ty());
+        let ret_ty = mcx.monomorphize(&mcx.mir().return_ty());
         let ret_ty_spirv = scx.to_ty_fn(ret_ty);
         let def_id = mcx.def_id;
 
-        let args_ty: Vec<_> = mcx.mir
+        let args_ty: Vec<_> = mcx.mir()
             .args_iter()
-            .map(|l| mcx.monomorphize(&mcx.mir.local_decls[l].ty))
+            .map(|l| mcx.monomorphize(&mcx.mir().local_decls[l].ty))
             .collect();
         let fn_sig = scx.tcx.mk_fn_sig(
             args_ty.into_iter(),
@@ -792,10 +798,10 @@ impl<'b, 'a, 'tcx> FunctionCx<'b, 'a, 'tcx> {
             .expect("begin fn");
 
         scx.name_from_def_id(def_id, spirv_function);
-        let params: Vec<_> = mcx.mir
+        let params: Vec<_> = mcx.mir()
             .args_iter()
             .map(|local_arg| {
-                let local_decl = &mcx.mir.local_decls[local_arg];
+                let local_decl = &mcx.mir().local_decls[local_arg];
                 let local_ty = mcx.monomorphize(&local_decl.ty);
                 Param::alloca(scx, local_ty)
             })
@@ -806,7 +812,7 @@ impl<'b, 'a, 'tcx> FunctionCx<'b, 'a, 'tcx> {
             .enumerate()
             .map(|(index, param)| {
                 let local_arg = mir::Local::new(index + 1);
-                let local_decl = &mcx.mir.local_decls[local_arg];
+                let local_decl = &mcx.mir().local_decls[local_arg];
                 let local_ty = mcx.monomorphize(&local_decl.ty);
                 (
                     local_arg,
@@ -817,14 +823,14 @@ impl<'b, 'a, 'tcx> FunctionCx<'b, 'a, 'tcx> {
         {
             use rustc_data_structures::indexed_vec::Idx;
             let local = mir::Local::new(0);
-            let local_decl = &mcx.mir.local_decls[local];
+            let local_decl = &mcx.mir().local_decls[local];
             let ty = mcx.monomorphize(&local_decl.ty);
             let variable = Variable::alloca(scx, ty, spirv::StorageClass::Function);
             // TODO DEBUG
             //scx.name_from_str("retvar", spirv_var);
             args_map.insert(local, variable);
         }
-        FunctionCx::new(InstanceType::Fn, mcx, args_map, scx).visit_mir(mcx.mir);
+        FunctionCx::new(InstanceType::Fn, mcx, args_map, scx).visit_mir(mcx.mir());
     }
     pub fn trans_entry(
         entry_point: &EntryPoint<'a, 'tcx>,
@@ -835,7 +841,7 @@ impl<'b, 'a, 'tcx> FunctionCx<'b, 'a, 'tcx> {
     ) {
         use mir::visit::Visitor;
         let def_id = entry_point.mcx.def_id;
-        let mir = entry_point.mcx.mir;
+        let mir = entry_point.mcx.mir();
         // TODO: Fix properly
         if entry_point.entry_type == IntrinsicEntry::Vertex {
             let first_local = mir::Local::new(1);
@@ -923,7 +929,7 @@ impl<'b, 'a, 'tcx> FunctionCx<'b, 'a, 'tcx> {
             variable_map.insert(first_local, per_fragment);
         }
         let outputs = entry_output
-            .variable_iter(entry_point)
+            .variable_iter(&entry_point)
             .map(|(_, gv)| gv)
             .collect_vec();
         let output_var = outputs[0];
@@ -939,12 +945,12 @@ impl<'b, 'a, 'tcx> FunctionCx<'b, 'a, 'tcx> {
 
         FunctionCx::new(
             InstanceType::Entry(entry_point.entry_type),
-            entry_point.mcx,
+            &entry_point.mcx,
             variable_map,
             scx,
-        ).visit_mir(entry_point.mcx.mir);
+        ).visit_mir(&entry_point.mcx.mir);
         let mut inputs_raw = entry_input
-            .variable_iter(entry_point)
+            .variable_iter(&entry_point)
             .map(|(local, gv)| gv.var)
             .collect_vec();
         inputs_raw.extend(outputs.iter().map(|gv| gv.var));
@@ -979,34 +985,41 @@ impl<'b, 'a, 'tcx> FunctionCx<'b, 'a, 'tcx> {
         self.scx.to_ty_as_ptr(ty, spirv::StorageClass::Function)
     }
     pub fn constant(&mut self, val: ConstValue) -> Value {
-        self.scx.constant(self.mcx, val)
+        self.scx.constant(val)
     }
     pub fn constant_f32(&mut self, value: f32) -> Value {
-        self.scx.constant_f32(self.mcx, value)
+        self.scx.constant_f32(value)
     }
     pub fn constant_u32(&mut self, value: u32) -> Value {
-        self.scx.constant_u32(self.mcx, value)
+        self.scx.constant_u32(value)
     }
 
     pub fn get_table(&self) -> &'a TypeckTables<'tcx> {
         self.current_table.last().expect("no table yet")
     }
+    pub fn get_label(&self, block: mir::BasicBlock) -> Label {
+        self.merge_blocks
+            .get(&block)
+            .map(|r| *r)
+            .or_else(|| self.label_blocks.get(&block).map(|r| *r))
+            .expect("Get label")
+    }
     pub fn new(
         instance_ty: InstanceType,
-        mcx: MirContext<'a, 'tcx>,
+        mcx: &'b SpirvMir<'a, 'tcx>,
         mut variable_map: HashMap<mir::Local, Variable<'tcx>>,
         scx: &'b mut CodegenCx<'a, 'tcx>,
     ) -> Self {
-        let label_blocks: HashMap<_, _> = mcx.mir
+        let label_blocks: HashMap<_, _> = mcx.mir()
             .basic_blocks()
             .iter_enumerated()
             .map(|(block, _)| (block, Label(scx.builder.id())))
             .collect();
-        let mut local_vars: HashMap<_, _> = mcx.mir
+        let mut local_vars: HashMap<_, _> = mcx.mir()
             .vars_and_temps_iter()
             .filter_map(|local_var| {
                 // Don't generate variables for ptrs
-                let local_decl = &mcx.mir.local_decls[local_var];
+                let local_decl = &mcx.mir().local_decls[local_var];
                 let local_ty = mcx.monomorphize(&local_decl.ty);
                 if is_ptr(local_ty) {
                     return None;
@@ -1032,6 +1045,7 @@ impl<'b, 'a, 'tcx> FunctionCx<'b, 'a, 'tcx> {
             label_blocks,
             vars: variable_map,
             references: HashMap::new(),
+            merge_blocks: HashMap::new(),
         };
         visitor
     }
@@ -1053,29 +1067,18 @@ pub fn find_merge_block(
     let true_order: BTreeSet<_> = post_order_from(mir, targets[0])
         .into_iter()
         .rev()
-        .skip(1)
+        //.skip(1)
         .collect();
     let false_order: BTreeSet<_> = post_order_from(mir, targets[1])
         .into_iter()
         .rev()
-        .skip(1)
+        //.skip(1)
         .collect();
-    // println!("root {:?}", root);
-    // println!("d {:?}", dominators);
-    // println!("t {:?}", true_order);
-    // println!("f {:?}", false_order);
-    true_order
-        .intersection(&false_order)
-        // .filter(|&&target| {
-        //     println!(
-        //         "target {:?} dom {:?}",
-        //         target,
-        //         dominators.dominators(target).collect_vec()
-        //     );
-        //     dominators.is_dominated_by(target, root)
-        // })
-        .nth(0)
-        .map(|b| *b)
+    //println!("root {:?}", root);
+    ////println!("dom {:?}", dominators);
+    //println!("t {:?}", true_order);
+    //println!("f {:?}", false_order);
+    true_order.intersection(&false_order).nth(0).map(|b| *b)
 }
 
 pub struct Enum<'tcx> {
@@ -1177,13 +1180,13 @@ impl<'b, 'a, 'tcx> rustc::mir::visit::Visitor<'tcx> for FunctionCx<'b, 'a, 'tcx>
     ) {
         self.super_assign(block, lvalue, rvalue, location);
         let lvalue_ty = lvalue
-            .ty(&self.mcx.mir.local_decls, self.scx.tcx)
+            .ty(&self.mcx.mir().local_decls, self.scx.tcx)
             .to_ty(self.scx.tcx);
         let lvalue_ty = self.mcx.monomorphize(&lvalue_ty);
         if lvalue_ty.is_phantom_data() || lvalue_ty.is_nil() {
             return;
         }
-        let ty = rvalue.ty(&self.mcx.mir.local_decls, self.scx.tcx);
+        let ty = rvalue.ty(&self.mcx.mir().local_decls, self.scx.tcx);
         if let TypeVariants::TyTuple(ref slice, _) = ty.sty {
             if slice.len() == 0 {
                 return;
@@ -1213,7 +1216,7 @@ impl<'b, 'a, 'tcx> rustc::mir::visit::Visitor<'tcx> for FunctionCx<'b, 'a, 'tcx>
                 let spirv_operands: Vec<_> = operands
                     .iter()
                     .filter_map(|op| {
-                        let ty = op.ty(&self.mcx.mir.local_decls, self.mcx.tcx);
+                        let ty = op.ty(&self.mcx.mir().local_decls, self.mcx.tcx);
                         let ty = self.mcx.monomorphize(&ty);
                         if ty.is_phantom_data() {
                             None
@@ -1236,7 +1239,7 @@ impl<'b, 'a, 'tcx> rustc::mir::visit::Visitor<'tcx> for FunctionCx<'b, 'a, 'tcx>
                     _ => panic!("Should be local"),
                 };
                 let var = *self.vars.get(&local).expect("local");
-                let ty = self.mcx.mir.local_decls[local].ty;
+                let ty = self.mcx.mir().local_decls[local].ty;
                 // TODO: Cleanup, currently generates 0 value for non enum types
                 let load = if let Some(enum_data) = Enum::from_ty(self.mcx.tcx, ty) {
                     let discr_ty = self.mcx.monomorphize(&enum_data.discr_ty);
@@ -1264,7 +1267,7 @@ impl<'b, 'a, 'tcx> rustc::mir::visit::Visitor<'tcx> for FunctionCx<'b, 'a, 'tcx>
                 Value::new(cast)
             }
             &mir::Rvalue::Cast(_, ref op, ty) => {
-                let op_ty = op.ty(&self.mcx.mir.local_decls, self.mcx.tcx);
+                let op_ty = op.ty(&self.mcx.mir().local_decls, self.mcx.tcx);
                 unimplemented!("cast")
             }
 
@@ -1282,7 +1285,7 @@ impl<'b, 'a, 'tcx> rustc::mir::visit::Visitor<'tcx> for FunctionCx<'b, 'a, 'tcx>
         location: mir::Location,
     ) {
         self.super_terminator_kind(block, kind, location);
-        let mir = self.mcx.mir;
+        let mir = self.mcx.mir();
         match kind {
             &mir::TerminatorKind::Return => {
                 // If we are inside an entry, we just return void
@@ -1317,7 +1320,7 @@ impl<'b, 'a, 'tcx> rustc::mir::visit::Visitor<'tcx> for FunctionCx<'b, 'a, 'tcx>
                 ref targets,
                 ..
             } => {
-                let mir = self.mcx.mir;
+                let mir = self.mcx.mir();
                 let spirv_ty = self.to_ty_fn(switch_ty);
                 let selector = if switch_ty.is_bool() {
                     // TODO bitcast api
@@ -1328,8 +1331,8 @@ impl<'b, 'a, 'tcx> rustc::mir::visit::Visitor<'tcx> for FunctionCx<'b, 'a, 'tcx>
                     //     .builder
                     //     .bitcast(target_ty_spirv.word, None, load)
                     //     .expect("bitcast")
-                    let one = self.scx.constant_u32(self.mcx, 1).word;
-                    let zero = self.scx.constant_u32(self.mcx, 0).word;
+                    let one = self.scx.constant_u32(1).word;
+                    let zero = self.scx.constant_u32(0).word;
                     self.scx
                         .builder
                         .select(target_ty_spirv.word, None, load, one, zero)
@@ -1352,19 +1355,32 @@ impl<'b, 'a, 'tcx> rustc::mir::visit::Visitor<'tcx> for FunctionCx<'b, 'a, 'tcx>
                 // Sometimes we get duplicated merge block labels. To fix this we
                 // always create a new block and branch to it. This will give us a new unique
                 // block.
-                let new_block_id = self.scx.builder.id();
-                let merge_block = find_merge_block(mir, block, targets).expect("no merge block");
+                //let new_block_id = self.scx.builder.id();
+                let merge_block = *self.mcx.merge_blocks.get(&block).expect("merge block");
+                // {
+                //     use rustc_data_structures::control_flow_graph::ControlFlowGraph;
+                //     let pred: HashSet<_> = ControlFlowGraph::predecessors(&mir, merge_block)
+                //         .into_iter()
+                //         .collect();
+                //     let suc: HashSet<_> = ControlFlowGraph::successors(&mir, block)
+                //         .into_iter()
+                //         .collect();
+                //     println!("{:?}", pred.intersection(&suc),);
+                // }
+
                 let merge_block_label = *self.label_blocks.get(&merge_block).expect("no label");
+                //println!("merge {:#?}", self.mcx.merge_blocks);;
                 self.scx
                     .builder
-                    .selection_merge(new_block_id, spirv::SelectionControl::empty())
+                    .selection_merge(merge_block_label.0, spirv::SelectionControl::empty())
                     .expect("selection merge");
                 self.scx
                     .builder
                     .switch(selector, default_label.0, &labels)
                     .expect("switch");
-                self.scx.builder.begin_basic_block(Some(new_block_id));
-                self.scx.builder.branch(merge_block_label.0);
+                // self.scx.builder.begin_basic_block(Some(new_block_id));
+                // self.scx.builder.branch(merge_block_label.0);
+                //self.merge_blocks.insert()
             }
             &mir::TerminatorKind::Call {
                 ref func,
@@ -1373,8 +1389,8 @@ impl<'b, 'a, 'tcx> rustc::mir::visit::Visitor<'tcx> for FunctionCx<'b, 'a, 'tcx>
                 ..
             } => {
                 use syntax::abi::Abi;
-                let local_decls = &self.mcx.mir.local_decls;
-                let fn_ty = func.ty(self.mcx.mir, self.mcx.tcx);
+                let local_decls = &self.mcx.mir().local_decls;
+                let fn_ty = func.ty(self.mcx.mir(), self.mcx.tcx);
                 let (def_id, substs) = match fn_ty.sty {
                     TypeVariants::TyFnDef(def_id, ref substs) => (def_id, substs),
                     _ => panic!("Not a function"),
@@ -1543,7 +1559,7 @@ impl<'b, 'a, 'tcx> FunctionCx<'b, 'a, 'tcx> {
         l: &mir::Operand<'tcx>,
         r: &mir::Operand<'tcx>,
     ) -> Value {
-        let ty = l.ty(&self.mcx.mir.local_decls, self.mcx.tcx);
+        let ty = l.ty(&self.mcx.mir().local_decls, self.mcx.tcx);
         // TODO: Different types
         let spirv_ty = self.to_ty_fn(return_ty);
         let left = self.load_operand(l).load(self.scx).word;

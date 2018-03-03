@@ -6,15 +6,18 @@ use rustc::mir::mono::MonoItem;
 use rustc::ty::{Instance, ParamEnv, TyCtxt};
 use context::MirContext;
 pub struct CollectCrateItems<'a, 'tcx: 'a> {
-    mtx: MirContext<'a, 'tcx>,
+    tcx: TyCtxt<'a, 'tcx, 'tcx>,
     items: Vec<MonoItem<'tcx>>,
 }
-pub fn collect_crate_items<'a, 'tcx>(mtx: MirContext<'a, 'tcx>) -> Vec<MonoItem<'tcx>> {
+pub fn collect_crate_items<'a, 'tcx>(
+    tcx: TyCtxt<'a, 'tcx, 'tcx>,
+    mir: &mir::Mir<'tcx>,
+) -> Vec<MonoItem<'tcx>> {
     let mut collector = CollectCrateItems {
-        mtx,
+        tcx,
         items: Vec::new(),
     };
-    collector.visit_mir(&mtx.mir);
+    collector.visit_mir(mir);
     collector.items
 }
 impl<'a, 'tcx> rustc::mir::visit::Visitor<'tcx> for CollectCrateItems<'a, 'tcx> {
@@ -30,12 +33,12 @@ impl<'a, 'tcx> rustc::mir::visit::Visitor<'tcx> for CollectCrateItems<'a, 'tcx> 
                 if let mir::Literal::Value { ref value } = constant.literal {
                     use rustc::middle::const_val::ConstVal;
                     if let ConstVal::Function(def_id, ref substs) = value.val {
-                        let mono_substs = self.mtx.monomorphize(substs);
+                        //let mono_substs = self.mtx.monomorphize(substs);
                         let instance = Instance::resolve(
-                            self.mtx.tcx,
+                            self.tcx,
                             ParamEnv::empty(rustc::traits::Reveal::All),
                             def_id,
-                            &mono_substs,
+                            substs,
                         ).unwrap();
                         self.items.push(MonoItem::Fn(instance));
                     }
@@ -59,13 +62,7 @@ pub fn trans_all_items<'a, 'tcx>(
             if let &MonoItem::Fn(ref instance) = item {
                 let mir = tcx.maybe_optimized_mir(instance.def_id());
                 if let Some(mir) = mir {
-                    let mtx = MirContext {
-                        tcx,
-                        mir,
-                        substs: instance.substs,
-                        def_id: instance.def_id(),
-                    };
-                    let new_items = collect_crate_items(mtx);
+                    let new_items = collect_crate_items(tcx, &mir);
                     if !new_items.is_empty() {
                         uncollected_items.push(new_items)
                     }
