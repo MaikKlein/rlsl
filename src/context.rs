@@ -1,3 +1,4 @@
+use std::path::Path;
 use rustc_const_math::{ConstFloat, ConstInt};
 use rspirv;
 use std::collections::HashMap;
@@ -374,12 +375,12 @@ impl<'a, 'tcx> CodegenCx<'a, 'tcx> {
             self.builder.name(id, name);
         }
     }
-    pub fn build_module(self) {
+    pub fn build_module<P: AsRef<Path>>(self, file_name: P) {
         use rspirv::binary::Assemble;
         use std::mem::size_of;
         use std::fs::File;
         use std::io::Write;
-        let mut f = File::create("shader.spv").unwrap();
+        let mut f = File::create(file_name.as_ref()).unwrap();
         let spirv_module = self.builder.module();
         let bytes: Vec<u8> = spirv_module
             .assemble()
@@ -483,7 +484,9 @@ impl<'a, 'tcx> SpirvMir<'a, 'tcx> {
         struct FindMergeBlocks<'a, 'tcx: 'a> {
             mir: &'a mir::Mir<'tcx>,
             merge_blocks: HashMap<mir::BasicBlock, mir::BasicBlock>,
+            first: HashMap<mir::BasicBlock, mir::BasicBlock>,
         }
+        impl<'a, 'tcx> FindMergeBlocks<'a, 'tcx> {}
 
         impl<'a, 'tcx> Visitor<'tcx> for FindMergeBlocks<'a, 'tcx> {
             fn visit_terminator_kind(
@@ -502,6 +505,9 @@ impl<'a, 'tcx> SpirvMir<'a, 'tcx> {
                         let merge_block =
                             ::find_merge_block(self.mir, block, targets).expect("no merge block");
                         self.merge_blocks.insert(block, merge_block);
+                        if !self.first.contains_key(&merge_block) {
+                            self.first.insert(merge_block, block);
+                        }
                     }
                     _ => (),
                 };
@@ -511,24 +517,19 @@ impl<'a, 'tcx> SpirvMir<'a, 'tcx> {
         let mut visitor = FindMergeBlocks {
             mir: mcx.mir,
             merge_blocks: HashMap::new(),
+            first: HashMap::new(),
         };
 
         visitor.visit_mir(mcx.mir);
         let merge_blocks = visitor.merge_blocks;
+        let first = visitor.first;
+
+        println!("merge blocks {:#?}", merge_blocks);
         let mut spirv_mir = mcx.mir.clone();
         let mut fixed_merge_blocks = HashMap::new();
         use syntax_pos::DUMMY_SP;
         for (block, merge_block) in merge_blocks {
-            use rustc_data_structures::control_flow_graph::ControlFlowGraph;
-            use std::collections::HashSet;
-            let pred: HashSet<_> = ControlFlowGraph::predecessors(&spirv_mir, merge_block)
-                .into_iter()
-                .collect();
-            let suc: HashSet<_> = ControlFlowGraph::successors(&spirv_mir, block)
-                .into_iter()
-                .collect();
-            let previous_blocks: HashSet<_> = pred.intersection(&suc).collect();
-            if previous_blocks.is_empty() {
+            if *first.get(&merge_block).expect("merge block") == block {
                 fixed_merge_blocks.insert(block, merge_block);
             } else {
                 let terminator = mir::Terminator {
@@ -540,6 +541,16 @@ impl<'a, 'tcx> SpirvMir<'a, 'tcx> {
                         target: merge_block,
                     },
                 };
+                use rustc_data_structures::control_flow_graph::ControlFlowGraph;
+                use rustc_data_structures::control_flow_graph::iterate::post_order_from_to;
+                use std::collections::HashSet;
+                let suc: HashSet<_> = post_order_from_to(&spirv_mir, block, Some(merge_block))
+                    .into_iter()
+                    .collect();
+                let pred: HashSet<_> = ControlFlowGraph::predecessors(&spirv_mir, merge_block)
+                    .into_iter()
+                    .collect();
+                let previous_blocks: HashSet<_> = pred.intersection(&suc).collect();
                 let goto_data = mir::BasicBlockData::new(Some(terminator));
                 let goto_block = spirv_mir.basic_blocks_mut().push(goto_data);
                 fixed_merge_blocks.insert(block, goto_block);

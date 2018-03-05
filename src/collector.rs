@@ -5,17 +5,21 @@ use rustc_data_structures::fx::FxHashSet;
 use rustc::mir::mono::MonoItem;
 use rustc::ty::{Instance, ParamEnv, TyCtxt};
 use context::MirContext;
+use rustc::ty::subst::Substs;
 pub struct CollectCrateItems<'a, 'tcx: 'a> {
     tcx: TyCtxt<'a, 'tcx, 'tcx>,
     items: Vec<MonoItem<'tcx>>,
+    substs: &'tcx Substs<'tcx>,
 }
 pub fn collect_crate_items<'a, 'tcx>(
     tcx: TyCtxt<'a, 'tcx, 'tcx>,
     mir: &mir::Mir<'tcx>,
+    substs: &'tcx Substs<'tcx>,
 ) -> Vec<MonoItem<'tcx>> {
     let mut collector = CollectCrateItems {
         tcx,
         items: Vec::new(),
+        substs,
     };
     collector.visit_mir(mir);
     collector.items
@@ -33,12 +37,13 @@ impl<'a, 'tcx> rustc::mir::visit::Visitor<'tcx> for CollectCrateItems<'a, 'tcx> 
                 if let mir::Literal::Value { ref value } = constant.literal {
                     use rustc::middle::const_val::ConstVal;
                     if let ConstVal::Function(def_id, ref substs) = value.val {
-                        //let mono_substs = self.mtx.monomorphize(substs);
+                        let mono_substs = self.tcx.trans_apply_param_substs(self.substs, substs);
+
                         let instance = Instance::resolve(
                             self.tcx,
                             ParamEnv::empty(rustc::traits::Reveal::All),
                             def_id,
-                            substs,
+                            mono_substs,
                         ).unwrap();
                         self.items.push(MonoItem::Fn(instance));
                     }
@@ -62,7 +67,7 @@ pub fn trans_all_items<'a, 'tcx>(
             if let &MonoItem::Fn(ref instance) = item {
                 let mir = tcx.maybe_optimized_mir(instance.def_id());
                 if let Some(mir) = mir {
-                    let new_items = collect_crate_items(tcx, &mir);
+                    let new_items = collect_crate_items(tcx, &mir, instance.substs);
                     if !new_items.is_empty() {
                         uncollected_items.push(new_items)
                     }

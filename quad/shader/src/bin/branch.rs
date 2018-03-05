@@ -14,12 +14,36 @@ fn color_frag(
     let right = uv.x > 0.5;
     let top = uv.y > 0.5;
 
-    let color: Vec3<f32> = match (right, top) {
-        (true, true) => Vec3::new(0.0, 0.0, 1.0),
-        (true, false) => Vec3::new(0.0, 1.0, 0.0),
-        (false, true) => Vec3::new(1.0, 0.0, 0.0),
-        (false, false) => Vec3::new(1.0, 1.0, 1.0),
-    };
+    let mut color = Vec3::new(1.0, 1.0, 0.0);
+    if uv.x > 0.5 {
+        color.x = 0.5;
+    } else {
+        color.x = 0.5;
+    }
+    if uv.x > 0.8 {
+        color.x = 0.5;
+    } else {
+        color.x = 0.5;
+    }
+    // let color: Vec3<f32> = if right {
+    //     match (right, top) {
+    //         (true, true) => Vec3::new(0.0, 0.0, 1.0),
+    //         (true, false) => Vec3::new(0.0, 1.0, 0.0),
+    //         (false, true) => Vec3::new(1.0, 0.0, 0.0),
+    //         (false, false) => Vec3::new(1.0, 1.0, 1.0),
+    //     }
+    // } else {
+    //     if uv.x > 0.3 {
+    //         if uv.y > 0.2 {
+    //             Vec3::new(0.5, 0.3, 1.0)
+    //         } else {
+    //             Vec3::new(1.0, 0.3, 1.0)
+    //         }
+    //     } else {
+    //         Vec3::new(0.5, 1.0, 1.0)
+    //     }
+    // };
+
     // let color: Vec3<f32> = match right {
     //     true => Vec3::new(0.0, 0.0, 1.0),
     //     false => Vec3::new(0.0, 1.0, 0.0),
@@ -33,15 +57,15 @@ fn color_frag(
     Output::new(color.extend(1.0))
 }
 
-// #[spirv(vertex)]
-// fn vertex(
-//     vertex: &mut Vertex,
-//     pos: Input<N0, Vec4<f32>>,
-//     uv: Input<N1, Vec2<f32>>,
-// ) -> Output<N0, Vec2<f32>> {
-//     vertex.position = pos.data;
-//     Output::new(uv.data)
-// }
+#[spirv(vertex)]
+fn vertex(
+    vertex: &mut Vertex,
+    pos: Input<N0, Vec4<f32>>,
+    uv: Input<N1, Vec2<f32>>,
+) -> Output<N0, Vec2<f32>> {
+    vertex.position = pos.data;
+    Output::new(uv.data)
+}
 
 //#[spirv(fragment)]
 //fn test_frag(

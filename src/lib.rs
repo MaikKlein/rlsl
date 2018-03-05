@@ -44,7 +44,7 @@ use self::context::{CodegenCx, MirContext, SpirvMir};
 use self::typ::*;
 use rustc::ty::subst::Substs;
 use std::collections::HashMap;
-
+use std::path::{Path, PathBuf};
 use itertools::{Either, Itertools};
 #[derive(Copy, Clone, Debug)]
 pub enum IntrinsicFn {
@@ -718,7 +718,16 @@ pub fn trans_spirv<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, items: &'a FxHashSet<M
     fn_instances.iter().for_each(|mcx| {
         FunctionCx::trans_fn(mcx, &mut ctx);
     });
-    ctx.build_module();
+    std::fs::create_dir_all(".shaders").expect("create dir");
+    ctx.build_module(
+        tcx.sess
+            .local_crate_source_file
+            .as_ref()
+            .and_then(|p| p.file_stem())
+            .map(Path::new)
+            .map(|p| Path::new(".shaders").join(p.with_extension("spv")))
+            .expect("file name"),
+    );
 }
 
 use rustc::middle::const_val::ConstVal;
@@ -1074,8 +1083,8 @@ pub fn find_merge_block(
         .rev()
         //.skip(1)
         .collect();
-    //println!("root {:?}", root);
-    ////println!("dom {:?}", dominators);
+    println!("root {:?}", root);
+    println!("dom {:?}", dominators);
     //println!("t {:?}", true_order);
     //println!("f {:?}", false_order);
     true_order.intersection(&false_order).nth(0).map(|b| *b)
