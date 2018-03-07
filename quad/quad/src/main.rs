@@ -483,7 +483,7 @@ impl Quad<back::Backend> {
         let fragment_path = path.join(&opt.file_name).with_extension("spv");
         let mut frame_fence = self.device.create_fence(false); // TODO: remove
         let mut frame_semaphore = self.device.create_semaphore();
-        let (vertex_entry, fragment_entry) = match opt.compiler{
+        let (vertex_entry, fragment_entry) = match opt.compiler {
             ShaderCompiler::Rlsl => ("vertex", "fragment"),
             ShaderCompiler::Glsl => ("main", "main"),
         };
@@ -498,6 +498,8 @@ impl Quad<back::Backend> {
                 fragment_entry,
             ),
         ];
+        let query_pool = self.device
+            .create_query_pool(hal::query::QueryType::Timestamp, 1);
         for pipeline in &pipelines {
             let mut running = true;
             while running {
@@ -526,7 +528,12 @@ impl Quad<back::Backend> {
 
                 // Rendering
                 let submit = {
+                    let query = hal::query::Query {
+                        pool: &query_pool,
+                        id: 0,
+                    };
                     let mut cmd_buffer = self.command_pool.acquire_command_buffer(false);
+                    cmd_buffer.begin_query(query, hal::query::QueryControl::PRECISE);
 
                     cmd_buffer.set_viewports(&[self.viewport.clone()]);
                     cmd_buffer.set_scissors(&[self.viewport.rect]);

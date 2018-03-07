@@ -1,0 +1,12 @@
+[package]
+name = "quad"
+version = "0.1.0"
+authors = ["Maik Klein <maikklein@googlemail.com>"]
+build = "build.rs"
+
+[dependencies]
+winit = "0.11.1"
+image = "0.10.4"
+ash = "*"
+[target.'cfg(windows)'.dependencies]
+winapi = { version = "0.3.4", features = ["windef", "winuser"] }

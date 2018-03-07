@@ -1379,14 +1379,22 @@ impl<'b, 'a, 'tcx> rustc::mir::visit::Visitor<'tcx> for FunctionCx<'b, 'a, 'tcx>
 
                 let merge_block_label = *self.label_blocks.get(&merge_block).expect("no label");
                 //println!("merge {:#?}", self.mcx.merge_blocks);;
+                let bool_load = self.load_operand(discr).load(self.scx).word;
                 self.scx
                     .builder
                     .selection_merge(merge_block_label.0, spirv::SelectionControl::empty())
                     .expect("selection merge");
-                self.scx
-                    .builder
-                    .switch(selector, default_label.0, &labels)
-                    .expect("switch");
+                assert!(labels.len() == 1);
+                self.scx.builder.branch_conditional(
+                    bool_load,
+                    default_label.0,
+                    labels[0].1,
+                    &[]
+                ).expect("if");
+                // self.scx
+                //     .builder
+                //     .switch(selector, default_label.0, &labels)
+                //     .expect("switch");
                 // self.scx.builder.begin_basic_block(Some(new_block_id));
                 // self.scx.builder.branch(merge_block_label.0);
                 //self.merge_blocks.insert()
