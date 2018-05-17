@@ -7,39 +7,37 @@ extern crate user32;
 extern crate winapi;
 extern crate winit;
 pub mod shader;
+use ash::extensions::{DebugReport, Surface, Swapchain, Win32Surface, XlibSurface};
+use ash::util::Align;
+pub use ash::version::{DeviceV1_0, EntryV1_0, InstanceV1_0, V1_0};
 use ash::vk;
-use std::default::Default;
+use ash::Device;
 use ash::Entry;
 use ash::Instance;
-use ash::Device;
-pub use ash::version::{DeviceV1_0, EntryV1_0, InstanceV1_0, V1_0};
-use ash::extensions::{DebugReport, Surface, Swapchain, Win32Surface, XlibSurface};
 use std::cell::{RefCell, RefMut};
-use std::ptr;
+use std::default::Default;
 use std::ffi::{CStr, CString};
-use std::ops::Drop;
-use std::marker::PhantomData;
-use ash::util::Align;
-use std::mem::align_of;
-use std::path::Path;
-use std::mem;
-use std::fs::File;
+use std::fs::{read_dir, File };
 use std::io::Read;
-use std::time::{Duration, SystemTime};
+use std::marker::PhantomData;
+use std::mem;
+use std::mem::align_of;
 use std::ops::DerefMut;
+use std::ops::Drop;
+use std::path::Path;
+use std::ptr;
+use std::time::{Duration, SystemTime};
 
 // Simple offset_of macro akin to C++ offsetof
 #[macro_export]
-macro_rules! offset_of{
-    ($base: path, $field: ident) => {
-        {
-            #[allow(unused_unsafe)]
-            unsafe{
-                let b: $base = mem::uninitialized();
-                (&b.$field as *const _ as isize) - (&b as *const _ as isize)
-            }
+macro_rules! offset_of {
+    ($base:path, $field:ident) => {{
+        #[allow(unused_unsafe)]
+        unsafe {
+            let b: $base = mem::uninitialized();
+            (&b.$field as *const _ as isize) - (&b as *const _ as isize)
         }
-    }
+    }};
 }
 
 #[derive(Clone, Debug, Copy)]
@@ -120,17 +118,16 @@ pub struct GraphicsPipeline {
     desc_set_layouts: Vec<vk::DescriptorSetLayout>,
 }
 impl GraphicsPipeline {
-    pub fn create(&self, device: &Device<V1_0>) -> vk::Pipeline {
-        let vertex_entry_name = CString::new("main").unwrap();
-        let frag_entry_name = CString::new("main").unwrap();
-        let shader_module_vertex = load_shader(
-            "/home/maik/projects/ash/examples/shader/quad/vertex.spv".as_ref(),
-            device,
-        );
-        let shader_module = load_shader(
-            "/home/maik/projects/ash/examples/shader/quad/fragment.spv".as_ref(),
-            &device,
-        );
+    pub fn create(
+        &self,
+        device: &Device<V1_0>,
+        vertex_info: (&str, &Path),
+        fragment_info: (&str, &Path),
+    ) -> vk::Pipeline {
+        let vertex_entry_name = CString::new(vertex_info.0).unwrap();
+        let frag_entry_name = CString::new(fragment_info.0).unwrap();
+        let shader_module_vertex = load_shader(vertex_info.1, device);
+        let shader_module = load_shader(fragment_info.1, &device);
         let shader_stage_create_infos = [
             vk::PipelineShaderStageCreateInfo {
                 s_type: vk::StructureType::PipelineShaderStageCreateInfo,
@@ -209,18 +206,16 @@ impl GraphicsPipeline {
             max_depth_bounds: 1.0,
             min_depth_bounds: 0.0,
         };
-        let color_blend_attachment_states = [
-            vk::PipelineColorBlendAttachmentState {
-                blend_enable: 0,
-                src_color_blend_factor: vk::BlendFactor::SrcColor,
-                dst_color_blend_factor: vk::BlendFactor::OneMinusDstColor,
-                color_blend_op: vk::BlendOp::Add,
-                src_alpha_blend_factor: vk::BlendFactor::Zero,
-                dst_alpha_blend_factor: vk::BlendFactor::Zero,
-                alpha_blend_op: vk::BlendOp::Add,
-                color_write_mask: vk::ColorComponentFlags::all(),
-            },
-        ];
+        let color_blend_attachment_states = [vk::PipelineColorBlendAttachmentState {
+            blend_enable: 0,
+            src_color_blend_factor: vk::BlendFactor::SrcColor,
+            dst_color_blend_factor: vk::BlendFactor::OneMinusDstColor,
+            color_blend_op: vk::BlendOp::Add,
+            src_alpha_blend_factor: vk::BlendFactor::Zero,
+            dst_alpha_blend_factor: vk::BlendFactor::Zero,
+            alpha_blend_op: vk::BlendOp::Add,
+            color_write_mask: vk::ColorComponentFlags::all(),
+        }];
         let color_blend_state = vk::PipelineColorBlendStateCreateInfo {
             s_type: vk::StructureType::PipelineColorBlendStateCreateInfo,
             p_next: ptr::null(),
@@ -259,13 +254,11 @@ impl GraphicsPipeline {
                 stage: vk::SHADER_STAGE_FRAGMENT_BIT,
             },
         ];
-        let vertex_input_binding_descriptions = [
-            vk::VertexInputBindingDescription {
-                binding: 0,
-                stride: mem::size_of::<Vertex>() as u32,
-                input_rate: vk::VertexInputRate::Vertex,
-            },
-        ];
+        let vertex_input_binding_descriptions = [vk::VertexInputBindingDescription {
+            binding: 0,
+            stride: mem::size_of::<Vertex>() as u32,
+            input_rate: vk::VertexInputRate::Vertex,
+        }];
         let vertex_input_attribute_descriptions = [
             vk::VertexInputAttributeDescription {
                 location: 0,
@@ -564,12 +557,10 @@ impl Quad {
                     w: 1.0,
                 },
             );
-            let descriptor_sizes = [
-                vk::DescriptorPoolSize {
-                    typ: vk::DescriptorType::UniformBuffer,
-                    descriptor_count: 3,
-                },
-            ];
+            let descriptor_sizes = [vk::DescriptorPoolSize {
+                typ: vk::DescriptorType::UniformBuffer,
+                descriptor_count: 3,
+            }];
             let descriptor_pool_info = vk::DescriptorPoolCreateInfo {
                 s_type: vk::StructureType::DescriptorPoolCreateInfo,
                 p_next: ptr::null(),
@@ -699,91 +690,18 @@ impl Quad {
                 .create_pipeline_layout(&layout_create_info, None)
                 .unwrap();
 
-            let vertex_entry_name = CString::new("main").unwrap();
-            let frag_entry_name = CString::new("main").unwrap();
-
-            // let shader_module_vertex = load_shader(
-            //     "/home/maik/projects/ash/examples/shader/quad/vertex.spv".as_ref(),
-            //     &base,
-            // );
-            // let shader_module = load_shader(
-            //     "/home/maik/projects/ash/examples/shader/quad/fragment.spv".as_ref(),
-            //     &base,
-            // );
-            // let shader_stage_create_infos = [
-            //     vk::PipelineShaderStageCreateInfo {
-            //         s_type: vk::StructureType::PipelineShaderStageCreateInfo,
-            //         p_next: ptr::null(),
-            //         flags: Default::default(),
-            //         module: shader_module_vertex,
-            //         p_name: vertex_entry_name.as_ptr(),
-            //         p_specialization_info: ptr::null(),
-            //         stage: vk::SHADER_STAGE_VERTEX_BIT,
-            //     },
-            //     vk::PipelineShaderStageCreateInfo {
-            //         s_type: vk::StructureType::PipelineShaderStageCreateInfo,
-            //         p_next: ptr::null(),
-            //         flags: Default::default(),
-            //         module: shader_module,
-            //         p_name: frag_entry_name.as_ptr(),
-            //         p_specialization_info: ptr::null(),
-            //         stage: vk::SHADER_STAGE_FRAGMENT_BIT,
-            //     },
-            // ];
-            // let vertex_input_binding_descriptions = [
-            //     vk::VertexInputBindingDescription {
-            //         binding: 0,
-            //         stride: mem::size_of::<Vertex>() as u32,
-            //         input_rate: vk::VertexInputRate::Vertex,
-            //     },
-            // ];
-            // let vertex_input_attribute_descriptions = [
-            //     vk::VertexInputAttributeDescription {
-            //         location: 0,
-            //         binding: 0,
-            //         format: vk::Format::R32g32b32a32Sfloat,
-            //         offset: offset_of!(Vertex, pos) as u32,
-            //     },
-            //     vk::VertexInputAttributeDescription {
-            //         location: 1,
-            //         binding: 0,
-            //         format: vk::Format::R32g32Sfloat,
-            //         offset: offset_of!(Vertex, uv) as u32,
-            //     },
-            // ];
-            // let vertex_input_state_info = vk::PipelineVertexInputStateCreateInfo {
-            //     s_type: vk::StructureType::PipelineVertexInputStateCreateInfo,
-            //     p_next: ptr::null(),
-            //     flags: Default::default(),
-            //     vertex_attribute_description_count: vertex_input_attribute_descriptions.len()
-            //         as u32,
-            //     p_vertex_attribute_descriptions: vertex_input_attribute_descriptions.as_ptr(),
-            //     vertex_binding_description_count: vertex_input_binding_descriptions.len() as u32,
-            //     p_vertex_binding_descriptions: vertex_input_binding_descriptions.as_ptr(),
-            // };
-            // let vertex_input_assembly_state_info = vk::PipelineInputAssemblyStateCreateInfo {
-            //     s_type: vk::StructureType::PipelineInputAssemblyStateCreateInfo,
-            //     flags: Default::default(),
-            //     p_next: ptr::null(),
-            //     primitive_restart_enable: 0,
-            //     topology: vk::PrimitiveTopology::TriangleList,
-            // };
-            let viewports = vec![
-                vk::Viewport {
-                    x: 0.0,
-                    y: 0.0,
-                    width: base.surface_resolution.width as f32,
-                    height: base.surface_resolution.height as f32,
-                    min_depth: 0.0,
-                    max_depth: 1.0,
-                },
-            ];
-            let scissors = vec![
-                vk::Rect2D {
-                    offset: vk::Offset2D { x: 0, y: 0 },
-                    extent: base.surface_resolution.clone(),
-                },
-            ];
+            let viewports = vec![vk::Viewport {
+                x: 0.0,
+                y: 0.0,
+                width: base.surface_resolution.width as f32,
+                height: base.surface_resolution.height as f32,
+                min_depth: 0.0,
+                max_depth: 1.0,
+            }];
+            let scissors = vec![vk::Rect2D {
+                offset: vk::Offset2D { x: 0, y: 0 },
+                extent: base.surface_resolution.clone(),
+            }];
 
             let pipeline = GraphicsPipeline {
                 renderpass,
@@ -827,10 +745,50 @@ impl Quad {
         }
     }
 
-    pub fn render(&mut self) {
+    /// Compiles all fragemnt shaders and creates a pipeline object. This is useful because
+    /// pipeline creation might fail for an invalid shader. We want to make sure that all shaders
+    /// from rlsl are valid, or at least make it through through pipeline creation.
+    pub fn compile_all(&self, base_path: &Path) {
+        let vertex_file = base_path.join("vertex.spv");
+        let dirs = read_dir(base_path).expect("Unable to read path to shaders");
+        dirs.filter_map(|dir_entry| dir_entry.ok()).filter(|dir_entry| {
+            let path = dir_entry.path();
+            if let Some(ext) = path.extension(){
+                ext == "spv" && !path.file_stem().map(|name| name == "vertex").unwrap_or(false)
+            }
+            else{
+                false
+            }
+        }).for_each(|dir_entry| {
+            println!("Compiling: {}", dir_entry.path().display());
+            let _ = self.pipeline
+                .create(&self.base.device, ("vertex", &vertex_file), ("fragment", &dir_entry.path()));
+        });
+    }
+
+    /// Renders a single vertex and fragment shader
+    pub fn render(&mut self, vertex_info: (&str, &Path), fragment_info: (&str, &Path)) {
         unsafe {
             let start = SystemTime::now();
-            let graphics_pipeline = self.pipeline.create(&self.base.device);
+            let graphics_pipeline =
+                self.pipeline
+                    .create(&self.base.device, vertex_info, fragment_info);
+            let query_pool_infos = vk::QueryPoolCreateInfo {
+                p_next: ptr::null(),
+                s_type: vk::StructureType::QueryPoolCreateInfo,
+                flags: vk::QueryPoolCreateFlags::empty(),
+                query_type: vk::QueryType::Timestamp,
+                query_count: 2,
+                pipeline_statistics: vk::QueryPipelineStatisticFlags::empty(),
+            };
+            let query_pool = self.base
+                .device
+                .create_query_pool(&query_pool_infos, None)
+                .expect("pool");
+            let props = self.base
+                .instance
+                .get_physical_device_properties(self.base.pdevice);
+            let timestamp_period = props.limits.timestamp_period;
             self.render_loop(|quad| {
                 let current = SystemTime::now();
                 let duration = current.duration_since(start).expect("dur");
@@ -891,6 +849,7 @@ impl Quad {
                     &[quad.base.present_complete_semaphore],
                     &[quad.base.rendering_complete_semaphore],
                     |device, draw_command_buffer| {
+                        device.cmd_reset_query_pool(draw_command_buffer, query_pool, 0, 2);
                         device.cmd_begin_render_pass(
                             draw_command_buffer,
                             &render_pass_begin_info,
@@ -910,7 +869,7 @@ impl Quad {
                             graphics_pipeline,
                         );
                         device.cmd_set_viewport(draw_command_buffer, 0, &quad.pipeline.viewports);
-                        device.cmd_set_scissor(draw_command_buffer, &quad.pipeline.scissors);
+                        device.cmd_set_scissor(draw_command_buffer, 0, &quad.pipeline.scissors);
                         device.cmd_bind_vertex_buffers(
                             draw_command_buffer,
                             0,
@@ -927,6 +886,18 @@ impl Quad {
                         // Or draw without the index buffer
                         // device.cmd_draw(draw_command_buffer, 3, 1, 0, 0);
                         device.cmd_end_render_pass(draw_command_buffer);
+                        device.cmd_write_timestamp(
+                            draw_command_buffer,
+                            vk::PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                            query_pool,
+                            0,
+                        );
+                        device.cmd_write_timestamp(
+                            draw_command_buffer,
+                            vk::PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                            query_pool,
+                            1,
+                        );
                     },
                 );
                 //let mut present_info_err = mem::uninitialized();
@@ -944,6 +915,21 @@ impl Quad {
                     .swapchain_loader
                     .queue_present_khr(quad.base.present_queue, &present_info)
                     .unwrap();
+                let mut data: [u64; 2] = [0, 0];
+                quad.base
+                    .device
+                    .get_query_pool_results::<u64>(
+                        query_pool,
+                        0,
+                        2,
+                        &mut data,
+                        vk::QUERY_RESULT_64_BIT | vk::QUERY_RESULT_WAIT_BIT,
+                    )
+                    .expect("results");
+                let dt = data[1] - data[0];
+                let ms = dt as f32 * timestamp_period / 1.0e6 as f32;
+                println!("dt {:?}", ms);
+                println!("t {:?}", timestamp_period);
             });
         }
     }

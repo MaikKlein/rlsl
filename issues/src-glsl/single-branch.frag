@@ -7,8 +7,10 @@ layout (location = 0) out vec4 fragColor;
 
 void main() {
     vec3 color = vec3(1, 0, 0);
-    if(uv.x > 0.5) {
-        color.x = 0.5;
+    uint discr = uint(uv.x > 0.5);
+    switch(discr) {
+        case 1: color.x = 0.5; break;
+        default: break;
     }
     fragColor = vec4(color, 1);
 }
