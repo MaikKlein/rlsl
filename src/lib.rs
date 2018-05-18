@@ -14,7 +14,6 @@ extern crate log;
 extern crate rspirv;
 extern crate rustc;
 extern crate rustc_borrowck;
-extern crate rustc_const_math;
 extern crate rustc_data_structures;
 extern crate rustc_driver;
 extern crate rustc_errors;
@@ -23,29 +22,33 @@ extern crate rustc_mir;
 extern crate rustc_passes;
 extern crate rustc_plugin;
 extern crate rustc_resolve;
+extern crate rustc_target;
 extern crate rustc_typeck;
 extern crate spirv_headers as spirv;
 #[macro_use]
 extern crate syntax;
 extern crate syntax_pos;
 pub mod trans;
+use rustc::mir::mono::MonoItem;
+use rustc::mir::visit::{TyContext, Visitor};
 use rustc::ty::layout::LayoutOf;
-use rustc_data_structures::indexed_vec::Idx;
+use rustc::ty::{Binder, Instance, ParamEnv, TyCtxt, TypeVariants, TypeckTables};
 use rustc::{hir, mir};
 use rustc_data_structures::fx::FxHashSet;
-use rustc::mir::mono::MonoItem;
-use rustc::ty::{Binder, Instance, ParamEnv, TyCtxt, TypeVariants, TypeckTables};
-use rustc::mir::visit::{TyContext, Visitor};
-pub mod context;
+use rustc_data_structures::indexed_vec::Idx;
+use rustc_target::spec::abi::Abi;
 pub mod collector;
+pub mod context;
 pub mod typ;
-use rustc::ty;
 use self::context::{CodegenCx, MirContext, SpirvMir};
 use self::typ::*;
+use itertools::{Either, Itertools};
+use rustc::middle::const_val::ConstVal;
+use rustc::mir::interpret;
+use rustc::ty;
 use rustc::ty::subst::Substs;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use itertools::{Either, Itertools};
 #[derive(Copy, Clone, Debug)]
 pub enum IntrinsicFn {
     Dot,
@@ -56,7 +59,7 @@ register_diagnostics! {
 
 pub fn remove_ptr_ty<'tcx>(ty: ty::Ty<'tcx>) -> ty::Ty<'tcx> {
     match ty.sty {
-        TypeVariants::TyRef(_, type_and_mut) => remove_ptr_ty(type_and_mut.ty),
+        TypeVariants::TyRef(_, ty, _) => remove_ptr_ty(ty),
         _ => ty,
     }
 }
@@ -159,8 +162,8 @@ fn count_types<'a>(tys: &[rustc::ty::Ty<'a>]) -> HashMap<rustc::ty::Ty<'a>, usiz
 impl<'a> GlobalVar<'a> {}
 
 fn is_per_vertex<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, ty: ty::Ty<'tcx>) -> bool {
-    if let TypeVariants::TyRef(_, ty_and_mut) = ty.sty {
-        if let TypeVariants::TyAdt(adt, substs) = ty_and_mut.ty.sty {
+    if let TypeVariants::TyRef(_, ty_and_mut, _) = ty.sty {
+        if let TypeVariants::TyAdt(adt, substs) = ty_and_mut.sty {
             let attrs = tcx.get_attrs(adt.did);
             return extract_attr(&attrs, "spirv", |s| match s {
                 "PerVertex" => Some(true),
@@ -626,9 +629,9 @@ pub fn trans_spirv<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, items: &'a FxHashSet<M
         })
         .for_each(|instance| {
             if tcx.is_foreign_item(instance.def_id()) {
-                let intrinsic_name = &*tcx.item_name(instance.def_id());
+                let intrinsic_name: String = tcx.item_name(instance.def_id()).into();
                 use spirv::GLOp::*;
-                let id = match intrinsic_name {
+                let id = match intrinsic_name.as_str() {
                     "sqrtf32" => Some(Sqrt),
                     "sinf32" => Some(Sin),
                     "cosf32" => Some(Cos),
@@ -639,7 +642,7 @@ pub fn trans_spirv<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, items: &'a FxHashSet<M
                     ctx.intrinsic_fns
                         .insert(instance.def_id(), Intrinsic::GlslExt(id as u32));
                 }
-                let abort = match intrinsic_name {
+                let abort = match intrinsic_name.as_str() {
                     "abort" => Some(Intrinsic::Abort),
                     "spirv_discard" => Some(Intrinsic::Discard),
                     _ => None,
@@ -730,7 +733,6 @@ pub fn trans_spirv<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, items: &'a FxHashSet<M
     );
 }
 
-use rustc::middle::const_val::ConstVal;
 impl<'b, 'a, 'tcx> FunctionCx<'b, 'a, 'tcx> {
     pub fn load_operand<'r>(&mut self, operand: &'r mir::Operand<'tcx>) -> Operand<'tcx> {
         let mir = self.mcx.mir();
@@ -752,21 +754,7 @@ impl<'b, 'a, 'tcx> FunctionCx<'b, 'a, 'tcx> {
             }
             &mir::Operand::Constant(ref constant) => match constant.literal {
                 mir::Literal::Value { ref value } => {
-                    let expr = match value.val {
-                        ConstVal::Float(f) => {
-                            let val = ConstValue::Float(f);
-                            self.scx.constant(val)
-                        }
-                        ConstVal::Integral(int) => {
-                            let val = ConstValue::Integer(int);
-                            self.scx.constant(val)
-                        }
-                        ConstVal::Bool(b) => {
-                            let val = ConstValue::Bool(b);
-                            self.scx.constant(val)
-                        }
-                        ref rest => unimplemented!("{:?}", rest),
-                    };
+                    let expr = self.scx.constant(value);
                     Operand::new(ty, OperandVariant::Value(expr))
                 }
                 ref rest => unimplemented!("{:?}", rest),
@@ -788,9 +776,9 @@ impl<'b, 'a, 'tcx> FunctionCx<'b, 'a, 'tcx> {
             ret_ty,
             false,
             hir::Unsafety::Normal,
-            syntax::abi::Abi::Rust,
+            Abi::Rust,
         );
-        let fn_ty = scx.tcx.mk_fn_ptr(Binder(fn_sig));
+        let fn_ty = scx.tcx.mk_fn_ptr(Binder::bind(fn_sig));
         let fn_ty_spirv = scx.to_ty_fn(fn_ty);
 
         let forward_fn = scx.forward_fns
@@ -866,10 +854,10 @@ impl<'b, 'a, 'tcx> FunctionCx<'b, 'a, 'tcx> {
             &void,
             false,
             hir::Unsafety::Normal,
-            syntax::abi::Abi::Rust,
+            Abi::Rust,
         );
         let void_spirv = scx.to_ty_fn(void);
-        let fn_ty = scx.tcx.mk_fn_ptr(Binder(fn_sig));
+        let fn_ty = scx.tcx.mk_fn_ptr(Binder::bind(fn_sig));
         let fn_ty_spirv = scx.to_ty_fn(fn_ty);
         let forward_fn = scx.forward_fns
             .get(&(def_id, entry_point.mcx.substs))
@@ -969,7 +957,7 @@ impl<'b, 'a, 'tcx> FunctionCx<'b, 'a, 'tcx> {
             IntrinsicEntry::Fragment => spirv::ExecutionModel::Fragment,
         };
         scx.builder
-            .entry_point(model, spirv_function, name.as_ref(), inputs_raw);
+            .entry_point(model, spirv_function, name, inputs_raw);
         scx.builder
             .execution_mode(spirv_function, spirv::ExecutionMode::OriginUpperLeft, &[]);
     }
@@ -993,7 +981,7 @@ impl<'b, 'a, 'tcx> FunctionCx<'b, 'a, 'tcx> {
         let ty = self.mcx.monomorphize(&ty);
         self.scx.to_ty_as_ptr(ty, spirv::StorageClass::Function)
     }
-    pub fn constant(&mut self, val: ConstValue) -> Value {
+    pub fn constant(&mut self, val: &ty::Const<'tcx>) -> Value {
         self.scx.constant(val)
     }
     pub fn constant_f32(&mut self, value: f32) -> Value {
@@ -1069,8 +1057,8 @@ pub fn find_merge_block(
     root: mir::BasicBlock,
     targets: &[mir::BasicBlock],
 ) -> Option<mir::BasicBlock> {
-    use rustc_data_structures::control_flow_graph::iterate::post_order_from;
     use rustc_data_structures::control_flow_graph::dominators::dominators;
+    use rustc_data_structures::control_flow_graph::iterate::post_order_from;
     use std::collections::{BTreeSet, HashSet};
     let dominators = dominators(mir);
     let true_order: BTreeSet<_> = post_order_from(mir, targets[0])
@@ -1098,17 +1086,18 @@ pub struct Enum<'tcx> {
 impl<'tcx> Enum<'tcx> {
     pub fn from_ty<'a>(tcx: TyCtxt<'a, 'tcx, 'tcx>, ty: ty::Ty<'tcx>) -> Option<Enum<'tcx>> {
         use rustc::ty::layout::Variants;
-        let e = tcx.layout_raw(ty::ParamEnvAnd {
-            param_env: ParamEnv::empty(rustc::traits::Reveal::All),
+        let e = tcx.layout_of(ty::ParamEnvAnd {
+            param_env: ty::ParamEnv::reveal_all(),
             value: ty,
         }).ok()
-            .and_then(|layout| {
+            .and_then(|ty_layout| {
+                let ty = ty_layout.ty;
                 if let Variants::Tagged {
-                    ref discr,
+                    ref tag,
                     ref variants,
-                } = layout.variants
+                } = ty_layout.details.variants
                 {
-                    Some((discr.value.to_ty(tcx), variants.len()))
+                    Some((ty, variants.len()))
                 } else {
                     None
                 }
@@ -1196,7 +1185,7 @@ impl<'b, 'a, 'tcx> rustc::mir::visit::Visitor<'tcx> for FunctionCx<'b, 'a, 'tcx>
             return;
         }
         let ty = rvalue.ty(&self.mcx.mir().local_decls, self.scx.tcx);
-        if let TypeVariants::TyTuple(ref slice, _) = ty.sty {
+        if let TypeVariants::TyTuple(ref slice) = ty.sty {
             if slice.len() == 0 {
                 return;
             }
@@ -1302,7 +1291,7 @@ impl<'b, 'a, 'tcx> rustc::mir::visit::Visitor<'tcx> for FunctionCx<'b, 'a, 'tcx>
                     return self.scx.builder.ret().expect("ret");
                 } else {
                     match mir.return_ty().sty {
-                        TypeVariants::TyTuple(ref slice, _) if slice.len() == 0 => {
+                        TypeVariants::TyTuple(ref slice) if slice.len() == 0 => {
                             self.scx.builder.ret().expect("ret");
                         }
                         _ => {
@@ -1385,12 +1374,10 @@ impl<'b, 'a, 'tcx> rustc::mir::visit::Visitor<'tcx> for FunctionCx<'b, 'a, 'tcx>
                     .selection_merge(merge_block_label.0, spirv::SelectionControl::empty())
                     .expect("selection merge");
                 assert!(labels.len() == 1);
-                self.scx.builder.branch_conditional(
-                    bool_load,
-                    default_label.0,
-                    labels[0].1,
-                    &[]
-                ).expect("if");
+                self.scx
+                    .builder
+                    .branch_conditional(bool_load, default_label.0, labels[0].1, &[])
+                    .expect("if");
                 // self.scx
                 //     .builder
                 //     .switch(selector, default_label.0, &labels)
@@ -1405,7 +1392,6 @@ impl<'b, 'a, 'tcx> rustc::mir::visit::Visitor<'tcx> for FunctionCx<'b, 'a, 'tcx>
                 ref destination,
                 ..
             } => {
-                use syntax::abi::Abi;
                 let local_decls = &self.mcx.mir().local_decls;
                 let fn_ty = func.ty(self.mcx.mir(), self.mcx.tcx);
                 let (def_id, substs) = match fn_ty.sty {
@@ -1423,7 +1409,7 @@ impl<'b, 'a, 'tcx> rustc::mir::visit::Visitor<'tcx> for FunctionCx<'b, 'a, 'tcx>
                 let mono_substs = self.mcx.monomorphize(substs);
                 let resolve_instance = Instance::resolve(
                     self.scx.tcx,
-                    ParamEnv::empty(rustc::traits::Reveal::All),
+                    ty::ParamEnv::reveal_all(),
                     def_id,
                     &mono_substs,
                 ).expect("resolve instance call");
@@ -1467,7 +1453,7 @@ impl<'b, 'a, 'tcx> rustc::mir::visit::Visitor<'tcx> for FunctionCx<'b, 'a, 'tcx>
                         .to_variable()
                         .expect("Should be a variable");
                     match ty.sty {
-                        TypeVariants::TyTuple(slice, b) => {
+                        TypeVariants::TyTuple(slice) => {
                             let tuple_iter = slice.iter().enumerate().map(|(idx, field_ty)| {
                                 let field_ty_spv = self.to_ty_fn(field_ty);
                                 let field_ty_ptr_spv = self.to_ty_as_ptr_fn(field_ty);

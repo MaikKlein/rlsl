@@ -1,16 +1,15 @@
-use rustc_const_math::{ConstFloat, ConstInt};
-use spirv;
-use rustc::ty;
-use rustc::mir;
 use context::CodegenCx;
+use rustc::mir;
+use rustc::ty;
+use spirv;
 use FunctionCx;
 
-#[derive(Copy, Clone, Debug, Hash, Eq, PartialEq)]
-pub enum ConstValue {
-    Float(ConstFloat),
-    Integer(ConstInt),
-    Bool(bool),
-}
+// #[derive(Copy, Clone, Debug, Hash, Eq, PartialEq)]
+// pub enum ConstValue {
+//     Float(ConstFloat),
+//     Integer(ConstInt),
+//     Bool(bool),
+// }
 #[derive(Debug, Clone)]
 pub struct Operand<'tcx> {
     pub ty: ty::Ty<'tcx>,

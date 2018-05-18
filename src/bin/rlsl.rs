@@ -24,18 +24,18 @@ extern crate rustc_save_analysis as save;
 extern crate rustc_trans_utils;
 extern crate syntax;
 extern crate syntax_pos;
-use rustc_driver::{run, run_compiler, Compilation, CompilerCalls};
+use rustc::session::Session;
 use rustc_driver::driver::{CompileController, CompileState};
 use rustc_driver::RustcDefaultCalls;
-use rustc::session::Session;
-use rustc_trans_utils::trans_crate::TransCrate;
+use rustc_driver::{run, run_compiler, Compilation, CompilerCalls};
 use rustc_mir::monomorphize::collector::{collect_crate_mono_items, MonoItemCollectionMode};
+use rustc_trans_utils::trans_crate::TransCrate;
 struct RlslCompilerCalls;
 
 use rustc::session::config::{self, ErrorOutputType, Input};
+use rustc_errors as errors;
 use std::path::PathBuf;
 use syntax::ast;
-use rustc_errors as errors;
 impl<'a> CompilerCalls<'a> for RlslCompilerCalls {
     fn early_callback(
         &mut self,
@@ -79,7 +79,8 @@ impl<'a> CompilerCalls<'a> for RlslCompilerCalls {
         let mut controller = CompileController::basic();
         session.abort_if_errors();
         controller.keep_ast = session.opts.debugging_opts.keep_ast;
-        controller.continue_parse_after_error = session.opts.debugging_opts.continue_parse_after_error;
+        controller.continue_parse_after_error =
+            session.opts.debugging_opts.continue_parse_after_error;
         if let Some(ref crate_type) = matches.opt_str("crate-type") {
             if crate_type == "bin" {
                 controller.after_analysis.stop = Compilation::Stop;

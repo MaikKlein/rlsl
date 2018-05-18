@@ -1,12 +1,13 @@
-use rustc::mir::visit::Visitor;
+use context::MirContext;
 use rustc;
 use rustc::mir;
-use rustc_data_structures::fx::FxHashSet;
 use rustc::mir::mono::MonoItem;
-use rustc::ty::{Instance, ParamEnv, TyCtxt};
-use context::MirContext;
+use rustc::mir::visit::Visitor;
 use rustc::ty::subst::Substs;
+use rustc::ty::{self, Instance, ParamEnv, TyCtxt};
+use rustc_data_structures::fx::FxHashSet;
 pub struct CollectCrateItems<'a, 'tcx: 'a> {
+    mir: &'a mir::Mir<'tcx>,
     tcx: TyCtxt<'a, 'tcx, 'tcx>,
     items: Vec<MonoItem<'tcx>>,
     substs: &'tcx Substs<'tcx>,
@@ -17,6 +18,7 @@ pub fn collect_crate_items<'a, 'tcx>(
     substs: &'tcx Substs<'tcx>,
 ) -> Vec<MonoItem<'tcx>> {
     let mut collector = CollectCrateItems {
+        mir,
         tcx,
         items: Vec::new(),
         substs,
@@ -33,22 +35,19 @@ impl<'a, 'tcx> rustc::mir::visit::Visitor<'tcx> for CollectCrateItems<'a, 'tcx> 
     ) {
         self.super_terminator_kind(block, kind, location);
         if let &mir::TerminatorKind::Call { ref func, .. } = kind {
-            if let &mir::Operand::Constant(ref constant) = func {
-                if let mir::Literal::Value { ref value } = constant.literal {
-                    use rustc::middle::const_val::ConstVal;
-                    if let ConstVal::Function(def_id, ref substs) = value.val {
-                        let mono_substs = self.tcx.trans_apply_param_substs(self.substs, substs);
-
-                        let instance = Instance::resolve(
-                            self.tcx,
-                            ParamEnv::empty(rustc::traits::Reveal::All),
-                            def_id,
-                            mono_substs,
-                        ).unwrap();
-                        self.items.push(MonoItem::Fn(instance));
-                    }
-                }
-            }
+            let callee_ty = func.ty(self.mir, self.tcx);
+            let callee_ty = self.tcx.subst_and_normalize_erasing_regions(
+                self.substs,
+                ty::ParamEnv::reveal_all(),
+                &callee_ty,
+            );
+            let (def_id, substs) = match callee_ty.sty {
+                ty::TypeVariants::TyFnDef(def_id, substs) => (def_id, substs),
+                _ => panic!("Not a function"),
+            };
+            let instance =
+                Instance::resolve(self.tcx, ty::ParamEnv::reveal_all(), def_id, substs).unwrap();
+            self.items.push(MonoItem::Fn(instance));
         }
     }
 }

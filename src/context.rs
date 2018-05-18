@@ -1,20 +1,19 @@
-use std::path::Path;
-use rustc_const_math::{ConstFloat, ConstInt};
+use self::hir::def_id::DefId;
 use rspirv;
-use std::collections::HashMap;
+use rspirv::mr::Builder;
 use rustc;
 use rustc::hir;
-use spirv;
-use rustc::ty;
-use rspirv::mr::Builder;
-use syntax;
 use rustc::mir;
-use rustc::ty::{subst, TyCtxt};
-use {Enum, Variable};
-use {ConstValue, Function, FunctionCall, Intrinsic, IntrinsicType, Ty, Value};
+use rustc::ty;
 use rustc::ty::subst::Substs;
-use self::hir::def_id::DefId;
+use rustc::ty::{subst, TyCtxt};
+use spirv;
+use std::collections::HashMap;
+use std::path::Path;
+use syntax;
 use ConstructTy;
+use {Function, FunctionCall, Intrinsic, IntrinsicType, Ty, Value};
+use {Enum, Variable};
 
 pub struct CodegenCx<'a, 'tcx: 'a> {
     per_vertex: Option<Variable<'tcx>>,
@@ -23,7 +22,7 @@ pub struct CodegenCx<'a, 'tcx: 'a> {
     pub builder: Builder,
     pub ty_cache: HashMap<ty::Ty<'tcx>, Ty<'tcx>>,
     pub ty_ptr_cache: HashMap<(ty::Ty<'tcx>, spirv::StorageClass), Ty<'tcx>>,
-    pub const_cache: HashMap<ConstValue, Value>,
+    pub const_cache: HashMap<ty::Const<'tcx>, Value>,
     pub forward_fns: HashMap<(hir::def_id::DefId, &'a Substs<'tcx>), Function>,
     pub intrinsic_fns: HashMap<hir::def_id::DefId, Intrinsic>,
     pub debug_symbols: bool,
@@ -52,42 +51,46 @@ impl<'a, 'tcx> CodegenCx<'a, 'tcx> {
     }
 
     pub fn constant_f32(&mut self, value: f32) -> Value {
-        use std::convert::TryFrom;
-        let val = ConstValue::Float(ConstFloat::from_u128(
-            TryFrom::try_from(value.to_bits()).expect("Could not convert from f32 to u128"),
-            syntax::ast::FloatTy::F32,
-        ));
+        let val = ty::Const::from_bits(self.tcx, value.to_bits() as u128, self.tcx.types.f32);
         self.constant(val)
     }
 
     pub fn constant_u32(&mut self, value: u32) -> Value {
-        let val = ConstValue::Integer(ConstInt::U32(value));
+        let val = ty::Const::from_bits(self.tcx, value as u128, self.tcx.types.u32);
         self.constant(val)
     }
 
-    pub fn constant(&mut self, val: ConstValue) -> Value {
-        if let Some(val) = self.const_cache.get(&val) {
+    pub fn constant(&mut self, const_val: &ty::Const<'tcx>) -> Value {
+        if let Some(val) = self.const_cache.get(const_val) {
             return *val;
         }
-        let spirv_val = match val {
-            ConstValue::Integer(const_int) => {
-                use rustc::ty::util::IntTypeExt;
-                let ty = const_int.int_type().to_ty(self.tcx);
-                let spirv_ty = self.to_ty(ty, spirv::StorageClass::Function);
-                let value = const_int.to_u128_unchecked() as u32;
-                self.builder.constant_u32(spirv_ty.word, value)
+        let const_ty = const_val.ty;
+        let spirv_val = match const_ty.sty {
+            ty::TypeVariants::TyUint(_) => {
+                let value = const_val.to_bits(const_ty).expect("bits from const");
+                // [FIXME] Storageptr
+                let spirv_ty = self.to_ty_fn(const_ty);
+                self.builder.constant_u32(spirv_ty.word, value as u32)
             }
-            ConstValue::Bool(b) => self.constant_u32(b as u32).word,
-            ConstValue::Float(const_float) => {
-                use rustc::infer::unify_key::ToType;
-                let value: f32 = unsafe { ::std::mem::transmute(const_float.bits as u32) };
-                let ty = const_float.ty.to_type(self.tcx);
-                let spirv_ty = self.to_ty(ty, spirv::StorageClass::Function);
-                self.builder.constant_f32(spirv_ty.word, value)
-            }
+            //[FIXME] Add other constants
+            ref rest => unimplemented!("Const"), // ConstValue::Integer(const_int) => {
+                                                 //     use rustc::ty::util::IntTypeExt;
+                                                 //     let ty = const_int.int_type().to_ty(self.tcx);
+                                                 //     let spirv_ty = self.to_ty(ty, spirv::StorageClass::Function);
+                                                 //     let value = const_int.to_u128_unchecked() as u32;
+                                                 //     self.builder.constant_u32(spirv_ty.word, value)
+                                                 // }
+                                                 // ConstValue::Bool(b) => self.constant_u32(b as u32).word,
+                                                 // ConstValue::Float(const_float) => {
+                                                 //     use rustc::infer::unify_key::ToType;
+                                                 //     let value: f32 = unsafe { ::std::mem::transmute(const_float.bits as u32) };
+                                                 //     let ty = const_float.ty.to_type(self.tcx);
+                                                 //     let spirv_ty = self.to_ty(ty, spirv::StorageClass::Function);
+                                                 //     self.builder.constant_f32(spirv_ty.word, value)
+                                                 // }
         };
         let spirv_expr = Value::new(spirv_val);
-        self.const_cache.insert(val, spirv_expr);
+        self.const_cache.insert(*const_val, spirv_expr);
         spirv_expr
     }
     pub fn to_ty(
@@ -98,9 +101,9 @@ impl<'a, 'tcx> CodegenCx<'a, 'tcx> {
         use rustc::ty::TypeVariants;
         use syntax::ast::{IntTy, UintTy};
         let ty = match ty.sty {
-            TypeVariants::TyRef(_, type_and_mut) => {
+            TypeVariants::TyRef(_, ty, _) => {
                 let t = ty::TypeAndMut {
-                    ty: type_and_mut.ty,
+                    ty,
                     mutbl: rustc::hir::Mutability::MutMutable,
                 };
                 self.tcx.mk_ptr(t)
@@ -140,10 +143,10 @@ impl<'a, 'tcx> CodegenCx<'a, 'tcx> {
                     FloatTy::F64 => panic!("f64 is not supported"),
                 }
             }
-            TypeVariants::TyTuple(slice, _) if slice.len() == 0 => {
+            TypeVariants::TyTuple(slice) if slice.len() == 0 => {
                 self.builder.type_void().construct_ty(ty)
             }
-            TypeVariants::TyTuple(slice, _) => {
+            TypeVariants::TyTuple(slice) => {
                 let field_ty_spirv: Vec<_> = slice
                     .iter()
                     .map(|ty| self.to_ty(ty, storage_class).word)
@@ -153,8 +156,10 @@ impl<'a, 'tcx> CodegenCx<'a, 'tcx> {
                 spirv_struct.construct_ty(ty)
             }
             TypeVariants::TyFnPtr(sig) => {
-                let ty = self.tcx
-                    .erase_late_bound_regions_and_normalize(&sig.output());
+                let ty = self.tcx.normalize_erasing_late_bound_regions(
+                    ty::ParamEnv::reveal_all(),
+                    &sig.output(),
+                );
                 let ret_ty = self.to_ty(ty, storage_class);
                 let input_ty: Vec<_> = sig.inputs()
                     .skip_binder()
@@ -367,7 +372,7 @@ impl<'a, 'tcx> CodegenCx<'a, 'tcx> {
         if self.debug_symbols {
             //self.builder.name(id, self.tcx.item_name(def_id).as_ref());
             self.builder
-                .name(id, self.tcx.def_symbol_name(def_id).name.as_ref());
+                .name(id, self.tcx.def_symbol_name(def_id).name);
         }
     }
     pub fn name_from_str(&mut self, name: &str, id: spirv::Word) {
@@ -377,9 +382,9 @@ impl<'a, 'tcx> CodegenCx<'a, 'tcx> {
     }
     pub fn build_module<P: AsRef<Path>>(self, file_name: P) {
         use rspirv::binary::Assemble;
-        use std::mem::size_of;
         use std::fs::File;
         use std::io::Write;
+        use std::mem::size_of;
         let mut f = File::create(file_name.as_ref()).unwrap();
         let spirv_module = self.builder.module();
         let bytes: Vec<u8> = spirv_module
@@ -424,7 +429,7 @@ impl<'a, 'tcx> CodegenCx<'a, 'tcx> {
         assert!(::is_per_vertex(self.tcx, ty), "Not PerVertex");
         self.per_vertex.unwrap_or_else(|| {
             let struct_ty = match ty.sty {
-                TypeVariants::TyRef(_, ty_and_mut) => ty_and_mut.ty,
+                TypeVariants::TyRef(_, ty_and_mut, _) => ty_and_mut,
                 _ => unreachable!(),
             };
             let spirv_ty = self.to_ty(struct_ty, spirv::StorageClass::Output);
@@ -541,8 +546,8 @@ impl<'a, 'tcx> SpirvMir<'a, 'tcx> {
                         target: merge_block,
                     },
                 };
-                use rustc_data_structures::control_flow_graph::ControlFlowGraph;
                 use rustc_data_structures::control_flow_graph::iterate::post_order_from_to;
+                use rustc_data_structures::control_flow_graph::ControlFlowGraph;
                 use std::collections::HashSet;
                 let suc: HashSet<_> = post_order_from_to(&spirv_mir, block, Some(merge_block))
                     .into_iter()
@@ -575,11 +580,13 @@ impl<'a, 'tcx> SpirvMir<'a, 'tcx> {
             def_id: mcx.def_id,
         }
     }
-    pub fn monomorphize<T>(&self, value: &T) -> T
+
+    pub fn monomorphize<T>(&self, t: &T) -> T
     where
-        T: rustc::infer::TransNormalize<'tcx>,
+        T: ty::TypeFoldable<'tcx>,
     {
-        self.tcx.trans_apply_param_substs(self.substs, value)
+        self.tcx
+            .subst_and_normalize_erasing_regions(self.substs, ty::ParamEnv::reveal_all(), t)
     }
 }
 
@@ -594,10 +601,11 @@ impl<'a, 'tcx> MirContext<'a, 'tcx> {
     pub fn mir(&self) -> &'a mir::Mir<'tcx> {
         self.mir
     }
-    pub fn monomorphize<T>(&self, value: &T) -> T
+    pub fn monomorphize<T>(&self, t: &T) -> T
     where
-        T: rustc::infer::TransNormalize<'tcx>,
+        T: ty::TypeFoldable<'tcx>,
     {
-        self.tcx.trans_apply_param_substs(self.substs, value)
+        self.tcx
+            .subst_and_normalize_erasing_regions(self.substs, ty::ParamEnv::reveal_all(), t)
     }
 }
