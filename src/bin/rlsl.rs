@@ -21,7 +21,7 @@ extern crate rustc_passes;
 extern crate rustc_plugin;
 extern crate rustc_resolve;
 extern crate rustc_save_analysis as save;
-extern crate rustc_trans_utils;
+extern crate rustc_codegen_utils;
 extern crate syntax;
 extern crate syntax_pos;
 use rustc::session::Session;
@@ -29,7 +29,7 @@ use rustc_driver::driver::{CompileController, CompileState};
 use rustc_driver::RustcDefaultCalls;
 use rustc_driver::{run, run_compiler, Compilation, CompilerCalls};
 use rustc_mir::monomorphize::collector::{collect_crate_mono_items, MonoItemCollectionMode};
-use rustc_trans_utils::trans_crate::TransCrate;
+use rustc_codegen_utils::codegen_backend::CodegenBackend;
 struct RlslCompilerCalls;
 
 use rustc::session::config::{self, ErrorOutputType, Input};
@@ -49,7 +49,7 @@ impl<'a> CompilerCalls<'a> for RlslCompilerCalls {
     }
     fn late_callback(
         &mut self,
-        trans: &TransCrate,
+        trans: &CodegenBackend,
         matches: &getopts::Matches,
         sess: &Session,
         cstore: &rustc::middle::cstore::CrateStore,
