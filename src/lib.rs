@@ -290,7 +290,7 @@ impl<'tcx> Entry<'tcx, Input<'tcx>> {
     pub fn input<'a>(entry_points: &[EntryPoint<'a, 'tcx>], stx: &mut CodegenCx<'a, 'tcx>) -> Self {
         let set: HashSet<_> = entry_points
             .iter()
-            .flat_map(EntryPoint::input_iter)
+            .flat_map(|entry|EntryPoint::input_iter(entry))
             .collect();
         Self::create(set, stx, spirv::StorageClass::Input)
     }
@@ -423,7 +423,7 @@ impl<'tcx> Entry<'tcx, Descriptor<'tcx>> {
     ) -> Self {
         let set: HashSet<_> = entry_points
             .iter()
-            .flat_map(EntryPoint::descriptor_iter)
+            .flat_map(|entry|EntryPoint::descriptor_iter(entry))
             .collect();
         Self::create(set, stx, spirv::StorageClass::Uniform)
     }
@@ -483,7 +483,7 @@ impl<'tcx> Entry<'tcx, Output<'tcx>> {
     ) -> Self {
         let set: HashSet<_> = entry_points
             .iter()
-            .flat_map(EntryPoint::output_iter)
+            .flat_map(|entry|EntryPoint::output_iter(entry))
             .collect();
         Self::create(set, stx, spirv::StorageClass::Output)
     }
