@@ -770,6 +770,7 @@ impl Quad {
     pub fn render(&mut self, vertex_info: (&str, &Path), fragment_info: (&str, &Path)) {
         unsafe {
             let start = SystemTime::now();
+            let mut frame_start_time = SystemTime::now();
             let graphics_pipeline =
                 self.pipeline
                     .create(&self.base.device, vertex_info, fragment_info);
@@ -781,14 +782,6 @@ impl Quad {
                 query_count: 2,
                 pipeline_statistics: vk::QueryPipelineStatisticFlags::empty(),
             };
-            let query_pool = self.base
-                .device
-                .create_query_pool(&query_pool_infos, None)
-                .expect("pool");
-            let props = self.base
-                .instance
-                .get_physical_device_properties(self.base.pdevice);
-            let timestamp_period = props.limits.timestamp_period;
             self.render_loop(|quad| {
                 let current = SystemTime::now();
                 let duration = current.duration_since(start).expect("dur");
@@ -849,7 +842,6 @@ impl Quad {
                     &[quad.base.present_complete_semaphore],
                     &[quad.base.rendering_complete_semaphore],
                     |device, draw_command_buffer| {
-                        device.cmd_reset_query_pool(draw_command_buffer, query_pool, 0, 2);
                         device.cmd_begin_render_pass(
                             draw_command_buffer,
                             &render_pass_begin_info,
@@ -886,18 +878,6 @@ impl Quad {
                         // Or draw without the index buffer
                         // device.cmd_draw(draw_command_buffer, 3, 1, 0, 0);
                         device.cmd_end_render_pass(draw_command_buffer);
-                        device.cmd_write_timestamp(
-                            draw_command_buffer,
-                            vk::PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-                            query_pool,
-                            0,
-                        );
-                        device.cmd_write_timestamp(
-                            draw_command_buffer,
-                            vk::PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-                            query_pool,
-                            1,
-                        );
                     },
                 );
                 //let mut present_info_err = mem::uninitialized();
@@ -915,21 +895,10 @@ impl Quad {
                     .swapchain_loader
                     .queue_present_khr(quad.base.present_queue, &present_info)
                     .unwrap();
-                let mut data: [u64; 2] = [0, 0];
-                quad.base
-                    .device
-                    .get_query_pool_results::<u64>(
-                        query_pool,
-                        0,
-                        2,
-                        &mut data,
-                        vk::QUERY_RESULT_64_BIT | vk::QUERY_RESULT_WAIT_BIT,
-                    )
-                    .expect("results");
-                let dt = data[1] - data[0];
-                let ms = dt as f32 * timestamp_period / 1.0e6 as f32;
-                println!("dt {:?}", ms);
-                println!("t {:?}", timestamp_period);
+                let current_time = SystemTime::now();
+                let dt = current_time.duration_since(frame_start_time);
+                frame_start_time = current_time;
+                println!("dt {:?}", dt);
             });
         }
     }

@@ -73,7 +73,7 @@ impl Opt {
 fn main() {
     let opt = Opt::from_args();
     let mut app = Opt::clap();
-    app.gen_completions("myapp", Shell::Bash, "");
+    //app.gen_completions("myapp", Shell::Bash, "");
     let base_path = opt.get_shader_path();
     let mut quad = Quad::new();
     match opt.command {
