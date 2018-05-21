@@ -1,5 +1,5 @@
 #![no_std]
-#![feature(macro_reexport)]
+#![feature(use_extern_macros)]
 #![feature(lang_items)]
 #![feature(core_intrinsics)]
 #![feature(unwind_attributes)]
@@ -7,8 +7,10 @@
 #![feature(prelude_import)]
 #![feature(custom_attribute, attr_literals)]
 
-#[macro_reexport(assert, assert_eq, assert_ne, debug_assert, debug_assert_eq, debug_assert_ne, unreachable, unimplemented, write, writeln, try)]
+//#[macro_reexport(assert, assert_eq, assert_ne, debug_assert, debug_assert_eq, debug_assert_ne, unreachable, unimplemented, write, writeln, try)]
 extern crate core as __core;
+
+pub use core::{assert_eq, assert_ne, debug_assert, debug_assert_eq, debug_assert_ne};
 
 pub use core::iter;
 pub use core::clone;
@@ -44,7 +46,7 @@ pub mod intrinsics {
 
 pub mod f32 {
     use intrinsics;
-    #[lang = "f32"]
+    #[lang = "f32_runtime"]
     impl f32 {
         #[inline]
         pub fn sqrt(self) -> f32 {
@@ -86,64 +88,4 @@ macro_rules! panic {
     ($msg:expr) => {
         panic!()
     };
-}
-
-pub trait Pipeline {
-    type VertexInput;
-    type VertexOutput;
-}
-#[macro_export]
-macro_rules! pipeline {
-    ($name: ident, fn $vertex_name: ident ( $vertex_param: ident: $vertex_input: path) -> $vertex_output: path { $($vertex_body: tt)* }) => {
-        pub struct $name;
-        impl ::std::Pipeline for $name{
-            type VertexInput = $vertex_input;
-            type VertexOutput = $vertex_output;
-        }
-        #[spirv(vertex)]
-        fn concat_idents!(foo, bar) ($vertex_param: $vertex_input){
-            $(
-                $vertex_body
-            )*
-        }
-    }
-}
-pub mod vec {
-    use ops::Add;
-    #[repr(C)]
-    #[derive(Copy, Clone)]
-    #[spirv(Vec2)]
-    pub struct Vec2<T: Copy> {
-        pub x: T,
-        pub y: T,
-    }
-    //impl<T: Copy> Add for Vec2<T>
-    //where
-    //    T: Add<Output = T>,
-    //{
-    //    type Output = Vec2<T>;
-    //    fn add(self, other: Vec2<T>) -> Vec2<T> {
-    //        Vec2 {
-    //            x: self.x + other.x,
-    //            y: self.y + other.y,
-    //        }
-    //    }
-    //}
-    impl Add for Vec2<f32> {
-        type Output = Vec2<f32>;
-        fn add(self, other: Vec2<f32>) -> Vec2<f32> {
-            Vec2 {
-                x: self.x + other.x,
-                y: self.y + other.y,
-            }
-        }
-    }
-
-    impl Vec2<f32> {
-        #[spirv(dot)]
-        #[inline(never)]
-        pub fn dot(self, other: Vec2<f32>) -> f32 {
-            self.x * other.x + self.y * other.y
-        }
-    }
 }

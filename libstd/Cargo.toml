@@ -5,4 +5,3 @@ version = "0.1.0"
 [lib]
 name = "std"
 path = "src/lib.rs"
-

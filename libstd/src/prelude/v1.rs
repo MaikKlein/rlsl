@@ -22,7 +22,6 @@ pub use convert::{AsMut, AsRef, From, Into};
 pub use option::Option::{self, None, Some};
 #[doc(no_inline)]
 pub use result::Result::{self, Err, Ok};
-pub use vec::*;
 //#[doc(no_inline)] pub use slice::SliceConcatExt;
 //#[doc(no_inline)] pub use string::{String, ToString};
 //#[doc(no_inline)] pub use vec::Vec;
