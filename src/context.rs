@@ -66,11 +66,16 @@ impl<'a, 'tcx> CodegenCx<'a, 'tcx> {
         }
         let const_ty = const_val.ty;
         let spirv_val = match const_ty.sty {
-            ty::TypeVariants::TyUint(_) => {
+            ty::TypeVariants::TyUint(_) | ty::TypeVariants::TyBool => {
                 let value = const_val.to_bits(const_ty).expect("bits from const");
                 // [FIXME] Storageptr
                 let spirv_ty = self.to_ty_fn(const_ty);
                 self.builder.constant_u32(spirv_ty.word, value as u32)
+            }
+            ty::TypeVariants::TyFloat(_) => {
+                let value = const_val.to_bits(const_ty).expect("bits from const");
+                let spirv_ty = self.to_ty_fn(const_ty);
+                self.builder.constant_f32(spirv_ty.word, f32::from_bits(value as u32))
             }
             //[FIXME] Add other constants
             ref rest => unimplemented!("Const"), // ConstValue::Integer(const_int) => {
