@@ -16,6 +16,8 @@ Rlsl can compile a subset of Rust to [SPIR-V](https://www.khronos.org/registry/s
 RUSTC=rlsl cargo build
 ```
 
+![compile](https://raw.githubusercontent.com/MaikKlein/rlsl/master/media/compile.gif)
+
 ## Blog
 
 1. [What is RLSL](https://maikklein.github.io/rlsl-progress-report/)
