@@ -6,23 +6,23 @@
 
 Experimental rust compiler from `MIR` -> `SPIR-V`.
 
-# What is Rlsl?
-Rlsl can compile a subset of Rust to [SPIR-V]. You can read more about the limitations [here](https://github.com/MaikKlein/rlsl/wiki/Limitations).
+## What is Rlsl?
+Rlsl can compile a subset of Rust to [SPIR-V](https://www.khronos.org/registry/spir-v/). You can read more about the limitations [here](https://github.com/MaikKlein/rlsl/wiki/Limitations).
 
-# How?
+## How?
 
 ```
 RUSTC=rlsl cargo build
 ```
 
-# Blog
+## Blog
 
 1. [What is RLSL](https://maikklein.github.io/rlsl-progress-report/)
 2. [Milestone 1](https://maikklein.github.io/rlsl-milestone-1/)
 
-# Want to help?
+## Want to help?
 
-## Contribute
+### Contribute
 
 The project currently does not accept any contributions yet.
 
@@ -34,7 +34,7 @@ The project currently does not accept any contributions yet.
 
 Rlsl will start to accept contributions after those issues are properly addressed.
 
-## Donate
+### Donate
 
 [![Patreon](https://c5.patreon.com/external/logo/become_a_patron_button.png)](https://www.patreon.com/maikklein)
 
