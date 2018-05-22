@@ -4,8 +4,6 @@
 
 [![Join the chat at https://gitter.im/MaikKlein/rlsl](https://badges.gitter.im/MaikKlein/rlsl.svg)](https://gitter.im/MaikKlein/rlsl?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge&utm_content=badge)
 
-Experimental rust compiler from `MIR` -> `SPIR-V`.
-
 ## What is Rlsl?
 Rlsl can compile a subset of Rust to [SPIR-V](https://www.khronos.org/registry/spir-v/). You can read more about the limitations [here](https://github.com/MaikKlein/rlsl/wiki/Limitations).
 
@@ -44,3 +42,5 @@ Rlsl will start to accept contributions after those issues are properly addresse
 ## Community
 
 Want to chat? Join us on [gitter](https://gitter.im/MaikKlein/rlsl).
+
+Feel free to open an [issue](https://github.com/MaikKlein/rlsl/issues) at any time.
