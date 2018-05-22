@@ -1,1 +1,0 @@
-cargo run --bin rlsl --release -- rlsl-example/src/main.rs --crate-type bin -A warnings -Z mir-opt-level=3 -Z always-encode-mir && spirv-dis shader.spv && spirv-val shader.spv && spirv-cross shader.spv
