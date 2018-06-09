@@ -12,12 +12,13 @@ use std::collections::HashMap;
 use std::path::Path;
 use syntax;
 use ConstructTy;
-use {Function, FunctionCall, Intrinsic, IntrinsicType, Ty, Value};
 use {Enum, Variable};
+use {Function, FunctionCall, Intrinsic, IntrinsicType, Ty, Value};
 
 pub struct CodegenCx<'a, 'tcx: 'a> {
     per_vertex: Option<Variable<'tcx>>,
     per_fragment: Option<Variable<'tcx>>,
+    compute: Option<Variable<'tcx>>,
     pub tcx: ty::TyCtxt<'a, 'tcx, 'tcx>,
     pub builder: Builder,
     pub ty_cache: HashMap<ty::Ty<'tcx>, Ty<'tcx>>,
@@ -75,7 +76,8 @@ impl<'a, 'tcx> CodegenCx<'a, 'tcx> {
             ty::TypeVariants::TyFloat(_) => {
                 let value = const_val.to_bits(const_ty).expect("bits from const");
                 let spirv_ty = self.to_ty_fn(const_ty);
-                self.builder.constant_f32(spirv_ty.word, f32::from_bits(value as u32))
+                self.builder
+                    .constant_f32(spirv_ty.word, f32::from_bits(value as u32))
             }
             //[FIXME] Add other constants
             ref rest => unimplemented!("Const"), // ConstValue::Integer(const_int) => {
@@ -376,8 +378,7 @@ impl<'a, 'tcx> CodegenCx<'a, 'tcx> {
     pub fn name_from_def_id(&mut self, def_id: hir::def_id::DefId, id: spirv::Word) {
         if self.debug_symbols {
             //self.builder.name(id, self.tcx.item_name(def_id).as_ref());
-            self.builder
-                .name(id, self.tcx.def_symbol_name(def_id).name);
+            self.builder.name(id, self.tcx.def_symbol_name(def_id).name);
         }
     }
     pub fn name_from_str(&mut self, name: &str, id: spirv::Word) {
@@ -429,6 +430,33 @@ impl<'a, 'tcx> CodegenCx<'a, 'tcx> {
             var
         })
     }
+    pub fn get_compute(&mut self, ty: ty::Ty<'tcx>) -> Variable<'tcx> {
+        use rustc::ty::TypeVariants;
+        println!("compute {:?}", ty);
+        let is_compute = ty.ty_to_def_id()
+            .map(|def_id| {
+                let attrs = self.tcx.get_attrs(def_id);
+                ::extract_attr(&attrs, "spirv", |s| match s {
+                    "Compute" => Some(true),
+                    _ => None,
+                })
+            })
+            .is_some();
+        assert!(is_compute, "Not Compute");
+        self.compute.unwrap_or_else(|| {
+            let spirv_ty = self.to_ty(ty, spirv::StorageClass::Input);
+            let var = Variable::alloca(self, ty, spirv::StorageClass::Input);
+            // TODO
+            self.builder.member_decorate(
+                spirv_ty.word,
+                0,
+                spirv::Decoration::BuiltIn,
+                &[rspirv::mr::Operand::BuiltIn(spirv::BuiltIn::LocalInvocationIndex)],
+            );
+            self.compute = Some(var);
+            var
+        })
+    }
     pub fn get_per_vertex(&mut self, ty: ty::Ty<'tcx>) -> Variable<'tcx> {
         use rustc::ty::TypeVariants;
         assert!(::is_per_vertex(self.tcx, ty), "Not PerVertex");
@@ -463,6 +491,7 @@ impl<'a, 'tcx> CodegenCx<'a, 'tcx> {
         CodegenCx {
             debug_symbols: true,
             builder,
+            compute: None,
             per_vertex: None,
             per_fragment: None,
             ty_cache: HashMap::new(),
@@ -533,8 +562,6 @@ impl<'a, 'tcx> SpirvMir<'a, 'tcx> {
         visitor.visit_mir(mcx.mir);
         let merge_blocks = visitor.merge_blocks;
         let first = visitor.first;
-
-        println!("merge blocks {:#?}", merge_blocks);
         let mut spirv_mir = mcx.mir.clone();
         let mut fixed_merge_blocks = HashMap::new();
         use syntax_pos::DUMMY_SP;

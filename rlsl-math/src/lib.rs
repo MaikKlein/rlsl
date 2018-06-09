@@ -39,6 +39,11 @@ pub struct Vertex {
     pub point_size: f32,
 }
 
+#[spirv(Compute)]
+pub struct Compute {
+    pub local_invocation_index: u32
+}
+
 #[spirv(Vec4)]
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq)]

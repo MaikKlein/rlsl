@@ -19,4 +19,4 @@ fn fragment(
     Output::new(coord)
 }
 
-fn main(){}
+fn main() {}
