@@ -1,3 +1,0 @@
-[submodule "compiler/rust"]
-	path = compiler/rust
-	url = https://github.com/MaikKlein/rust.git

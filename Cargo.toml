@@ -1,33 +1,7 @@
-[package]
-name = "rlsl"
-version = "0.1.0"
-authors = ["Maik Klein <maikklein@googlemail.com>"]
-
-#[target.'cfg(NOT_A_PLATFORM)'.dependencies]
-#std = {path = "compiler/rust/src/libstd"}
-#rustc = {path = "compiler/rust/src/librustc"}
-#rustc_driver = {path = "compiler/rust/src/librustc_driver"}
-#syntax = {path = "compiler/rust/src/libsyntax"}
-#syntax_pos = {path = "compiler/rust/src/libsyntax_pos"}
-#rustc_passes = {path = "compiler/rust/src/librustc_passes"}
-#rustc_mir = {path = "compiler/rust/src/librustc_mir"}
-#rustc_plugin = {path = "compiler/rust/src/librustc_plugin"}
-#arena = {path = "compiler/rust/src/libarena"}
-#rustc_borrowck = {path = "compiler/rust/src/librustc_borrowck"}
-#rustc_trans = {path = "compiler/rust/src/librustc_trans"}
-#rustc_errors = {path = "compiler/rust/src/librustc_errors"}
-#rustc_incremental = {path = "compiler/rust/src/librustc_incremental"}
-#rustc_resolve = {path = "compiler/rust/src/librustc_resolve"}
-#rustc_data_structures = {path = "compiler/rust/src/librustc_data_structures"}
-#rustc_const_math = {path = "compiler/rust/src/librustc_const_math"}
-#getopts = "0.2.14"
-#env_logger = "0.4.3"
-
-[dependencies]
-#getopts = "*"
-log = "*"
-debugit = "*"
-rspirv = "0.5"
-spirv_headers = "1.2"
-itertools = "*"
-byteorder = "1.2"
+[workspace]
+members = [
+    "rlsl",
+    "rlsl-math",
+    "issues",
+    "quad2",
+]

@@ -451,7 +451,9 @@ impl<'a, 'tcx> CodegenCx<'a, 'tcx> {
                 spirv_ty.word,
                 0,
                 spirv::Decoration::BuiltIn,
-                &[rspirv::mr::Operand::BuiltIn(spirv::BuiltIn::LocalInvocationIndex)],
+                &[rspirv::mr::Operand::BuiltIn(
+                    spirv::BuiltIn::LocalInvocationIndex,
+                )],
             );
             self.compute = Some(var);
             var

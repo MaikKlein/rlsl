@@ -44,7 +44,7 @@ use itertools::{Either, Itertools};
 use rustc::ty;
 use rustc::ty::subst::Substs;
 use std::collections::HashMap;
-use std::path::{Path};
+use std::path::Path;
 #[derive(Copy, Clone, Debug)]
 pub enum IntrinsicFn {
     Dot,
@@ -287,7 +287,7 @@ impl<'tcx> Entry<'tcx, Input<'tcx>> {
     pub fn input<'a>(entry_points: &[EntryPoint<'a, 'tcx>], stx: &mut CodegenCx<'a, 'tcx>) -> Self {
         let set: HashSet<_> = entry_points
             .iter()
-            .flat_map(|entry|EntryPoint::input_iter(entry))
+            .flat_map(|entry| EntryPoint::input_iter(entry))
             .collect();
         Self::create(set, stx, spirv::StorageClass::Input)
     }
@@ -430,7 +430,7 @@ impl<'tcx> Entry<'tcx, Descriptor<'tcx>> {
     ) -> Self {
         let set: HashSet<_> = entry_points
             .iter()
-            .flat_map(|entry|EntryPoint::descriptor_iter(entry))
+            .flat_map(|entry| EntryPoint::descriptor_iter(entry))
             .collect();
         Self::create(set, stx, spirv::StorageClass::Uniform)
     }
@@ -490,7 +490,7 @@ impl<'tcx> Entry<'tcx, Output<'tcx>> {
     ) -> Self {
         let set: HashSet<_> = entry_points
             .iter()
-            .flat_map(|entry|EntryPoint::output_iter(entry))
+            .flat_map(|entry| EntryPoint::output_iter(entry))
             .collect();
         Self::create(set, stx, spirv::StorageClass::Output)
     }
@@ -500,6 +500,9 @@ impl<'tcx> Entry<'tcx, Output<'tcx>> {
         entry: &'borrow EntryPoint<'a, 'tcx>,
     ) -> impl Iterator<Item = (mir::Local, GlobalVar<'tcx>)> + 'borrow {
         let ty = entry.mcx.mir().return_ty();
+        // if ty.is_nil() {
+        //     return None.into_iter();
+        // }
         let output = Output::new(entry.mcx.tcx, ty).expect("Should be output");
         Some((
             mir::Local::new(0),
@@ -582,7 +585,7 @@ impl<'tcx> TyVec<'tcx> {
 pub enum IntrinsicEntry {
     Vertex,
     Fragment,
-    Compute
+    Compute,
 }
 
 pub fn extract_attr_impl<R, F>(
@@ -623,6 +626,11 @@ pub enum FunctionCall {
     Intrinsic(Intrinsic),
 }
 
+pub fn find_ref_functions<'borrow, 'a, 'tcx>(
+    items: &'borrow [MirContext<'a, 'tcx>],
+) -> impl Iterator<Item = &'borrow MirContext<'a, 'tcx>> {
+    items.iter().filter(|mcx| is_ptr(mcx.mir.return_ty()))
+}
 pub fn trans_spirv<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, items: &'a FxHashSet<MonoItem<'tcx>>) {
     //struct_span_err!(tcx.sess, DUMMY_SP, E1337, "Test not allowed").emit();
 
@@ -661,7 +669,7 @@ pub fn trans_spirv<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, items: &'a FxHashSet<M
             }
         });
 
-    let instances: Vec<MirContext> = items
+    let mut instances: Vec<MirContext> = items
         .iter()
         .filter_map(|item| {
             if let &MonoItem::Fn(ref instance) = item {
@@ -677,13 +685,40 @@ pub fn trans_spirv<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, items: &'a FxHashSet<M
             None
         })
         .collect();
+    use rustc_mir::transform::inline::Inline;
+    use rustc_mir::transform::{MirPass, MirSource};
+    let i: Vec<_> = find_ref_functions(&instances).map(|m| m.def_id).collect();
+
     let entry_fn_node_id = tcx.sess.entry_fn.borrow().expect("entry").0;
     let entry_fn = tcx.hir.local_def_id(entry_fn_node_id);
-    let spirv_instances: Vec<_> = instances
+    let mut spirv_instances: Vec<_> = instances
         .iter()
         .filter(|mcx| mcx.def_id != entry_fn && tcx.lang_items().start_fn() != Some(mcx.def_id))
         .map(|mcx| context::SpirvMir::from_mir(mcx))
         .collect();
+
+    // Finds functions that return a reference
+    let fn_refs_def_id: Vec<_> = spirv_instances
+        .iter()
+        .filter(|scx| is_ptr(scx.mir.return_ty()))
+        .map(|scx| scx.def_id)
+        .collect();
+    // Inline all functions calls of functions that return a reference
+    fn_refs_def_id.iter().for_each(|&def_id| {
+        spirv_instances.iter_mut().for_each(|scx| {
+            let mir_source = MirSource {
+                def_id,
+                promoted: None,
+            };
+            Inline.run_pass(scx.tcx, mir_source, &mut scx.mir);
+        });
+    });
+
+    // delete all mir for functions that return a reference because 
+    // they can not be expressed in SPIR-V and they have been inlined.
+    fn_refs_def_id.iter().for_each(|&def_id|{
+        spirv_instances.retain(|scx| scx.def_id != def_id);
+    });
     // write_dot(&instances);
     //spirv_instances.iter().for_each(|mcx| {
     //    //println!("{:#?}", mcx.mir());
@@ -1076,7 +1111,7 @@ pub fn find_merge_block(
 ) -> Option<mir::BasicBlock> {
     //use rustc_data_structures::control_flow_graph::dominators::dominators;
     use rustc_data_structures::control_flow_graph::iterate::post_order_from;
-    use std::collections::{BTreeSet};
+    use std::collections::BTreeSet;
     let true_order: BTreeSet<_> = post_order_from(mir, targets[0])
         .into_iter()
         .rev()
@@ -1206,11 +1241,32 @@ impl<'b, 'a, 'tcx> rustc::mir::visit::Visitor<'tcx> for FunctionCx<'b, 'a, 'tcx>
         }
         let ty = self.mcx.monomorphize(&ty);
         let lvalue_ty_spirv = self.to_ty_fn(lvalue_ty);
+        // If we find an rvalue ref, this means that we are borrow some lvalue and
+        // create a new lvalue variable that is a ptr. In rlsl this lvalue does not 
+        // exist and we optimize it away by storing the rvalue in a hashmap.
+        // Eg _5 = &_6, then we store _5 -> _6. When ever we try to access _5, we need 
+        // to look up the real place inside this hashmap.
         if let &mir::Rvalue::Ref(_, _, ref place) = rvalue {
             assert!(is_ptr(lvalue_ty), "LValue should be a ptr");
             self.references.insert(lvalue.clone(), place.clone());
             // Don't do anything
             return;
+        }
+        // Sometimes we try to write to an lvalue that is a ptr. Again this ptr does
+        // not exist. The rvalue is a ptr but as a use, which means we need to look up
+        // the value where is rvalue ptr points to.
+        if let mir::Rvalue::Use(operand) = rvalue {
+            if is_ptr(lvalue_ty) && is_ptr(ty) {
+                let place = match operand {
+                    mir::Operand::Copy(place) | mir::Operand::Move(place) => place,
+                    _ => unimplemented!(),
+                };
+                let deref_place = self.references.get(place).expect("Reference not found").clone();
+                self.references.insert(lvalue.clone(), deref_place);
+                return;
+
+
+            }
         }
         let expr = match rvalue {
             &mir::Rvalue::BinaryOp(op, ref l, ref r)
@@ -1537,10 +1593,7 @@ impl<'b, 'a, 'tcx> rustc::mir::visit::Visitor<'tcx> for FunctionCx<'b, 'a, 'tcx>
                 let target_label = self.label_blocks.get(&target).expect("no label");
                 self.scx.builder.branch(target_label.0).expect("label");
             }
-            &mir::TerminatorKind::Drop {
-                target,
-                ..
-            } => {
+            &mir::TerminatorKind::Drop { target, .. } => {
                 let target_label = self.label_blocks.get(&target).expect("no label");
                 self.scx.builder.branch(target_label.0).expect("label");
             }
