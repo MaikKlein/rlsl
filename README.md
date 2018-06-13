@@ -10,6 +10,15 @@ Rlsl can compile a subset of Rust to [SPIR-V](https://www.khronos.org/registry/s
 Rlsl targets the [logical addressing model](https://www.khronos.org/registry/spir-v/specs/unified1/SPIRV.html#_a_id_memorymodelsection_a_memory_model) of SPIR-V.
 >The Logical addressing model means pointers are abstract, having no physical size or numeric value. In this mode, pointers can only be created from existing objects, and they cannot be stored into an object, unless additional capabilities, e.g., VariablePointers, are declared to add such functionality.
 
+## Features
+
+* Supports cargo
+* Multiple entry points can be defined in the same SPIR-V module
+* Currently supports Vertex, Fragment and Compute shaders
+* Shader code can run on the CPU because rlsl is a subset of Rust
+* Reflection *TODO*
+* Support library for interop between Rust and rlsl for uniforms (std140, std420) *TODO*
+
 ## Installation
  *TODO*
 
