@@ -719,6 +719,11 @@ pub fn trans_spirv<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, items: &'a FxHashSet<M
     fn_refs_def_id.iter().for_each(|&def_id|{
         spirv_instances.retain(|scx| scx.def_id != def_id);
     });
+
+    spirv_instances.iter().for_each(|scx| {
+        println!("{:#?}", scx.def_id);
+        println!("{:#?}", scx.mir);
+    });
     // write_dot(&instances);
     //spirv_instances.iter().for_each(|mcx| {
     //    //println!("{:#?}", mcx.mir());
@@ -1109,21 +1114,16 @@ pub fn find_merge_block(
     _root: mir::BasicBlock,
     targets: &[mir::BasicBlock],
 ) -> Option<mir::BasicBlock> {
-    //use rustc_data_structures::control_flow_graph::dominators::dominators;
     use rustc_data_structures::control_flow_graph::iterate::post_order_from;
     use std::collections::BTreeSet;
     let true_order: BTreeSet<_> = post_order_from(mir, targets[0])
         .into_iter()
         .rev()
-        //.skip(1)
         .collect();
     let false_order: BTreeSet<_> = post_order_from(mir, targets[1])
         .into_iter()
         .rev()
-        //.skip(1)
         .collect();
-    //println!("t {:?}", true_order);
-    //println!("f {:?}", false_order);
     true_order.intersection(&false_order).nth(0).map(|b| *b)
 }
 

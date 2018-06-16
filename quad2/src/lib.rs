@@ -6,7 +6,15 @@ extern crate user32;
 #[cfg(windows)]
 extern crate winapi;
 extern crate winit;
-pub mod shader;
+#[cfg(feature = "dx12")]
+extern crate gfx_backend_dx12 as back;
+#[cfg(feature = "metal")]
+extern crate gfx_backend_metal as back;
+//#[cfg(feature = "vulkan")]
+extern crate gfx_backend_vulkan as back;
+//extern crate glsl_to_spirv;
+extern crate gfx_hal as hal;
+pub mod compute;
 use ash::extensions::{DebugReport, Surface, Swapchain, Win32Surface, XlibSurface};
 use ash::util::Align;
 pub use ash::version::{DeviceV1_0, EntryV1_0, InstanceV1_0, V1_0};

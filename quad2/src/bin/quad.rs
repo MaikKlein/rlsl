@@ -7,12 +7,12 @@ extern crate structopt;
 use clap::Shell;
 
 use quad::*;
-use std::path::Path;
-use std::fmt::{Debug, Error, Formatter};
-use std::path::PathBuf;
-use structopt::StructOpt;
-use std::str::FromStr;
 use std::fmt::Display;
+use std::fmt::{Debug, Error, Formatter};
+use std::path::Path;
+use std::path::PathBuf;
+use std::str::FromStr;
+use structopt::StructOpt;
 
 #[derive(Debug, Copy, Clone)]
 pub enum ShaderCompiler {
@@ -52,7 +52,9 @@ enum Command {
     #[structopt(name = "single")]
     Single { file: String },
     #[structopt(name = "compile")]
-    Compile
+    Compile,
+    #[structopt(name = "compute")]
+    Compute,
 }
 
 impl Opt {
@@ -75,16 +77,19 @@ fn main() {
     let mut app = Opt::clap();
     //app.gen_completions("myapp", Shell::Bash, "");
     let base_path = opt.get_shader_path();
-    let mut quad = Quad::new();
     match opt.command {
         Command::Single { ref file } => {
+            let mut quad = Quad::new();
             let vert_path = base_path.join("vertex.spv");
             let frag_path = base_path.join(&file).with_extension("spv");
             let (vert_name, frag_name) = opt.get_entry_names();
             quad.render((vert_name, &vert_path), (frag_name, &frag_path));
         }
+        Command::Compute => {
+            compute::compute();
+        }
         Command::Compile => {
-            quad.compile_all(&base_path);
+            //quad.compile_all(&base_path);
         }
     }
 }

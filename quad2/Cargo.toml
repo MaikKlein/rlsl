@@ -10,5 +10,8 @@ image = "0.10.4"
 ash = {path = "/home/maik/projects/ash/ash"}
 clap = "*"
 structopt = "*"
+gfx-hal = {git = "https://github.com/gfx-rs/gfx.git"}
+gfx-backend-vulkan = {git = "https://github.com/gfx-rs/gfx.git"}
+
 [target.'cfg(windows)'.dependencies]
 winapi = { version = "0.3.4", features = ["windef", "winuser"] }

@@ -135,14 +135,13 @@ impl<'tcx> Variable<'tcx> {
             &mir::Place::Local(local) => local,
             _ => panic!("Should be local"),
         };
-        // println!("{:#?}", fx.vars);
-        // {
-        //     println!("{:#?}", fx.references);
-        //     let ref_local = fx.references.get(&mir::Place::Local(local));
-        //     println!("{:#?}", ref_local);
-        //     println!("{:?}", local);
-        // }
-        let variable = *fx.vars.get(&local).expect("Access chain");
+        let lvalue_ty = lvalue
+                .ty(&fx.mcx.mir().local_decls, fx.scx.tcx)
+                .to_ty(fx.scx.tcx);
+        let variable = fx.vars.get(&local).cloned().unwrap_or_else(||{
+            let place = fx.references.get(&mir::Place::Local(local)).cloned().expect("ref");
+            Variable::access_chain(fx, &place)
+        });
         indices.reverse();
         if indices.is_empty() {
             variable
