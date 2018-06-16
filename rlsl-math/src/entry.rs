@@ -75,7 +75,7 @@ pub struct RuntimeArray<T> {
 }
 
 #[spirv(Descriptor)]
-pub struct Descriptor<Binding, Set, T>
+pub struct Uniform<Binding, Set, T>
 where
     Binding: Constant,
     Set: Constant,
@@ -84,7 +84,7 @@ where
     pub _location: PhantomData<Binding>,
     pub _binding: PhantomData<Set>,
 }
-impl<Binding, Set, T> Deref for Descriptor<Binding, Set, T>
+impl<Binding, Set, T> Deref for Uniform<Binding, Set, T>
 where
     Binding: Constant,
     Set: Constant,
