@@ -74,7 +74,7 @@ pub struct RuntimeArray<T> {
     pub _m: PhantomData<T>,
 }
 
-#[spirv(Descriptor)]
+#[spirv(Uniform)]
 pub struct Uniform<Binding, Set, T>
 where
     Binding: Constant,
@@ -84,6 +84,7 @@ where
     pub _location: PhantomData<Binding>,
     pub _binding: PhantomData<Set>,
 }
+
 impl<Binding, Set, T> Deref for Uniform<Binding, Set, T>
 where
     Binding: Constant,
@@ -96,7 +97,13 @@ where
     }
 }
 
-// #[spirv(Buffer)]
-// pub struct Buffer<Binding: Sized, Set: Sized, T> {
-//     data: T
-// }
+#[spirv(Buffer)]
+pub struct Buffer<Binding, Set, T>
+where
+    Binding: Constant,
+    Set: Constant,
+{
+    pub data: T,
+    pub _location: PhantomData<Binding>,
+    pub _binding: PhantomData<Set>,
+}

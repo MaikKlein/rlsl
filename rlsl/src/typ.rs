@@ -81,7 +81,8 @@ impl<'tcx> Param<'tcx> {
         if ::is_ptr(self.ty) {
             let ty = ::remove_ptr_ty(self.ty);
             let spirv_ty = cx.to_ty(ty, spirv::StorageClass::Function);
-            let load = cx.builder
+            let load = cx
+                .builder
                 .load(spirv_ty.word, None, self.word, None, &[])
                 .expect("Load variable");
             Value::new(load)
@@ -92,7 +93,8 @@ impl<'tcx> Param<'tcx> {
 
     pub fn alloca<'a>(cx: &mut CodegenCx<'a, 'tcx>, ty: ty::Ty<'tcx>) -> Param<'tcx> {
         let spirv_ty_ptr = cx.to_ty(ty, spirv::StorageClass::Function);
-        let spirv_var = cx.builder
+        let spirv_var = cx
+            .builder
             .function_parameter(spirv_ty_ptr.word)
             .expect("Function param");
         Param {
@@ -136,10 +138,14 @@ impl<'tcx> Variable<'tcx> {
             _ => panic!("Should be local"),
         };
         let lvalue_ty = lvalue
-                .ty(&fx.mcx.mir().local_decls, fx.scx.tcx)
-                .to_ty(fx.scx.tcx);
-        let variable = fx.vars.get(&local).cloned().unwrap_or_else(||{
-            let place = fx.references.get(&mir::Place::Local(local)).cloned().expect("ref");
+            .ty(&fx.mcx.mir().local_decls, fx.scx.tcx)
+            .to_ty(fx.scx.tcx);
+        let variable = fx.vars.get(&local).cloned().unwrap_or_else(|| {
+            let place = fx
+                .references
+                .get(&mir::Place::Local(local))
+                .cloned()
+                .expect("ref");
             Variable::access_chain(fx, &place)
         });
         indices.reverse();
@@ -156,7 +162,8 @@ impl<'tcx> Variable<'tcx> {
                 .iter()
                 .map(|&i| fx.constant_u32(i as u32).word)
                 .collect();
-            let access = fx.scx
+            let access = fx
+                .scx
                 .builder
                 .access_chain(spirv_ty_ptr.word, None, variable.word, &indices)
                 .expect("access_chain");
@@ -169,7 +176,8 @@ impl<'tcx> Variable<'tcx> {
     }
     pub fn load<'a>(&self, cx: &mut CodegenCx<'a, 'tcx>) -> Value {
         let spirv_ty = cx.to_ty(self.ty, self.storage_class);
-        let load = cx.builder
+        let load = cx
+            .builder
             .load(spirv_ty.word, None, self.word, None, &[])
             .expect("Load variable");
         Value::new(load)
@@ -187,7 +195,8 @@ impl<'tcx> Variable<'tcx> {
         storage_class: spirv::StorageClass,
     ) -> Variable<'tcx> {
         let spirv_ty_ptr = cx.to_ty_as_ptr(ty, storage_class);
-        let spirv_var = cx.builder
+        let spirv_var = cx
+            .builder
             .variable(spirv_ty_ptr.word, None, storage_class, None);
         Variable {
             word: spirv_var,

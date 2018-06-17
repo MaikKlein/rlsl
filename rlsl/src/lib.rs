@@ -118,10 +118,17 @@ impl<'a, 'tcx> EntryPoint<'a, 'tcx> {
         })
     }
 
-    pub fn descriptor_iter(&'a self) -> impl Iterator<Item = Descriptor<'tcx>> + 'a {
+    pub fn uniform_iter(&'a self) -> impl Iterator<Item = Uniform<'tcx>> + 'a {
         self.mcx.mir().args_iter().filter_map(move |local| {
             let ty = self.mcx.mir().local_decls[local].ty;
-            Descriptor::new(self.mcx.tcx, ty)
+            Uniform::new(self.mcx.tcx, ty)
+        })
+    }
+
+    pub fn buffer_iter(&'a self) -> impl Iterator<Item = Buffer<'tcx>> + 'a {
+        self.mcx.mir().args_iter().filter_map(move |local| {
+            let ty = self.mcx.mir().local_decls[local].ty;
+            Buffer::new(self.mcx.tcx, ty)
         })
     }
 
@@ -188,23 +195,33 @@ pub struct Input<'tcx> {
     pub ty: ty::Ty<'tcx>,
     pub location: u32,
 }
+
+impl<'tcx> Input<'tcx> {
+    fn new<'a>(entry_point: &EntryPoint<'a, 'tcx>, ty: ty::Ty<'tcx>) -> Option<Self> {
+        let (adt, substs) = get_builtin_adt(entry_point.mcx.tcx, ty, "Input")?;
+        let fields: Vec<_> = adt
+            .all_fields()
+            .map(|field| field.ty(entry_point.mcx.tcx, substs))
+            .collect();
+        assert!(fields.len() == 2, "Input should have two fields");
+        let location_ty = fields[1];
+        let location =
+            extract_location(entry_point.mcx.tcx, location_ty).expect("Unable to extract location");
+        Some(Input { ty, location })
+    }
+}
+
 #[derive(Copy, Clone, Debug, Hash, PartialEq, Eq)]
 pub struct Output<'tcx> {
     pub ty: ty::Ty<'tcx>,
     pub location: u32,
 }
 
-#[derive(Copy, Clone, Debug, Hash, PartialEq, Eq)]
-pub struct Descriptor<'tcx> {
-    pub ty: ty::Ty<'tcx>,
-    pub set: u32,
-    pub binding: u32,
-}
-
 impl<'tcx> Output<'tcx> {
     fn new<'a>(tcx: TyCtxt<'a, 'tcx, 'tcx>, ty: ty::Ty<'tcx>) -> Option<Self> {
         let (adt, substs) = get_builtin_adt(tcx, ty, "Output")?;
-        let fields: Vec<_> = adt.all_fields()
+        let fields: Vec<_> = adt
+            .all_fields()
             .map(|field| field.ty(tcx, substs))
             .collect();
         assert!(fields.len() == 2, "Output should have two fields");
@@ -214,18 +231,49 @@ impl<'tcx> Output<'tcx> {
     }
 }
 
-impl<'tcx> Descriptor<'tcx> {
+#[derive(Copy, Clone, Debug, Hash, PartialEq, Eq)]
+pub struct Uniform<'tcx> {
+    pub ty: ty::Ty<'tcx>,
+    pub set: u32,
+    pub binding: u32,
+}
+
+impl<'tcx> Uniform<'tcx> {
     fn new<'a>(tcx: TyCtxt<'a, 'tcx, 'tcx>, ty: ty::Ty<'tcx>) -> Option<Self> {
-        let (adt, substs) = get_builtin_adt(tcx, ty, "Descriptor")?;
-        let fields: Vec<_> = adt.all_fields()
+        let (adt, substs) = get_builtin_adt(tcx, ty, "Uniform")?;
+        let fields: Vec<_> = adt
+            .all_fields()
             .map(|field| field.ty(tcx, substs))
             .collect();
-        assert_eq!(fields.len(), 3, "Descriptor should have 3 fields");
+        assert_eq!(fields.len(), 3, "Uniform should have 3 fields");
         let binding_ty = fields[1];
         let set_ty = fields[2];
         let binding = extract_location(tcx, binding_ty).expect("Unable to extract location");
         let set = extract_location(tcx, set_ty).expect("Unable to extract location");
-        Some(Descriptor { ty, binding, set })
+        Some(Uniform { ty, binding, set })
+    }
+}
+
+#[derive(Copy, Clone, Debug, Hash, PartialEq, Eq)]
+pub struct Buffer<'tcx> {
+    pub ty: ty::Ty<'tcx>,
+    pub set: u32,
+    pub binding: u32,
+}
+
+impl<'tcx> Buffer<'tcx> {
+    fn new<'a>(tcx: TyCtxt<'a, 'tcx, 'tcx>, ty: ty::Ty<'tcx>) -> Option<Self> {
+        let (adt, substs) = get_builtin_adt(tcx, ty, "Buffer")?;
+        let fields: Vec<_> = adt
+            .all_fields()
+            .map(|field| field.ty(tcx, substs))
+            .collect();
+        assert_eq!(fields.len(), 3, "Buffer should have 3 fields");
+        let binding_ty = fields[1];
+        let set_ty = fields[2];
+        let binding = extract_location(tcx, binding_ty).expect("Unable to extract location");
+        let set = extract_location(tcx, set_ty).expect("Unable to extract location");
+        Some(Buffer { ty, binding, set })
     }
 }
 
@@ -249,21 +297,13 @@ fn get_builtin_adt<'a, 'tcx>(
         None
     }
 }
-impl<'tcx> Input<'tcx> {
-    fn new<'a>(entry_point: &EntryPoint<'a, 'tcx>, ty: ty::Ty<'tcx>) -> Option<Self> {
-        let (adt, substs) = get_builtin_adt(entry_point.mcx.tcx, ty, "Input")?;
-        let fields: Vec<_> = adt.all_fields()
-            .map(|field| field.ty(entry_point.mcx.tcx, substs))
-            .collect();
-        assert!(fields.len() == 2, "Input should have two fields");
-        let location_ty = fields[1];
-        let location =
-            extract_location(entry_point.mcx.tcx, location_ty).expect("Unable to extract location");
-        Some(Input { ty, location })
-    }
-}
 
 impl<'tcx> Global<'tcx> for Input<'tcx> {
+    fn ty(&self) -> ty::Ty<'tcx> {
+        self.ty
+    }
+}
+impl<'tcx> Global<'tcx> for Buffer<'tcx> {
     fn ty(&self) -> ty::Ty<'tcx> {
         self.ty
     }
@@ -274,7 +314,7 @@ impl<'tcx> Global<'tcx> for Output<'tcx> {
         self.ty
     }
 }
-impl<'tcx> Global<'tcx> for Descriptor<'tcx> {
+impl<'tcx> Global<'tcx> for Uniform<'tcx> {
     fn ty(&self) -> ty::Ty<'tcx> {
         self.ty
     }
@@ -330,7 +370,8 @@ impl<'tcx> Layout<'tcx> {
             Layout::Single(single) => (single.size, Vec::new()),
             Layout::Composition(ref comp) => {
                 let mut offset = 0;
-                let offsets = comp.iter()
+                let offsets = comp
+                    .iter()
                     .map(|layout| {
                         let align = layout.align();
                         let aligned_offset = (align - (offset % align)) % align + offset;
@@ -408,7 +449,8 @@ pub fn std140_layout<'a, 'tcx>(
         }
         TypeVariants::TyAdt(adt, substs) => {
             if adt.is_struct() {
-                let comp = adt.all_fields()
+                let comp = adt
+                    .all_fields()
                     .map(|field| field.ty(tcx, substs))
                     .filter(|ty| !ty.is_phantom_data())
                     .map(|ty| {
@@ -423,14 +465,47 @@ pub fn std140_layout<'a, 'tcx>(
         _ => None,
     }
 }
-impl<'tcx> Entry<'tcx, Descriptor<'tcx>> {
-    pub fn descriptor<'a>(
+
+impl<'tcx> Entry<'tcx, Buffer<'tcx>> {
+    pub fn buffer<'a>(
         entry_points: &[EntryPoint<'a, 'tcx>],
         stx: &mut CodegenCx<'a, 'tcx>,
     ) -> Self {
         let set: HashSet<_> = entry_points
             .iter()
-            .flat_map(|entry| EntryPoint::descriptor_iter(entry))
+            .flat_map(|entry| EntryPoint::buffer_iter(entry))
+            .collect();
+        Self::create(set, stx, spirv::StorageClass::StorageBuffer)
+    }
+
+    fn variable_iter<'borrow, 'a>(
+        &'borrow self,
+        entry: &'borrow EntryPoint<'a, 'tcx>,
+    ) -> impl Iterator<Item = (mir::Local, GlobalVar<'tcx>)> + 'borrow {
+        entry
+            .mcx
+            .mir()
+            .args_iter()
+            .filter_map(move |local| {
+                let ty = entry.mcx.mir().local_decls[local].ty;
+                Buffer::new(entry.mcx.tcx, ty).map(|input| (local, input))
+            })
+            .map(move |(local, uniform)| {
+                (
+                    local,
+                    *self.global_vars.get(&uniform).expect("Entry compute"),
+                )
+            })
+    }
+}
+impl<'tcx> Entry<'tcx, Uniform<'tcx>> {
+    pub fn uniform<'a>(
+        entry_points: &[EntryPoint<'a, 'tcx>],
+        stx: &mut CodegenCx<'a, 'tcx>,
+    ) -> Self {
+        let set: HashSet<_> = entry_points
+            .iter()
+            .flat_map(|entry| EntryPoint::uniform_iter(entry))
             .collect();
         Self::create(set, stx, spirv::StorageClass::Uniform)
     }
@@ -445,12 +520,12 @@ impl<'tcx> Entry<'tcx, Descriptor<'tcx>> {
             .args_iter()
             .filter_map(move |local| {
                 let ty = entry.mcx.mir().local_decls[local].ty;
-                Descriptor::new(entry.mcx.tcx, ty).map(|input| (local, input))
+                Uniform::new(entry.mcx.tcx, ty).map(|input| (local, input))
             })
-            .map(move |(local, descriptor)| {
+            .map(move |(local, uniform)| {
                 (
                     local,
-                    *self.global_vars.get(&descriptor).expect("Entry compute"),
+                    *self.global_vars.get(&uniform).expect("Entry compute"),
                 )
             })
     }
@@ -465,10 +540,12 @@ where
         stx: &mut CodegenCx<'a, 'tcx>,
         storage_class: spirv::StorageClass,
     ) -> Self {
-        let global_vars: HashMap<_, _> = set.into_iter()
+        let global_vars: HashMap<_, _> = set
+            .into_iter()
             .map(|global| {
                 let spirv_ty = stx.to_ty_as_ptr(global.ty(), storage_class);
-                let var = stx.builder
+                let var = stx
+                    .builder
                     .variable(spirv_ty.word, None, storage_class, None);
                 let global_var = GlobalVar {
                     var,
@@ -500,9 +577,9 @@ impl<'tcx> Entry<'tcx, Output<'tcx>> {
         entry: &'borrow EntryPoint<'a, 'tcx>,
     ) -> impl Iterator<Item = (mir::Local, GlobalVar<'tcx>)> + 'borrow {
         let ty = entry.mcx.mir().return_ty();
-        // if ty.is_nil() {
-        //     return None.into_iter();
-        // }
+        if ty.is_nil() {
+            return None.into_iter();
+        }
         let output = Output::new(entry.mcx.tcx, ty).expect("Should be output");
         Some((
             mir::Local::new(0),
@@ -571,7 +648,8 @@ impl<'tcx> TyVec<'tcx> {
             }).get(0)
                 .map(|&i| i)?;
             assert!(adt.is_struct(), "A Vec should be a struct");
-            let field = adt.all_fields()
+            let field = adt
+                .all_fields()
                 .nth(0)
                 .expect("A Vec should have at least one field");
             let field_ty = field.ty(tcx, substs);
@@ -714,16 +792,16 @@ pub fn trans_spirv<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, items: &'a FxHashSet<M
         });
     });
 
-    // delete all mir for functions that return a reference because 
+    // delete all mir for functions that return a reference because
     // they can not be expressed in SPIR-V and they have been inlined.
-    fn_refs_def_id.iter().for_each(|&def_id|{
+    fn_refs_def_id.iter().for_each(|&def_id| {
         spirv_instances.retain(|scx| scx.def_id != def_id);
     });
 
-    spirv_instances.iter().for_each(|scx| {
-        println!("{:#?}", scx.def_id);
-        println!("{:#?}", scx.mir);
-    });
+    // spirv_instances.iter().for_each(|scx| {
+    //     println!("{:#?}", scx.def_id);
+    //     println!("{:#?}", scx.mir);
+    // });
     // write_dot(&instances);
     //spirv_instances.iter().for_each(|mcx| {
     //    //println!("{:#?}", mcx.mir());
@@ -762,10 +840,11 @@ pub fn trans_spirv<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, items: &'a FxHashSet<M
         });
     let entry_input = Entry::input(&entry_instances, &mut ctx);
     let entry_output = Entry::output(&entry_instances, &mut ctx);
-    let entry_descriptor = Entry::descriptor(&entry_instances, &mut ctx);
+    let entry_descriptor = Entry::uniform(&entry_instances, &mut ctx);
+    let entry_buffer = Entry::buffer(&entry_instances, &mut ctx);
 
     entry_instances.iter().for_each(|e| {
-        FunctionCx::trans_entry(e, &entry_input, &entry_output, &entry_descriptor, &mut ctx);
+        FunctionCx::trans_entry(e, &entry_input, &entry_output, &entry_descriptor,  &entry_buffer, &mut ctx);
     });
     fn_instances.iter().for_each(|mcx| {
         FunctionCx::trans_fn(mcx, &mut ctx);
@@ -815,7 +894,8 @@ impl<'b, 'a, 'tcx> FunctionCx<'b, 'a, 'tcx> {
         let ret_ty_spirv = scx.to_ty_fn(ret_ty);
         let def_id = mcx.def_id;
 
-        let args_ty: Vec<_> = mcx.mir()
+        let args_ty: Vec<_> = mcx
+            .mir()
             .args_iter()
             .map(|l| mcx.monomorphize(&mcx.mir().local_decls[l].ty))
             .collect();
@@ -829,11 +909,13 @@ impl<'b, 'a, 'tcx> FunctionCx<'b, 'a, 'tcx> {
         let fn_ty = scx.tcx.mk_fn_ptr(Binder::bind(fn_sig));
         let fn_ty_spirv = scx.to_ty_fn(fn_ty);
 
-        let forward_fn = scx.forward_fns
+        let forward_fn = scx
+            .forward_fns
             .get(&(def_id, mcx.substs))
             .map(|f| f.0)
             .expect("forward");
-        let spirv_function = scx.builder
+        let spirv_function = scx
+            .builder
             .begin_function(
                 ret_ty_spirv.word,
                 Some(forward_fn),
@@ -843,7 +925,8 @@ impl<'b, 'a, 'tcx> FunctionCx<'b, 'a, 'tcx> {
             .expect("begin fn");
 
         scx.name_from_def_id(def_id, spirv_function);
-        let params: Vec<_> = mcx.mir()
+        let params: Vec<_> = mcx
+            .mir()
             .args_iter()
             .map(|local_arg| {
                 let local_decl = &mcx.mir().local_decls[local_arg];
@@ -880,10 +963,12 @@ impl<'b, 'a, 'tcx> FunctionCx<'b, 'a, 'tcx> {
         entry_point: &EntryPoint<'a, 'tcx>,
         entry_input: &Entry<'tcx, Input<'tcx>>,
         entry_output: &Entry<'tcx, Output<'tcx>>,
-        entry_descriptor: &Entry<'tcx, Descriptor<'tcx>>,
+        entry_descriptor: &Entry<'tcx, Uniform<'tcx>>,
+        entry_buffer: &Entry<'tcx, Buffer<'tcx>>,
         scx: &mut CodegenCx<'a, 'tcx>,
     ) {
         use mir::visit::Visitor;
+        println!("{:?}", entry_point.entry_type);
         let def_id = entry_point.mcx.def_id;
         let mir = entry_point.mcx.mir();
         // TODO: Fix properly
@@ -910,11 +995,13 @@ impl<'b, 'a, 'tcx> FunctionCx<'b, 'a, 'tcx> {
         let void_spirv = scx.to_ty_fn(void);
         let fn_ty = scx.tcx.mk_fn_ptr(Binder::bind(fn_sig));
         let fn_ty_spirv = scx.to_ty_fn(fn_ty);
-        let forward_fn = scx.forward_fns
+        let forward_fn = scx
+            .forward_fns
             .get(&(def_id, entry_point.mcx.substs))
             .map(|f| f.0)
             .expect("forward");
-        let spirv_function = scx.builder
+        let spirv_function = scx
+            .builder
             .begin_function(
                 void_spirv.word,
                 Some(forward_fn),
@@ -935,24 +1022,41 @@ impl<'b, 'a, 'tcx> FunctionCx<'b, 'a, 'tcx> {
         let inputs_iter = entry_input.variable_iter(&entry_point);
         let output_iter = entry_output.variable_iter(&entry_point);
         let descriptor_iter = entry_descriptor.variable_iter(&entry_point);
+        let buffer_iter = entry_buffer.variable_iter(&entry_point);
         entry_descriptor
             .global_vars
             .iter()
-            .for_each(|(descriptor, global)| {
+            .for_each(|(uniform, global)| {
                 scx.builder.decorate(
                     global.var,
                     spirv::Decoration::DescriptorSet,
-                    &[rspirv::mr::Operand::LiteralInt32(descriptor.set)],
+                    &[rspirv::mr::Operand::LiteralInt32(uniform.set)],
                 );
                 scx.builder.decorate(
                     global.var,
                     spirv::Decoration::Binding,
-                    &[rspirv::mr::Operand::LiteralInt32(descriptor.binding)],
+                    &[rspirv::mr::Operand::LiteralInt32(uniform.binding)],
+                );
+            });
+        entry_buffer
+            .global_vars
+            .iter()
+            .for_each(|(buffer, global)| {
+                scx.builder.decorate(
+                    global.var,
+                    spirv::Decoration::DescriptorSet,
+                    &[rspirv::mr::Operand::LiteralInt32(buffer.set)],
+                );
+                scx.builder.decorate(
+                    global.var,
+                    spirv::Decoration::Binding,
+                    &[rspirv::mr::Operand::LiteralInt32(buffer.binding)],
                 );
             });
         let mut variable_map: HashMap<mir::Local, Variable<'tcx>> = inputs_iter
             .chain(output_iter)
             .chain(descriptor_iter)
+            .chain(buffer_iter)
             .map(|(local, global)| {
                 (
                     local,
@@ -985,16 +1089,17 @@ impl<'b, 'a, 'tcx> FunctionCx<'b, 'a, 'tcx> {
             .variable_iter(&entry_point)
             .map(|(_, gv)| gv)
             .collect_vec();
-        let output_var = outputs[0];
-        // Insert the return variable
-        variable_map.insert(
-            mir::Local::new(0),
-            Variable {
-                word: output_var.var,
-                ty: mir.return_ty(),
-                storage_class: output_var.storage_class,
-            },
-        );
+        if let Some(output_var) = outputs.first() {
+            // Insert the return variable
+            variable_map.insert(
+                mir::Local::new(0),
+                Variable {
+                    word: output_var.var,
+                    ty: mir.return_ty(),
+                    storage_class: output_var.storage_class,
+                },
+            );
+        }
 
         FunctionCx::new(
             InstanceType::Entry(entry_point.entry_type),
@@ -1064,12 +1169,14 @@ impl<'b, 'a, 'tcx> FunctionCx<'b, 'a, 'tcx> {
         mut variable_map: HashMap<mir::Local, Variable<'tcx>>,
         scx: &'b mut CodegenCx<'a, 'tcx>,
     ) -> Self {
-        let label_blocks: HashMap<_, _> = mcx.mir()
+        let label_blocks: HashMap<_, _> = mcx
+            .mir()
             .basic_blocks()
             .iter_enumerated()
             .map(|(block, _)| (block, Label(scx.builder.id())))
             .collect();
-        let local_vars: HashMap<_, _> = mcx.mir()
+        let local_vars: HashMap<_, _> = mcx
+            .mir()
             .vars_and_temps_iter()
             .filter_map(|local_var| {
                 // Don't generate variables for ptrs
@@ -1116,14 +1223,8 @@ pub fn find_merge_block(
 ) -> Option<mir::BasicBlock> {
     use rustc_data_structures::control_flow_graph::iterate::post_order_from;
     use std::collections::BTreeSet;
-    let true_order: BTreeSet<_> = post_order_from(mir, targets[0])
-        .into_iter()
-        .rev()
-        .collect();
-    let false_order: BTreeSet<_> = post_order_from(mir, targets[1])
-        .into_iter()
-        .rev()
-        .collect();
+    let true_order: BTreeSet<_> = post_order_from(mir, targets[0]).into_iter().rev().collect();
+    let false_order: BTreeSet<_> = post_order_from(mir, targets[1]).into_iter().rev().collect();
     true_order.intersection(&false_order).nth(0).map(|b| *b)
 }
 
@@ -1135,22 +1236,23 @@ pub struct Enum<'tcx> {
 impl<'tcx> Enum<'tcx> {
     pub fn from_ty<'a>(tcx: TyCtxt<'a, 'tcx, 'tcx>, ty: ty::Ty<'tcx>) -> Option<Enum<'tcx>> {
         use rustc::ty::layout::Variants;
-        let e = tcx.layout_of(ty::ParamEnvAnd {
-            param_env: ty::ParamEnv::reveal_all(),
-            value: ty,
-        }).ok()
-            .and_then(|ty_layout| {
-                let ty = ty_layout.ty;
-                if let Variants::Tagged {
-                    ref tag,
-                    ref variants,
-                } = ty_layout.details.variants
-                {
-                    Some((ty, variants.len()))
-                } else {
-                    None
-                }
-            });
+        let e =
+            tcx.layout_of(ty::ParamEnvAnd {
+                param_env: ty::ParamEnv::reveal_all(),
+                value: ty,
+            }).ok()
+                .and_then(|ty_layout| {
+                    let ty = ty_layout.ty;
+                    if let Variants::Tagged {
+                        ref tag,
+                        ref variants,
+                    } = ty_layout.details.variants
+                    {
+                        Some((ty, variants.len()))
+                    } else {
+                        None
+                    }
+                });
         if let Some((discr_ty, index)) = e {
             Some(Enum { discr_ty, index })
         } else {
@@ -1173,7 +1275,8 @@ impl<'b, 'a, 'tcx> rustc::mir::visit::Visitor<'tcx> for FunctionCx<'b, 'a, 'tcx>
         {
             let spirv_label = self.label_blocks.get(&block).expect("no spirv label");
             self.scx.builder.name(spirv_label.0, format!("{:?}", block));
-            let label = self.scx
+            let label = self
+                .scx
                 .builder
                 .begin_basic_block(Some(spirv_label.0))
                 .expect("begin block");
@@ -1242,9 +1345,9 @@ impl<'b, 'a, 'tcx> rustc::mir::visit::Visitor<'tcx> for FunctionCx<'b, 'a, 'tcx>
         let ty = self.mcx.monomorphize(&ty);
         let lvalue_ty_spirv = self.to_ty_fn(lvalue_ty);
         // If we find an rvalue ref, this means that we are borrow some lvalue and
-        // create a new lvalue variable that is a ptr. In rlsl this lvalue does not 
+        // create a new lvalue variable that is a ptr. In rlsl this lvalue does not
         // exist and we optimize it away by storing the rvalue in a hashmap.
-        // Eg _5 = &_6, then we store _5 -> _6. When ever we try to access _5, we need 
+        // Eg _5 = &_6, then we store _5 -> _6. When ever we try to access _5, we need
         // to look up the real place inside this hashmap.
         if let &mir::Rvalue::Ref(_, _, ref place) = rvalue {
             assert!(is_ptr(lvalue_ty), "LValue should be a ptr");
@@ -1261,11 +1364,13 @@ impl<'b, 'a, 'tcx> rustc::mir::visit::Visitor<'tcx> for FunctionCx<'b, 'a, 'tcx>
                     mir::Operand::Copy(place) | mir::Operand::Move(place) => place,
                     _ => unimplemented!(),
                 };
-                let deref_place = self.references.get(place).expect("Reference not found").clone();
+                let deref_place = self
+                    .references
+                    .get(place)
+                    .expect("Reference not found")
+                    .clone();
                 self.references.insert(lvalue.clone(), deref_place);
                 return;
-
-
             }
         }
         let expr = match rvalue {
@@ -1312,7 +1417,8 @@ impl<'b, 'a, 'tcx> rustc::mir::visit::Visitor<'tcx> for FunctionCx<'b, 'a, 'tcx>
                     let discr_ty_spirv = self.to_ty_fn(discr_ty);
                     let discr_ty_spirv_ptr = self.to_ty_as_ptr_fn(discr_ty);
                     let index = self.constant_u32(enum_data.index as u32).word;
-                    let access = self.scx
+                    let access = self
+                        .scx
                         .builder
                         .access_chain(discr_ty_spirv_ptr.word, None, var.word, &[index])
                         .expect("access");
@@ -1325,7 +1431,8 @@ impl<'b, 'a, 'tcx> rustc::mir::visit::Visitor<'tcx> for FunctionCx<'b, 'a, 'tcx>
                 };
                 let lvalue_ty = self.mcx.monomorphize(&lvalue_ty);
                 let target_ty_spirv = self.to_ty_fn(lvalue_ty);
-                let cast = self.scx
+                let cast = self
+                    .scx
                     .builder
                     .bitcast(target_ty_spirv.word, None, load)
                     .expect("bitcast");
@@ -1367,7 +1474,8 @@ impl<'b, 'a, 'tcx> rustc::mir::visit::Visitor<'tcx> for FunctionCx<'b, 'a, 'tcx>
                             let ty = self.mcx.monomorphize(&mir.return_ty());
                             let spirv_ty = { self.to_ty_fn(ty) };
                             let var = self.vars.get(&mir::Local::new(0)).unwrap();
-                            let load = self.scx
+                            let load = self
+                                .scx
                                 .builder
                                 .load(spirv_ty.word, None, var.word, None, &[])
                                 .expect("load");
@@ -1404,7 +1512,8 @@ impl<'b, 'a, 'tcx> rustc::mir::visit::Visitor<'tcx> for FunctionCx<'b, 'a, 'tcx>
                 } else {
                     self.load_operand(discr).load(self.scx).word
                 };
-                let default_label = *self.label_blocks
+                let default_label = *self
+                    .label_blocks
                     .get(targets.last().unwrap())
                     .expect("default label");
                 let labels: Vec<_> = targets
@@ -1479,7 +1588,8 @@ impl<'b, 'a, 'tcx> rustc::mir::visit::Visitor<'tcx> for FunctionCx<'b, 'a, 'tcx>
                     def_id,
                     &mono_substs,
                 ).expect("resolve instance call");
-                let fn_call = self.scx
+                let fn_call = self
+                    .scx
                     .get_function_call(resolve_instance.def_id(), resolve_instance.substs)
                     .expect("function call");
                 // Split the rust-call tupled arguments off.
@@ -1508,7 +1618,8 @@ impl<'b, 'a, 'tcx> rustc::mir::visit::Visitor<'tcx> for FunctionCx<'b, 'a, 'tcx>
                 if let Some(tup) = untuple {
                     let ty = tup.ty(local_decls, self.mcx.tcx);
                     let ty = self.mcx.monomorphize(&ty);
-                    let tuple_var = self.load_operand(tup)
+                    let tuple_var = self
+                        .load_operand(tup)
                         .to_variable()
                         .expect("Should be a variable");
                     match ty.sty {
@@ -1517,7 +1628,8 @@ impl<'b, 'a, 'tcx> rustc::mir::visit::Visitor<'tcx> for FunctionCx<'b, 'a, 'tcx>
                                 let field_ty_spv = self.to_ty_fn(field_ty);
                                 let field_ty_ptr_spv = self.to_ty_as_ptr_fn(field_ty);
                                 let spirv_idx = self.constant_u32(idx as u32).word;
-                                let field = self.scx
+                                let field = self
+                                    .scx
                                     .builder
                                     .access_chain(
                                         field_ty_ptr_spv.word,
@@ -1538,7 +1650,8 @@ impl<'b, 'a, 'tcx> rustc::mir::visit::Visitor<'tcx> for FunctionCx<'b, 'a, 'tcx>
                 }
                 let spirv_fn_call = match fn_call {
                     FunctionCall::Function(spirv_fn) => {
-                        let fn_call = self.scx
+                        let fn_call = self
+                            .scx
                             .builder
                             .function_call(spirv_ty.word, None, spirv_fn.0, &arg_operand_loads)
                             .expect("fn call");
@@ -1546,7 +1659,8 @@ impl<'b, 'a, 'tcx> rustc::mir::visit::Visitor<'tcx> for FunctionCx<'b, 'a, 'tcx>
                     }
                     FunctionCall::Intrinsic(intrinsic) => match intrinsic {
                         Intrinsic::GlslExt(id) => {
-                            let ext_fn = self.scx
+                            let ext_fn = self
+                                .scx
                                 .builder
                                 .ext_inst(
                                     spirv_ty.word,
@@ -1606,8 +1720,7 @@ impl<'b, 'a, 'tcx> rustc::mir::visit::Visitor<'tcx> for FunctionCx<'b, 'a, 'tcx>
 }
 
 #[derive(Debug, Clone)]
-pub enum SpirvRvalue {
-}
+pub enum SpirvRvalue {}
 
 impl<'b, 'a, 'tcx> FunctionCx<'b, 'a, 'tcx> {
     pub fn binary_op(
@@ -1625,28 +1738,32 @@ impl<'b, 'a, 'tcx> FunctionCx<'b, 'a, 'tcx> {
         // TODO: Impl ops
         match op {
             mir::BinOp::Mul => {
-                let add = self.scx
+                let add = self
+                    .scx
                     .builder
                     .fmul(spirv_ty.word, None, left, right)
                     .expect("fmul");
                 Value::new(add)
             }
             mir::BinOp::Add => {
-                let add = self.scx
+                let add = self
+                    .scx
                     .builder
                     .fadd(spirv_ty.word, None, left, right)
                     .expect("fadd");
                 Value::new(add)
             }
             mir::BinOp::Sub => {
-                let add = self.scx
+                let add = self
+                    .scx
                     .builder
                     .fsub(spirv_ty.word, None, left, right)
                     .expect("fsub");
                 Value::new(add)
             }
             mir::BinOp::Div => {
-                let add = self.scx
+                let add = self
+                    .scx
                     .builder
                     .fdiv(spirv_ty.word, None, left, right)
                     .expect("fsub");
@@ -1654,15 +1771,18 @@ impl<'b, 'a, 'tcx> FunctionCx<'b, 'a, 'tcx> {
             }
             mir::BinOp::Gt => {
                 let gt = match ty.sty {
-                    TypeVariants::TyInt(_) => self.scx
+                    TypeVariants::TyInt(_) => self
+                        .scx
                         .builder
                         .sgreater_than(spirv_ty.word, None, left, right)
                         .expect("g"),
-                    TypeVariants::TyUint(_) | TypeVariants::TyBool => self.scx
+                    TypeVariants::TyUint(_) | TypeVariants::TyBool => self
+                        .scx
                         .builder
                         .ugreater_than(spirv_ty.word, None, left, right)
                         .expect("g"),
-                    TypeVariants::TyFloat(_) => self.scx
+                    TypeVariants::TyFloat(_) => self
+                        .scx
                         .builder
                         .ford_greater_than(spirv_ty.word, None, left, right)
                         .expect("g"),
@@ -1671,14 +1791,16 @@ impl<'b, 'a, 'tcx> FunctionCx<'b, 'a, 'tcx> {
                 Value::new(gt)
             }
             mir::BinOp::Shl => {
-                let shl = self.scx
+                let shl = self
+                    .scx
                     .builder
                     .shift_left_logical(spirv_ty.word, None, left, right)
                     .expect("shl");
                 Value::new(shl)
             }
             mir::BinOp::BitOr => {
-                let bit_or = self.scx
+                let bit_or = self
+                    .scx
                     .builder
                     .bitwise_or(spirv_ty.word, None, left, right)
                     .expect("bitwise or");

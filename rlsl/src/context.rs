@@ -46,7 +46,8 @@ impl<'a, 'tcx> CodegenCx<'a, 'tcx> {
         self.forward_fns
             .get(&(def_id, substs))
             .map(|&spirv_fn| FunctionCall::Function(spirv_fn))
-            .or(self.intrinsic_fns
+            .or(self
+                .intrinsic_fns
                 .get(&def_id)
                 .map(|&id| FunctionCall::Intrinsic(id)))
     }
@@ -128,7 +129,8 @@ impl<'a, 'tcx> CodegenCx<'a, 'tcx> {
             _ => ty,
         };
 
-        if let Some(ty) = self.ty_cache
+        if let Some(ty) = self
+            .ty_cache
             .get(ty)
             .or_else(|| self.ty_ptr_cache.get(&(ty, storage_class)))
         {
@@ -168,7 +170,8 @@ impl<'a, 'tcx> CodegenCx<'a, 'tcx> {
                     &sig.output(),
                 );
                 let ret_ty = self.to_ty(ty, storage_class);
-                let input_ty: Vec<_> = sig.inputs()
+                let input_ty: Vec<_> = sig
+                    .inputs()
                     .skip_binder()
                     .iter()
                     .map(|ty| self.to_ty(ty, storage_class).word)
@@ -191,7 +194,8 @@ impl<'a, 'tcx> CodegenCx<'a, 'tcx> {
                     ty::AdtKind::Enum => {
                         if let Some(e) = Enum::from_ty(self.tcx, ty) {
                             let discr_ty_spirv = self.to_ty(e.discr_ty, storage_class);
-                            let mut field_ty_spirv: Vec<_> = adt.variants
+                            let mut field_ty_spirv: Vec<_> = adt
+                                .variants
                                 .iter()
                                 .map(|variant| {
                                     let variant_field_ty: Vec<
@@ -266,7 +270,8 @@ impl<'a, 'tcx> CodegenCx<'a, 'tcx> {
                                 _ => None,
                             }).get(0)
                                 .is_some();
-                            let field_ty: Vec<_> = adt.all_fields()
+                            let field_ty: Vec<_> = adt
+                                .all_fields()
                                 .map(|f| f.ty(self.tcx, mono_substs))
                                 .filter(|ty| !ty.is_phantom_data())
                                 .collect();
@@ -290,7 +295,7 @@ impl<'a, 'tcx> CodegenCx<'a, 'tcx> {
                                     });
                             }
                             // TODO: Proper input
-                            if let Some(descriptor) = ::Descriptor::new(self.tcx, ty) {
+                            if let Some(uniform) = ::Uniform::new(self.tcx, ty) {
                                 self.builder
                                     .decorate(spirv_struct, spirv::Decoration::Block, &[]);
                             }
@@ -313,7 +318,8 @@ impl<'a, 'tcx> CodegenCx<'a, 'tcx> {
                             }
 
                             if self.debug_symbols {
-                                let fields: Vec<_> = adt.all_fields()
+                                let fields: Vec<_> = adt
+                                    .all_fields()
                                     .filter(|field| {
                                         let ty = field.ty(self.tcx, mono_substs);
                                         !ty.is_phantom_data()
@@ -407,7 +413,8 @@ impl<'a, 'tcx> CodegenCx<'a, 'tcx> {
     // TODO: Hack to get the correct type for PerVertex
     pub fn get_per_fragment(&mut self, ty: ty::Ty<'tcx>) -> Variable<'tcx> {
         self.per_fragment.unwrap_or_else(|| {
-            let is_fragment = ty.ty_to_def_id()
+            let is_fragment = ty
+                .ty_to_def_id()
                 .map(|def_id| {
                     let attrs = self.tcx.get_attrs(def_id);
                     ::extract_attr(&attrs, "spirv", |s| match s {
@@ -432,8 +439,8 @@ impl<'a, 'tcx> CodegenCx<'a, 'tcx> {
     }
     pub fn get_compute(&mut self, ty: ty::Ty<'tcx>) -> Variable<'tcx> {
         use rustc::ty::TypeVariants;
-        println!("compute {:?}", ty);
-        let is_compute = ty.ty_to_def_id()
+        let is_compute = ty
+            .ty_to_def_id()
             .map(|def_id| {
                 let attrs = self.tcx.get_attrs(def_id);
                 ::extract_attr(&attrs, "spirv", |s| match s {

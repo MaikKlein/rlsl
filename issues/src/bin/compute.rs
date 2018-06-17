@@ -5,6 +5,7 @@ use rlsl_math::prelude::*;
 #[spirv(compute)]
 fn compute(
     compute: Compute,
+    ssao: Buffer<N0, N0, u32>
 ) {
 }
 
