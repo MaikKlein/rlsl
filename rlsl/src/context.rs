@@ -455,6 +455,14 @@ impl<'a, 'tcx> CodegenCx<'a, 'tcx> {
                     spirv::BuiltIn::LocalInvocationIndex,
                 )],
             );
+            self.builder.member_decorate(
+                spirv_ty.word,
+                1,
+                spirv::Decoration::BuiltIn,
+                &[rspirv::mr::Operand::BuiltIn(
+                    spirv::BuiltIn::GlobalInvocationId,
+                )],
+            );
             self.compute = Some(var);
             var
         })

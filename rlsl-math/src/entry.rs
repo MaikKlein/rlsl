@@ -26,6 +26,7 @@ pub struct Vertex {
 #[spirv(Compute)]
 pub struct Compute {
     pub local_invocation_index: u32,
+    pub global_invocation_index: Vec3<u32>,
 }
 
 #[spirv(Input)]
@@ -76,15 +77,25 @@ pub struct RuntimeArray<T> {
 
 #[inline(never)]
 #[spirv(runtime_array_get)]
-fn runtime_array_get<T, R>(data: T, index: usize) -> R {
+fn runtime_array_get<T, R>(data: T, index: u32) -> R {
     unsafe {
         ::std::intrinsics::abort()
     }
 }
+#[inline(never)]
+#[spirv(runtime_array_store)]
+fn runtime_array_store<T, T1>(data: T, index: u32, value: T1) {
+    unsafe {
+        ::std::intrinsics::abort();
+    }
+}
 
 impl<T> RuntimeArray<T> {
-    pub fn get(&self, index: usize) -> T {
+    pub fn get(&self, index: u32) -> T {
         runtime_array_get(self, index)
+    }
+    pub fn store(&self, index: u32, value: T) {
+        runtime_array_store(self, index, value);
     }
 }
 

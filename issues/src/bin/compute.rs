@@ -2,14 +2,11 @@
 extern crate rlsl_math;
 use rlsl_math::prelude::*;
 
-pub struct Data {
-    i1: f32,
-    arr: RuntimeArray<f32>,
-    i2: f32
-}
 #[spirv(compute)]
-fn compute(compute: Compute, ssao: Buffer<N0, N0, Data>) {
-    ssao.data.arr.get(1000);
+fn compute(compute: Compute, buffer: Buffer<N0, N0, RuntimeArray<f32>>) {
+    let index = compute.global_invocation_index.x;
+    let value = buffer.data.get(index);
+    buffer.data.store(index, value * value);
 }
 
 fn main() {}

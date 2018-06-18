@@ -611,6 +611,7 @@ impl<'tcx> Entry<'tcx, Output<'tcx>> {
 #[derive(Debug, Copy, Clone)]
 pub enum RuntimeArrayIntrinsic {
     Get,
+    Store,
 }
 #[derive(Debug, Copy, Clone)]
 pub enum Intrinsic {
@@ -664,6 +665,11 @@ impl<'tcx> IntrinsicType<'tcx> {
             IntrinsicType::RuntimeArray(rt_array) => {
                 let spirv_ty = cx.to_ty(rt_array.ty, storage_class);
                 let ty: spirv::Word = cx.builder.type_runtime_array(spirv_ty.word);
+                let layout = std430_layout(cx.tcx, rt_array.ty).expect("Should have layout");
+                cx.builder
+                    .decorate(ty, spirv::Decoration::ArrayStride, 
+                                            &[rspirv::mr::Operand::LiteralInt32(layout.size() as u32)],
+);
                 Ty::new(ty, rt_array.ty)
             }
             _ => unimplemented!(),
@@ -829,6 +835,7 @@ pub fn trans_spirv<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, items: &'a FxHashSet<M
         let attrs = tcx.get_attrs(mcx.def_id);
         let intrinsic = extract_attr(&attrs, "spirv", |s| match s {
             "runtime_array_get" => Some(Intrinsic::RuntimeArray(RuntimeArrayIntrinsic::Get)),
+            "runtime_array_store" => Some(Intrinsic::RuntimeArray(RuntimeArrayIntrinsic::Store)),
             _ => None,
         }).first()
             .cloned();
@@ -1190,6 +1197,7 @@ impl<'b, 'a, 'tcx> FunctionCx<'b, 'a, 'tcx> {
             );
         }
 
+        let raw_builtin = variable_map.get(&mir::Local::new(1)).as_ref().expect("").word;
         FunctionCx::new(
             InstanceType::Entry(entry_point.entry_type),
             &entry_point.mcx,
@@ -1201,6 +1209,7 @@ impl<'b, 'a, 'tcx> FunctionCx<'b, 'a, 'tcx> {
             .map(|(_, gv)| gv.var)
             .collect_vec();
         inputs_raw.extend(outputs.iter().map(|gv| gv.var));
+        inputs_raw.push(raw_builtin);
         let name = entry_point.mcx.tcx.item_name(def_id);
         let model = match entry_point.entry_type {
             IntrinsicEntry::Vertex => spirv::ExecutionModel::Vertex,
@@ -1209,8 +1218,17 @@ impl<'b, 'a, 'tcx> FunctionCx<'b, 'a, 'tcx> {
         };
         scx.builder
             .entry_point(model, spirv_function, name, inputs_raw);
-        scx.builder
-            .execution_mode(spirv_function, spirv::ExecutionMode::OriginUpperLeft, &[]);
+        match entry_point.entry_type {
+            IntrinsicEntry::Vertex | IntrinsicEntry::Fragment => {
+                scx.builder
+                    .execution_mode(spirv_function, spirv::ExecutionMode::OriginUpperLeft, &[]);
+            }
+            IntrinsicEntry::Compute => {
+                scx.builder
+                    .execution_mode(spirv_function, spirv::ExecutionMode::LocalSize, &[1, 1, 1]);
+
+            }
+        }
     }
     pub fn to_ty(&mut self, ty: ty::Ty<'tcx>, storage_class: spirv::StorageClass) -> Ty<'tcx> {
         let ty = self.mcx.monomorphize(&ty);
@@ -1770,6 +1788,23 @@ impl<'b, 'a, 'tcx> rustc::mir::visit::Visitor<'tcx> for FunctionCx<'b, 'a, 'tcx>
                             return;
                         }
                         Intrinsic::RuntimeArray(runtime_array) => match runtime_array {
+                            RuntimeArrayIntrinsic::Store => {
+                                let ty = args[2].ty(local_decls, self.scx.tcx);
+                                let spirv_ptr_ty =
+                                    self.to_ty_as_ptr(ty, spirv::StorageClass::StorageBuffer);
+                                let access_chain = self
+                                    .scx
+                                    .builder
+                                    .access_chain(
+                                        spirv_ptr_ty.word,
+                                        None,
+                                        arg_operand_loads[0],
+                                        &arg_operand_loads[1..2],
+                                    )
+                                    .expect("access chain");
+                                self.scx.builder.store(access_chain, arg_operand_loads[2], None, &[]).expect("store");
+                                None
+                            }
                             RuntimeArrayIntrinsic::Get => {
                                 let spirv_ptr_ty =
                                     self.to_ty_as_ptr(ret_ty, spirv::StorageClass::StorageBuffer);
@@ -1843,81 +1878,99 @@ impl<'b, 'a, 'tcx> FunctionCx<'b, 'a, 'tcx> {
     ) -> Value {
         let ty = l.ty(&self.mcx.mir().local_decls, self.mcx.tcx);
         // TODO: Different types
-        let spirv_ty = self.to_ty_fn(return_ty);
+        let spirv_ty = self.to_ty_fn(ty);
         let left = self.load_operand(l).load(self.scx).word;
         let right = self.load_operand(r).load(self.scx).word;
         // TODO: Impl ops
-        match op {
-            mir::BinOp::Mul => {
-                let add = self
-                    .scx
-                    .builder
-                    .fmul(spirv_ty.word, None, left, right)
-                    .expect("fmul");
-                Value::new(add)
+        match ty.sty {
+            ty::TypeVariants::TyUint(_) => {
+                match op {
+                    mir::BinOp::Mul => {
+                        let mul = self
+                            .scx
+                            .builder
+                            .imul(spirv_ty.word, None, left, right)
+                            .expect("fmul");
+                        Value::new(mul)
+                    }
+                    _ => unimplemented!("op unsigned")
+                }
             }
-            mir::BinOp::Add => {
-                let add = self
-                    .scx
-                    .builder
-                    .fadd(spirv_ty.word, None, left, right)
-                    .expect("fadd");
-                Value::new(add)
+            ty::TypeVariants::TyFloat(_) => {
+                match op {
+                    mir::BinOp::Mul => {
+                        let mul = self
+                            .scx
+                            .builder
+                            .fmul(spirv_ty.word, None, left, right)
+                            .expect("fmul");
+                        Value::new(mul)
+                    }
+                    mir::BinOp::Add => {
+                        let add = self
+                            .scx
+                            .builder
+                            .fadd(spirv_ty.word, None, left, right)
+                            .expect("fadd");
+                        Value::new(add)
+                    }
+                    mir::BinOp::Sub => {
+                        let add = self
+                            .scx
+                            .builder
+                            .fsub(spirv_ty.word, None, left, right)
+                            .expect("fsub");
+                        Value::new(add)
+                    }
+                    mir::BinOp::Div => {
+                        let add = self
+                            .scx
+                            .builder
+                            .fdiv(spirv_ty.word, None, left, right)
+                            .expect("fsub");
+                        Value::new(add)
+                    }
+                    mir::BinOp::Gt => {
+                        let gt = match ty.sty {
+                            TypeVariants::TyInt(_) => self
+                                .scx
+                                .builder
+                                .sgreater_than(spirv_ty.word, None, left, right)
+                                .expect("g"),
+                                TypeVariants::TyUint(_) | TypeVariants::TyBool => self
+                                    .scx
+                                    .builder
+                                    .ugreater_than(spirv_ty.word, None, left, right)
+                                    .expect("g"),
+                                TypeVariants::TyFloat(_) => self
+                                    .scx
+                                    .builder
+                                    .ford_greater_than(spirv_ty.word, None, left, right)
+                                    .expect("g"),
+                                    ref rest => unimplemented!("{:?}", rest),
+                        };
+                        Value::new(gt)
+                    }
+                    mir::BinOp::Shl => {
+                        let shl = self
+                            .scx
+                            .builder
+                            .shift_left_logical(spirv_ty.word, None, left, right)
+                            .expect("shl");
+                        Value::new(shl)
+                    }
+                    mir::BinOp::BitOr => {
+                        let bit_or = self
+                            .scx
+                            .builder
+                            .bitwise_or(spirv_ty.word, None, left, right)
+                            .expect("bitwise or");
+                        Value::new(bit_or)
+                    }
+                    rest => unimplemented!("{:?}", rest),
+                }
             }
-            mir::BinOp::Sub => {
-                let add = self
-                    .scx
-                    .builder
-                    .fsub(spirv_ty.word, None, left, right)
-                    .expect("fsub");
-                Value::new(add)
-            }
-            mir::BinOp::Div => {
-                let add = self
-                    .scx
-                    .builder
-                    .fdiv(spirv_ty.word, None, left, right)
-                    .expect("fsub");
-                Value::new(add)
-            }
-            mir::BinOp::Gt => {
-                let gt = match ty.sty {
-                    TypeVariants::TyInt(_) => self
-                        .scx
-                        .builder
-                        .sgreater_than(spirv_ty.word, None, left, right)
-                        .expect("g"),
-                    TypeVariants::TyUint(_) | TypeVariants::TyBool => self
-                        .scx
-                        .builder
-                        .ugreater_than(spirv_ty.word, None, left, right)
-                        .expect("g"),
-                    TypeVariants::TyFloat(_) => self
-                        .scx
-                        .builder
-                        .ford_greater_than(spirv_ty.word, None, left, right)
-                        .expect("g"),
-                    ref rest => unimplemented!("{:?}", rest),
-                };
-                Value::new(gt)
-            }
-            mir::BinOp::Shl => {
-                let shl = self
-                    .scx
-                    .builder
-                    .shift_left_logical(spirv_ty.word, None, left, right)
-                    .expect("shl");
-                Value::new(shl)
-            }
-            mir::BinOp::BitOr => {
-                let bit_or = self
-                    .scx
-                    .builder
-                    .bitwise_or(spirv_ty.word, None, left, right)
-                    .expect("bitwise or");
-                Value::new(bit_or)
-            }
-            rest => unimplemented!("{:?}", rest),
+        _ => unimplemented!("ops")
         }
     }
 }

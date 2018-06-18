@@ -1,15 +1,15 @@
 #![allow(dead_code)]
 #[macro_use]
 extern crate ash;
+#[cfg(feature = "dx12")]
+extern crate gfx_backend_dx12 as back;
+#[cfg(feature = "metal")]
+extern crate gfx_backend_metal as back;
 #[cfg(windows)]
 extern crate user32;
 #[cfg(windows)]
 extern crate winapi;
 extern crate winit;
-#[cfg(feature = "dx12")]
-extern crate gfx_backend_dx12 as back;
-#[cfg(feature = "metal")]
-extern crate gfx_backend_metal as back;
 //#[cfg(feature = "vulkan")]
 extern crate gfx_backend_vulkan as back;
 //extern crate glsl_to_spirv;
@@ -25,7 +25,7 @@ use ash::Instance;
 use std::cell::{RefCell, RefMut};
 use std::default::Default;
 use std::ffi::{CStr, CString};
-use std::fs::{read_dir, File };
+use std::fs::{read_dir, File};
 use std::io::Read;
 use std::marker::PhantomData;
 use std::mem;
@@ -102,6 +102,7 @@ impl Drop for Quad {
 
 fn load_shader(path: &Path, device: &Device<V1_0>) -> vk::ShaderModule {
     unsafe {
+        println!("{}", path.display());
         let spv_file = File::open(path).expect("Could not find vert.spv.");
 
         let spv_bytes: Vec<u8> = spv_file.bytes().filter_map(|byte| byte.ok()).collect();
@@ -400,10 +401,12 @@ impl Quad {
                 dependency_count: 1,
                 p_dependencies: &dependency,
             };
-            let renderpass = base.device
+            let renderpass = base
+                .device
                 .create_render_pass(&renderpass_create_info, None)
                 .unwrap();
-            let framebuffers: Vec<vk::Framebuffer> = base.present_image_views
+            let framebuffers: Vec<vk::Framebuffer> = base
+                .present_image_views
                 .iter()
                 .map(|&present_image_view| {
                     let framebuffer_attachments = [present_image_view, base.depth_image_view];
@@ -448,10 +451,12 @@ impl Quad {
                 allocation_size: index_buffer_memory_req.size,
                 memory_type_index: index_buffer_memory_index,
             };
-            let index_buffer_memory = base.device
+            let index_buffer_memory = base
+                .device
                 .allocate_memory(&index_allocate_info, None)
                 .unwrap();
-            let index_ptr: *mut vk::c_void = base.device
+            let index_ptr: *mut vk::c_void = base
+                .device
                 .map_memory(
                     index_buffer_memory,
                     0,
@@ -498,10 +503,12 @@ impl Quad {
                 queue_family_index_count: 0,
                 p_queue_family_indices: ptr::null(),
             };
-            let vertex_input_buffer = base.device
+            let vertex_input_buffer = base
+                .device
                 .create_buffer(&vertex_input_buffer_info, None)
                 .unwrap();
-            let vertex_input_buffer_memory_req = base.device
+            let vertex_input_buffer_memory_req = base
+                .device
                 .get_buffer_memory_requirements(vertex_input_buffer);
             let vertex_input_buffer_memory_index =
                 find_memorytype_index(
@@ -516,10 +523,12 @@ impl Quad {
                 allocation_size: vertex_input_buffer_memory_req.size,
                 memory_type_index: vertex_input_buffer_memory_index,
             };
-            let vertex_input_buffer_memory = base.device
+            let vertex_input_buffer_memory = base
+                .device
                 .allocate_memory(&vertex_buffer_allocate_info, None)
                 .unwrap();
-            let vert_ptr = base.device
+            let vert_ptr = base
+                .device
                 .map_memory(
                     vertex_input_buffer_memory,
                     0,
@@ -577,7 +586,8 @@ impl Quad {
                 p_pool_sizes: descriptor_sizes.as_ptr(),
                 max_sets: 1,
             };
-            let descriptor_pool = base.device
+            let descriptor_pool = base
+                .device
                 .create_descriptor_pool(&descriptor_pool_info, None)
                 .unwrap();
             let desc_layout_bindings = [
@@ -623,7 +633,8 @@ impl Quad {
                 descriptor_set_count: desc_set_layouts.len() as u32,
                 p_set_layouts: desc_set_layouts.as_ptr(),
             };
-            let descriptor_sets = base.device
+            let descriptor_sets = base
+                .device
                 .allocate_descriptor_sets(&desc_alloc_info)
                 .unwrap();
 
@@ -694,7 +705,8 @@ impl Quad {
                 p_push_constant_ranges: ptr::null(),
             };
 
-            let pipeline_layout = base.device
+            let pipeline_layout = base
+                .device
                 .create_pipeline_layout(&layout_create_info, None)
                 .unwrap();
 
@@ -759,19 +771,27 @@ impl Quad {
     pub fn compile_all(&self, base_path: &Path) {
         let vertex_file = base_path.join("vertex.spv");
         let dirs = read_dir(base_path).expect("Unable to read path to shaders");
-        dirs.filter_map(|dir_entry| dir_entry.ok()).filter(|dir_entry| {
-            let path = dir_entry.path();
-            if let Some(ext) = path.extension(){
-                ext == "spv" && !path.file_stem().map(|name| name == "vertex").unwrap_or(false)
-            }
-            else{
-                false
-            }
-        }).for_each(|dir_entry| {
-            println!("Compiling: {}", dir_entry.path().display());
-            let _ = self.pipeline
-                .create(&self.base.device, ("vertex", &vertex_file), ("fragment", &dir_entry.path()));
-        });
+        dirs.filter_map(|dir_entry| dir_entry.ok())
+            .filter(|dir_entry| {
+                let path = dir_entry.path();
+                if let Some(ext) = path.extension() {
+                    ext == "spv"
+                        && !path
+                            .file_stem()
+                            .map(|name| name == "vertex")
+                            .unwrap_or(false)
+                } else {
+                    false
+                }
+            })
+            .for_each(|dir_entry| {
+                println!("Compiling: {}", dir_entry.path().display());
+                let _ = self.pipeline.create(
+                    &self.base.device,
+                    ("vertex", &vertex_file),
+                    ("fragment", &dir_entry.path()),
+                );
+            });
     }
 
     /// Renders a single vertex and fragment shader
@@ -807,7 +827,8 @@ impl Quad {
                         w: 1.0,
                     },
                 );
-                let present_index = quad.base
+                let present_index = quad
+                    .base
                     .swapchain_loader
                     .acquire_next_image_khr(
                         quad.base.swapchain,
@@ -1093,7 +1114,8 @@ pub struct Buffer<T> {
 
 impl<T: Copy> Buffer<T> {
     pub unsafe fn update(&mut self, base: &ExampleBase, t: T) {
-        let uniform_ptr = base.device
+        let uniform_ptr = base
+            .device
             .map_memory(self.memory, 0, self.req.size, vk::MemoryMapFlags::empty())
             .unwrap();
         let mut uniform_aligned_slice =
@@ -1112,10 +1134,12 @@ impl<T: Copy> Buffer<T> {
             queue_family_index_count: 0,
             p_queue_family_indices: ptr::null(),
         };
-        let uniform_color_buffer = base.device
+        let uniform_color_buffer = base
+            .device
             .create_buffer(&uniform_color_buffer_info, None)
             .unwrap();
-        let uniform_color_buffer_memory_req = base.device
+        let uniform_color_buffer_memory_req = base
+            .device
             .get_buffer_memory_requirements(uniform_color_buffer);
         let uniform_color_buffer_memory_index =
             find_memorytype_index(
@@ -1130,13 +1154,15 @@ impl<T: Copy> Buffer<T> {
             allocation_size: uniform_color_buffer_memory_req.size,
             memory_type_index: uniform_color_buffer_memory_index,
         };
-        let uniform_color_buffer_memory = base.device
+        let uniform_color_buffer_memory = base
+            .device
             .allocate_memory(&uniform_color_buffer_allocate_info, None)
             .unwrap();
         base.device
             .bind_buffer_memory(uniform_color_buffer, uniform_color_buffer_memory, 0)
             .unwrap();
-        let uniform_ptr = base.device
+        let uniform_ptr = base
+            .device
             .map_memory(
                 uniform_color_buffer_memory,
                 0,
@@ -1240,7 +1266,8 @@ impl ExampleBase {
             let debug_info = vk::DebugReportCallbackCreateInfoEXT {
                 s_type: vk::StructureType::DebugReportCallbackCreateInfoExt,
                 p_next: ptr::null(),
-                flags: vk::DEBUG_REPORT_ERROR_BIT_EXT | vk::DEBUG_REPORT_WARNING_BIT_EXT
+                flags: vk::DEBUG_REPORT_ERROR_BIT_EXT
+                    | vk::DEBUG_REPORT_WARNING_BIT_EXT
                     | vk::DEBUG_REPORT_PERFORMANCE_WARNING_BIT_EXT,
                 pfn_callback: vulkan_debug_callback,
                 p_user_data: ptr::null_mut(),
@@ -1264,13 +1291,13 @@ impl ExampleBase {
                         .iter()
                         .enumerate()
                         .filter_map(|(index, ref info)| {
-                            let supports_graphic_and_surface = info.queue_flags
-                                .subset(vk::QUEUE_GRAPHICS_BIT)
-                                && surface_loader.get_physical_device_surface_support_khr(
-                                    *pdevice,
-                                    index as u32,
-                                    surface,
-                                );
+                            let supports_graphic_and_surface =
+                                info.queue_flags.subset(vk::QUEUE_GRAPHICS_BIT)
+                                    && surface_loader.get_physical_device_surface_support_khr(
+                                        *pdevice,
+                                        index as u32,
+                                        surface,
+                                    );
                             match supports_graphic_and_surface {
                                 true => Some((*pdevice, index)),
                                 _ => None,

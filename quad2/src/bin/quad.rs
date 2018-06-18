@@ -60,8 +60,8 @@ enum Command {
 impl Opt {
     pub fn get_shader_path(&self) -> PathBuf {
         match self.compiler {
-            ShaderCompiler::Rlsl => Path::new("../issues/.shaders/"),
-            ShaderCompiler::Glsl => Path::new("../issues/.shaders-glsl/"),
+            ShaderCompiler::Rlsl => Path::new("../.shaders/"),
+            ShaderCompiler::Glsl => Path::new("../.shaders-glsl/"),
         }.into()
     }
     pub fn get_entry_names(&self) -> (&str, &str) {
