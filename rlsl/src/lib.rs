@@ -402,7 +402,7 @@ pub struct SingleLayout<'tcx> {
     pub align: usize,
 }
 use syntax::ast;
-pub fn std140_layout<'a, 'tcx>(
+pub fn std430_layout<'a, 'tcx>(
     tcx: TyCtxt<'a, 'tcx, 'tcx>,
     ty: ty::Ty<'tcx>,
 ) -> Option<Layout<'tcx>> {
@@ -415,7 +415,7 @@ pub fn std140_layout<'a, 'tcx>(
                     4 => 4,
                     _ => unreachable!(),
                 };
-                return std140_layout(tcx, ty_vec.ty).map(|inner_layout| {
+                return std430_layout(tcx, ty_vec.ty).map(|inner_layout| {
                     let single = SingleLayout {
                         ty,
                         size: inner_layout.size() * ty_vec.dim,
@@ -424,6 +424,18 @@ pub fn std140_layout<'a, 'tcx>(
                     Layout::Single(single)
                 });
             }
+            IntrinsicType::RuntimeArray(rt_array) => {
+                return std430_layout(tcx, rt_array.ty).map(|inner_layout| {
+                    let single = SingleLayout {
+                        ty,
+                        size: 0,
+                        // [FIXME] proper alignment for arrays
+                        align: inner_layout.align() % 16,
+                    };
+                    Layout::Single(single)
+                });
+            }
+            _ => unimplemented!("Intrinsic std140"),
         }
     }
 
@@ -454,7 +466,7 @@ pub fn std140_layout<'a, 'tcx>(
                     .map(|field| field.ty(tcx, substs))
                     .filter(|ty| !ty.is_phantom_data())
                     .map(|ty| {
-                        Box::new(std140_layout(tcx, ty).expect("No layout inside Composition"))
+                        Box::new(std430_layout(tcx, ty).expect("No layout inside Composition"))
                     })
                     .collect_vec();
                 Some(Layout::Composition(comp))
@@ -597,10 +609,15 @@ impl<'tcx> Entry<'tcx, Output<'tcx>> {
 // }
 
 #[derive(Debug, Copy, Clone)]
+pub enum RuntimeArrayIntrinsic {
+    Get,
+}
+#[derive(Debug, Copy, Clone)]
 pub enum Intrinsic {
     GlslExt(spirv::Word),
     Abort,
     Discard,
+    RuntimeArray(RuntimeArrayIntrinsic),
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -622,19 +639,71 @@ pub struct FunctionCx<'b, 'a: 'b, 'tcx: 'a> {
 }
 
 #[derive(Debug, Copy, Clone)]
-pub struct TyVec<'tcx> {
-    pub ty: ty::Ty<'tcx>,
-    pub dim: usize,
-}
-
-#[derive(Debug, Copy, Clone)]
 pub enum IntrinsicType<'tcx> {
     TyVec(TyVec<'tcx>),
+    RuntimeArray(RuntimeArray<'tcx>),
 }
 impl<'tcx> IntrinsicType<'tcx> {
     pub fn from_ty<'a>(tcx: TyCtxt<'a, 'tcx, 'tcx>, ty: ty::Ty<'tcx>) -> Option<Self> {
-        TyVec::from_ty(tcx, ty).map(IntrinsicType::TyVec)
+        TyVec::from_ty(tcx, ty)
+            .map(IntrinsicType::TyVec)
+            .or_else(|| RuntimeArray::from_ty(tcx, ty).map(IntrinsicType::RuntimeArray))
     }
+    pub fn contruct_ty<'a>(
+        &self,
+        storage_class: spirv::StorageClass,
+        cx: &mut CodegenCx<'a, 'tcx>,
+    ) -> Ty<'tcx> {
+        use typ::ConstructTy;
+        match self {
+            IntrinsicType::TyVec(ty_vec) => {
+                let spirv_ty = cx.to_ty(ty_vec.ty, storage_class);
+                let ty = cx.builder.type_vector(spirv_ty.word, ty_vec.dim as u32);
+                ty.construct_ty(ty_vec.ty)
+            }
+            IntrinsicType::RuntimeArray(rt_array) => {
+                let spirv_ty = cx.to_ty(rt_array.ty, storage_class);
+                let ty: spirv::Word = cx.builder.type_runtime_array(spirv_ty.word);
+                Ty::new(ty, rt_array.ty)
+            }
+            _ => unimplemented!(),
+        }
+    }
+}
+
+#[derive(Debug, Copy, Clone)]
+pub struct RuntimeArray<'tcx> {
+    pub ty: ty::Ty<'tcx>,
+}
+impl<'tcx> RuntimeArray<'tcx> {
+    pub fn from_ty<'a>(tcx: TyCtxt<'a, 'tcx, 'tcx>, ty: ty::Ty<'tcx>) -> Option<Self> {
+        if let TypeVariants::TyAdt(adt, substs) = ty.sty {
+            let attrs = tcx.get_attrs(adt.did);
+            let _ = extract_attr(&attrs, "spirv", |s| match s {
+                "RuntimeArray" => Some(()),
+                _ => None,
+            }).first()
+                .cloned()?;
+            assert!(adt.is_struct(), "A RuntimeArray should be a struct");
+            let field = adt
+                .all_fields()
+                .nth(0)
+                .expect("A Vec should have at least one field");
+            let field_ty = field.ty(tcx, substs);
+            if let TypeVariants::TyAdt(_, substs) = field_ty.sty {
+                substs.types().nth(0).map(|ty| RuntimeArray { ty })
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    }
+}
+#[derive(Debug, Copy, Clone)]
+pub struct TyVec<'tcx> {
+    pub ty: ty::Ty<'tcx>,
+    pub dim: usize,
 }
 impl<'tcx> TyVec<'tcx> {
     pub fn from_ty<'a>(tcx: TyCtxt<'a, 'tcx, 'tcx>, ty: ty::Ty<'tcx>) -> Option<Self> {
@@ -646,7 +715,7 @@ impl<'tcx> TyVec<'tcx> {
                 "Vec4" => Some(4),
                 _ => None,
             }).get(0)
-                .map(|&i| i)?;
+                .cloned()?;
             assert!(adt.is_struct(), "A Vec should be a struct");
             let field = adt
                 .all_fields()
@@ -713,39 +782,6 @@ pub fn trans_spirv<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, items: &'a FxHashSet<M
     //struct_span_err!(tcx.sess, DUMMY_SP, E1337, "Test not allowed").emit();
 
     let mut ctx = CodegenCx::new(tcx);
-    items
-        .iter()
-        .filter_map(|item| {
-            if let &MonoItem::Fn(ref instance) = item {
-                return Some(instance);
-            }
-            None
-        })
-        .for_each(|instance| {
-            if tcx.is_foreign_item(instance.def_id()) {
-                let intrinsic_name: String = tcx.item_name(instance.def_id()).into();
-                use spirv::GLOp::*;
-                let id = match intrinsic_name.as_str() {
-                    "sqrtf32" => Some(Sqrt),
-                    "sinf32" => Some(Sin),
-                    "cosf32" => Some(Cos),
-                    "absf32" => Some(FAbs),
-                    _ => None,
-                };
-                if let Some(id) = id {
-                    ctx.intrinsic_fns
-                        .insert(instance.def_id(), Intrinsic::GlslExt(id as u32));
-                }
-                let abort = match intrinsic_name.as_str() {
-                    "abort" => Some(Intrinsic::Abort),
-                    "spirv_discard" => Some(Intrinsic::Discard),
-                    _ => None,
-                };
-                if let Some(abort) = abort {
-                    ctx.intrinsic_fns.insert(instance.def_id(), abort);
-                }
-            }
-        });
 
     let mut instances: Vec<MirContext> = items
         .iter()
@@ -763,6 +799,47 @@ pub fn trans_spirv<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, items: &'a FxHashSet<M
             None
         })
         .collect();
+    instances.iter().for_each(|mcx| {
+        use spirv::GLOp::*;
+        let intrinsic_name: String = tcx.item_name(mcx.def_id).into();
+        let id = match intrinsic_name.as_str() {
+            "sqrtf32" => Some(Sqrt),
+            "sinf32" => Some(Sin),
+            "cosf32" => Some(Cos),
+            "absf32" => Some(FAbs),
+            _ => None,
+        };
+        if let Some(id) = id {
+            ctx.intrinsic_fns
+                .insert(mcx.def_id, Intrinsic::GlslExt(id as u32));
+        }
+        let abort = match intrinsic_name.as_str() {
+            "abort" => Some(Intrinsic::Abort),
+            "spirv_discard" => Some(Intrinsic::Discard),
+            _ => None,
+        };
+        if let Some(abort) = abort {
+            ctx.intrinsic_fns.insert(mcx.def_id, abort);
+        }
+    });
+
+    // Insert all the generic intrinsics, that can't be defined in an extern
+    // block
+    instances.iter().for_each(|mcx| {
+        let attrs = tcx.get_attrs(mcx.def_id);
+        let intrinsic = extract_attr(&attrs, "spirv", |s| match s {
+            "runtime_array_get" => Some(Intrinsic::RuntimeArray(RuntimeArrayIntrinsic::Get)),
+            _ => None,
+        }).first()
+            .cloned();
+        if let Some(intrinsic) = intrinsic {
+            ctx.intrinsic_fns.insert(mcx.def_id, intrinsic);
+        }
+    });
+
+    if TyErrorVisitor::has_error(&instances) {
+        return;
+    }
     use rustc_mir::transform::inline::Inline;
     use rustc_mir::transform::{MirPass, MirSource};
     let i: Vec<_> = find_ref_functions(&instances).map(|m| m.def_id).collect();
@@ -798,6 +875,7 @@ pub fn trans_spirv<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, items: &'a FxHashSet<M
         spirv_instances.retain(|scx| scx.def_id != def_id);
     });
 
+    //println!("{:#?}", ctx.intrinsic_fns);
     // spirv_instances.iter().for_each(|scx| {
     //     println!("{:#?}", scx.def_id);
     //     println!("{:#?}", scx.mir);
@@ -811,13 +889,18 @@ pub fn trans_spirv<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, items: &'a FxHashSet<M
     //    // println!("{}", mcx.tcx.item_name(mcx.def_id));
     //});
 
-    if TyErrorVisitor::has_error(&instances) {
-        return;
-    }
+    // Remove all the items that have been marked as an intrinsic. We
+    // don't want to generate code for those fns.
+    ctx.intrinsic_fns.keys().for_each(|&def_id| {
+        spirv_instances.retain(|mcx| mcx.def_id != def_id);
+    });
+
     for mcx in &spirv_instances {
         ctx.forward_fns
             .insert((mcx.def_id, mcx.substs), Function(ctx.builder.id()));
     }
+
+    //println!("instances {:#?}", spirv_instances.iter().map(|m|m.def_id).collect::<Vec<_>>());
     let (entry_instances, fn_instances): (Vec<_>, Vec<_>) =
         spirv_instances.into_iter().partition_map(|mcx| {
             let attrs = tcx.get_attrs(mcx.def_id);
@@ -844,7 +927,14 @@ pub fn trans_spirv<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, items: &'a FxHashSet<M
     let entry_buffer = Entry::buffer(&entry_instances, &mut ctx);
 
     entry_instances.iter().for_each(|e| {
-        FunctionCx::trans_entry(e, &entry_input, &entry_output, &entry_descriptor,  &entry_buffer, &mut ctx);
+        FunctionCx::trans_entry(
+            e,
+            &entry_input,
+            &entry_output,
+            &entry_descriptor,
+            &entry_buffer,
+            &mut ctx,
+        );
     });
     fn_instances.iter().for_each(|mcx| {
         FunctionCx::trans_fn(mcx, &mut ctx);
@@ -968,7 +1058,6 @@ impl<'b, 'a, 'tcx> FunctionCx<'b, 'a, 'tcx> {
         scx: &mut CodegenCx<'a, 'tcx>,
     ) {
         use mir::visit::Visitor;
-        println!("{:?}", entry_point.entry_type);
         let def_id = entry_point.mcx.def_id;
         let mir = entry_point.mcx.mir();
         // TODO: Fix properly
@@ -1680,6 +1769,28 @@ impl<'b, 'a, 'tcx> rustc::mir::visit::Visitor<'tcx> for FunctionCx<'b, 'a, 'tcx>
                             self.scx.builder.kill().expect("unreachable");
                             return;
                         }
+                        Intrinsic::RuntimeArray(runtime_array) => match runtime_array {
+                            RuntimeArrayIntrinsic::Get => {
+                                let spirv_ptr_ty =
+                                    self.to_ty_as_ptr(ret_ty, spirv::StorageClass::StorageBuffer);
+                                let access_chain = self
+                                    .scx
+                                    .builder
+                                    .access_chain(
+                                        spirv_ptr_ty.word,
+                                        None,
+                                        arg_operand_loads[0],
+                                        &arg_operand_loads[1..],
+                                    )
+                                    .expect("access chain");
+                                let load = self
+                                    .scx
+                                    .builder
+                                    .load(spirv_ty.word, None, access_chain, None, &[])
+                                    .expect("Load access_chain");
+                                Some(load)
+                            }
+                        },
                     },
                 };
                 // only write op store if the result is not nil

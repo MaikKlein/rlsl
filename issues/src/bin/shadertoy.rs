@@ -12,7 +12,8 @@ fn fragment(
     let time = *time;
     let offset = Vec3::new(0.0, 2.0, 4.0);
     let f = uv.dot(uv);
-    let coord = uv.extend(uv.y)
+    let coord = uv
+        .extend(uv.y)
         .add(offset)
         .map(move |f| f32::cos(time + f) * 0.5)
         .add(Vec3::single(0.5))

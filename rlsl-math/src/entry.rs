@@ -74,6 +74,20 @@ pub struct RuntimeArray<T> {
     pub _m: PhantomData<T>,
 }
 
+#[inline(never)]
+#[spirv(runtime_array_get)]
+fn runtime_array_get<T, R>(data: T, index: usize) -> R {
+    unsafe {
+        ::std::intrinsics::abort()
+    }
+}
+
+impl<T> RuntimeArray<T> {
+    pub fn get(&self, index: usize) -> T {
+        runtime_array_get(self, index)
+    }
+}
+
 #[spirv(Uniform)]
 pub struct Uniform<Binding, Set, T>
 where

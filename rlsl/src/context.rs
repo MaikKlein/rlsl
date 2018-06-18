@@ -247,17 +247,10 @@ impl<'a, 'tcx> CodegenCx<'a, 'tcx> {
                     }
                     ty::AdtKind::Struct => {
                         let attrs = self.tcx.get_attrs(adt.did);
-                        let intrinsic = IntrinsicType::from_ty(self.tcx, ty);
+                        let intrinsic = IntrinsicType::from_ty(self.tcx, ty)
+                            .map(|intrinsic| intrinsic.contruct_ty(storage_class, self));
 
-                        if let Some(intrinsic) = intrinsic {
-                            let intrinsic_spirv = match intrinsic {
-                                IntrinsicType::TyVec(ty_vec) => {
-                                    let spirv_ty = self.to_ty(ty_vec.ty, storage_class);
-                                    self.builder.type_vector(spirv_ty.word, ty_vec.dim as u32)
-                                }
-                            };
-                            intrinsic_spirv.construct_ty(ty)
-                        } else {
+                        intrinsic.unwrap_or_else(|| {
                             // let fields_ty = adt.all_fields()
                             //     .map(|field| field.ty(self.tcx, substs))
                             //     .filter(|ty| !ty.is_phantom_data())
@@ -280,7 +273,7 @@ impl<'a, 'tcx> CodegenCx<'a, 'tcx> {
                                 .map(|ty| self.to_ty(ty, storage_class).word)
                                 .collect();
                             let spirv_struct = self.builder.type_struct(&field_ty_spirv);
-                            if let Some(layout) = ::std140_layout(self.tcx, ty) {
+                            if let Some(layout) = ::std430_layout(self.tcx, ty) {
                                 layout
                                     .offsets()
                                     .iter()
@@ -335,7 +328,7 @@ impl<'a, 'tcx> CodegenCx<'a, 'tcx> {
                             }
                             self.name_from_def_id(adt.did, spirv_struct);
                             spirv_struct.construct_ty(ty)
-                        }
+                        })
                     }
                     ref r => unimplemented!("{:?}", r),
                 }
