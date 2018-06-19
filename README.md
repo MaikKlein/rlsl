@@ -1,7 +1,3 @@
-<p align="center">
-  <img src="media/logo.png">
-</p>
-
 # Rlsl - Rust Like Shading Language
 
 **The project is currently unusable**
