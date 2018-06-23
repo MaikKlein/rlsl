@@ -64,7 +64,7 @@ where
 
         let pipeline_layout = device.create_pipeline_layout(Some(&set_layout), &[]);
         let entry_point = pso::EntryPoint {
-            entry: "compute",
+            entry: "main",
             module: &shader,
             specialization: &[],
         };
@@ -229,15 +229,15 @@ mod tests {
     use compute;
     use issues;
     use quickcheck::TestResult;
-    #[quickcheck]
-    fn compute_square(input: Vec<f32>) -> TestResult {
-        compute(input, "../.shaders/square.spv", issues::square)
-    }
+    // #[quickcheck]
+    // fn compute_square(input: Vec<f32>) -> TestResult {
+    //     compute(input, "../.shaders/square.spv", issues::square)
+    // }
 
-    #[quickcheck]
-    fn compute_single_branch(input: Vec<f32>) -> TestResult {
-        compute(input, "../.shaders/single-branch.spv", issues::single_branch)
-    }
+    // #[quickcheck]
+    // fn compute_single_branch(input: Vec<f32>) -> TestResult {
+    //     compute(input, "../.shaders/single-branch.spv", issues::single_branch)
+    // }
     #[quickcheck]
     fn compute_single_branch_glsl(input: Vec<f32>) -> TestResult {
         //compute(input, "../.shaders/single-branch.spv", issues::single_branch)
