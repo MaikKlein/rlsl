@@ -2,6 +2,7 @@
 members = [
     "rlsl",
     "rlsl-math",
+    "rlsl-test",
     "issues",
     "quad2",
 ]

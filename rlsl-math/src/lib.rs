@@ -1,4 +1,5 @@
 #![feature(custom_attribute, attr_literals)]
+#![feature(core_intrinsics)]
 pub mod vector;
 pub mod intrinsics;
 pub mod num;

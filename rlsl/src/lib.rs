@@ -883,10 +883,10 @@ pub fn trans_spirv<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, items: &'a FxHashSet<M
     });
 
     //println!("{:#?}", ctx.intrinsic_fns);
-    // spirv_instances.iter().for_each(|scx| {
-    //     println!("{:#?}", scx.def_id);
-    //     println!("{:#?}", scx.mir);
-    // });
+    spirv_instances.iter().for_each(|scx| {
+        println!("{:#?}", scx.def_id);
+        println!("{:#?}", scx.mir);
+    });
     // write_dot(&instances);
     //spirv_instances.iter().for_each(|mcx| {
     //    //println!("{:#?}", mcx.mir());

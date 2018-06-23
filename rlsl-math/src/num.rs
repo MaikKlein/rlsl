@@ -13,3 +13,7 @@ impl Float for f32 {
     }
 }
 
+pub trait Array<T: Copy> {
+    fn get(&self, index: u32) -> T;
+    //fn len(&self) -> u32;
+}

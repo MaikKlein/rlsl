@@ -4,13 +4,10 @@ extern crate image;
 extern crate quad;
 #[macro_use]
 extern crate structopt;
-use clap::Shell;
-
 use quad::*;
 use std::fmt::Display;
 use std::fmt::{Debug, Error, Formatter};
-use std::path::Path;
-use std::path::PathBuf;
+use std::path::{PathBuf};
 use std::str::FromStr;
 use structopt::StructOpt;
 
@@ -60,9 +57,10 @@ enum Command {
 impl Opt {
     pub fn get_shader_path(&self) -> PathBuf {
         match self.compiler {
-            ShaderCompiler::Rlsl => Path::new("../.shaders/"),
-            ShaderCompiler::Glsl => Path::new("../.shaders-glsl/"),
-        }.into()
+            ShaderCompiler::Rlsl => PathBuf::from("./../.shaders/"),
+            ShaderCompiler::Glsl => PathBuf::from("./../.shaders-glsl/"),
+        }
+
     }
     pub fn get_entry_names(&self) -> (&str, &str) {
         match self.compiler {
@@ -74,7 +72,7 @@ impl Opt {
 
 fn main() {
     let opt = Opt::from_args();
-    let mut app = Opt::clap();
+    let app = Opt::clap();
     //app.gen_completions("myapp", Shell::Bash, "");
     let base_path = opt.get_shader_path();
     match opt.command {
@@ -82,6 +80,7 @@ fn main() {
             let mut quad = Quad::new();
             let vert_path = base_path.join("vertex.spv");
             let frag_path = base_path.join(&file).with_extension("spv");
+            println!("{:#?}", frag_path.canonicalize());
             let (vert_name, frag_name) = opt.get_entry_names();
             quad.render((vert_name, &vert_path), (frag_name, &frag_path));
         }
