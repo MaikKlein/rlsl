@@ -236,6 +236,10 @@ mod tests {
 
     #[quickcheck]
     fn compute_single_branch(input: Vec<f32>) -> TestResult {
+        compute(input, "../.shaders/single-branch.spv", issues::single_branch)
+    }
+    #[quickcheck]
+    fn compute_single_branch_glsl(input: Vec<f32>) -> TestResult {
         //compute(input, "../.shaders/single-branch.spv", issues::single_branch)
         compute(input, "../issues/.shaders-glsl/single-branch.spv", issues::single_branch)
     }
