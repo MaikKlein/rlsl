@@ -13,7 +13,7 @@ use std::mem::size_of;
 use std::fs;
 use std::path::Path;
 
-pub fn compute<T, P, F>(numbers: Vec<T>, path: P, f: F) -> TestResult
+pub fn compute<T, P, F>(name: &str, numbers: Vec<T>, path: P, f: F) -> TestResult
 where
     F: Fn(u32, T) -> T,
     P: AsRef<Path>,
@@ -64,7 +64,7 @@ where
 
         let pipeline_layout = device.create_pipeline_layout(Some(&set_layout), &[]);
         let entry_point = pso::EntryPoint {
-            entry: "main",
+            entry: name,
             module: &shader,
             specialization: &[],
         };
@@ -88,7 +88,7 @@ where
         (pipeline_layout, pipeline, set_layout, desc_pool)
     };
 
-    let (staging_memory, staging_buffer) = create_buffer::<back::Backend>(
+    let staging_buffer = create_buffer::<back::Backend>(
         &mut device,
         &memory_properties.memory_types,
         memory::Properties::CPU_VISIBLE | memory::Properties::COHERENT,
@@ -99,13 +99,13 @@ where
 
     {
         let mut writer = device
-            .acquire_mapping_writer::<T>(&staging_memory, 0..stride * numbers.len() as u64)
+            .acquire_mapping_writer::<T>(&staging_buffer.memory, 0..stride * numbers.len() as u64)
             .unwrap();
         writer.copy_from_slice(&numbers);
         device.release_mapping_writer(writer);
     }
 
-    let (device_memory, device_buffer) = create_buffer::<back::Backend>(
+    let device_buffer = create_buffer::<back::Backend>(
         &mut device,
         &memory_properties.memory_types,
         memory::Properties::DEVICE_LOCAL,
@@ -119,7 +119,7 @@ where
         set: &desc_set,
         binding: 0,
         array_offset: 0,
-        descriptors: Some(pso::Descriptor::Buffer(&device_buffer, None..None)),
+        descriptors: Some(pso::Descriptor::Buffer(&device_buffer.buffer, None..None)),
     }));
 
     let mut command_pool =
@@ -128,8 +128,8 @@ where
     let submission = queue::Submission::new().submit(Some({
         let mut command_buffer = command_pool.acquire_command_buffer(false);
         command_buffer.copy_buffer(
-            &staging_buffer,
-            &device_buffer,
+            &staging_buffer.buffer,
+            &device_buffer.buffer,
             &[command::BufferCopy {
                 src: 0,
                 dst: 0,
@@ -142,7 +142,7 @@ where
             Some(memory::Barrier::Buffer {
                 states: buffer::Access::TRANSFER_WRITE
                     ..buffer::Access::SHADER_READ | buffer::Access::SHADER_WRITE,
-                target: &device_buffer,
+                target: &device_buffer.buffer,
             }),
         );
         command_buffer.bind_compute_pipeline(&pipeline);
@@ -154,12 +154,12 @@ where
             Some(memory::Barrier::Buffer {
                 states: buffer::Access::SHADER_READ | buffer::Access::SHADER_WRITE
                     ..buffer::Access::TRANSFER_READ,
-                target: &device_buffer,
+                target: &device_buffer.buffer,
             }),
         );
         command_buffer.copy_buffer(
-            &device_buffer,
-            &staging_buffer,
+            &device_buffer.buffer,
+            &staging_buffer.buffer,
             &[command::BufferCopy {
                 src: 0,
                 dst: 0,
@@ -173,7 +173,7 @@ where
 
     let eq = {
         let reader = device
-            .acquire_mapping_reader::<T>(&staging_memory, 0..stride * numbers.len() as u64)
+            .acquire_mapping_reader::<T>(&staging_buffer.memory, 0..stride * numbers.len() as u64)
             .unwrap();
         let numbers_gpu = reader.into_iter().map(|n| *n).collect::<Vec<T>>();
         numbers_cpu.iter_mut().enumerate().for_each(|(index, val)| {
@@ -188,16 +188,23 @@ where
     device.destroy_descriptor_pool(desc_pool);
     device.destroy_descriptor_set_layout(set_layout);
     device.destroy_shader_module(shader);
-    device.destroy_buffer(device_buffer);
-    device.destroy_buffer(staging_buffer);
+    device.destroy_buffer(device_buffer.buffer);
+    device.destroy_buffer(staging_buffer.buffer);
     device.destroy_fence(fence);
     device.destroy_pipeline_layout(pipeline_layout);
-    device.free_memory(device_memory);
-    device.free_memory(staging_memory);
+    device.free_memory(device_buffer.memory);
+    device.free_memory(staging_buffer.memory);
     device.destroy_compute_pipeline(pipeline);
 
     TestResult::from_bool(eq)
 }
+
+pub struct Buffer<B: Backend> {
+    pub memory: B::Memory,
+    pub buffer: B::Buffer,
+    pub requirements: memory::Requirements
+}
+
 fn create_buffer<B: Backend>(
     device: &mut B::Device,
     memory_types: &[hal::MemoryType],
@@ -205,7 +212,7 @@ fn create_buffer<B: Backend>(
     usage: buffer::Usage,
     stride: u64,
     len: u64,
-) -> (B::Memory, B::Buffer) {
+) -> Buffer<B> {
     let buffer = device.create_buffer(stride * len, usage).unwrap();
     let requirements = device.get_buffer_requirements(&buffer);
 
@@ -221,7 +228,9 @@ fn create_buffer<B: Backend>(
     let memory = device.allocate_memory(ty, requirements.size).unwrap();
     let buffer = device.bind_buffer_memory(&memory, 0, buffer).unwrap();
 
-    (memory, buffer)
+    Buffer {
+        memory, buffer, requirements
+    }
 }
 
 #[cfg(test)]
@@ -234,13 +243,14 @@ mod tests {
     //     compute(input, "../.shaders/square.spv", issues::square)
     // }
 
-    // #[quickcheck]
-    // fn compute_single_branch(input: Vec<f32>) -> TestResult {
-    //     compute(input, "../.shaders/single-branch.spv", issues::single_branch)
-    // }
+    #[quickcheck]
+    fn compute_single_branch(input: Vec<f32>) -> TestResult {
+        compute("compute", input, "../.shaders/single-branch.spv", issues::single_branch)
+    }
+
     #[quickcheck]
     fn compute_single_branch_glsl(input: Vec<f32>) -> TestResult {
         //compute(input, "../.shaders/single-branch.spv", issues::single_branch)
-        compute(input, "../issues/.shaders-glsl/single-branch.spv", issues::single_branch)
+        compute("main", input, "../issues/.shaders-glsl/single-branch.spv", issues::single_branch)
     }
 }

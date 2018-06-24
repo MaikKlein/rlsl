@@ -1876,6 +1876,7 @@ impl<'b, 'a, 'tcx> FunctionCx<'b, 'a, 'tcx> {
         l: &mir::Operand<'tcx>,
         r: &mir::Operand<'tcx>,
     ) -> Value {
+        let spirv_return_ty = self.to_ty_fn(return_ty);
         let ty = l.ty(&self.mcx.mir().local_decls, self.mcx.tcx);
         // TODO: Different types
         let spirv_ty = self.to_ty_fn(ty);
@@ -1935,17 +1936,17 @@ impl<'b, 'a, 'tcx> FunctionCx<'b, 'a, 'tcx> {
                             TypeVariants::TyInt(_) => self
                                 .scx
                                 .builder
-                                .sgreater_than(spirv_ty.word, None, left, right)
+                                .sgreater_than(spirv_return_ty.word, None, left, right)
                                 .expect("g"),
                                 TypeVariants::TyUint(_) | TypeVariants::TyBool => self
                                     .scx
                                     .builder
-                                    .ugreater_than(spirv_ty.word, None, left, right)
+                                    .ugreater_than(spirv_return_ty.word, None, left, right)
                                     .expect("g"),
                                 TypeVariants::TyFloat(_) => self
                                     .scx
                                     .builder
-                                    .ford_greater_than(spirv_ty.word, None, left, right)
+                                    .ford_greater_than(spirv_return_ty.word, None, left, right)
                                     .expect("g"),
                                     ref rest => unimplemented!("{:?}", rest),
                         };
