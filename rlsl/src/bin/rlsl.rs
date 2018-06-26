@@ -31,6 +31,118 @@ use rustc_driver::RustcDefaultCalls;
 use rustc_driver::{run, run_compiler, Compilation, CompilerCalls};
 use rustc_mir::monomorphize::collector::{collect_crate_mono_items, MonoItemCollectionMode};
 struct RlslCompilerCalls;
+impl RlslCompilerCalls {
+    fn print_crate_info(codegen_backend: &CodegenBackend,
+                        sess: &Session,
+                        input: Option<&Input>,
+                        odir: &Option<PathBuf>,
+                        ofile: &Option<PathBuf>)
+                        -> Compilation {
+        use rustc::session::config::PrintRequest::*;
+        // PrintRequest::NativeStaticLibs is special - printed during linking
+        // (empty iterator returns true)
+        if sess.opts.prints.iter().all(|&p| p==PrintRequest::NativeStaticLibs) {
+            return Compilation::Continue;
+        }
+
+        let attrs = match input {
+            None => None,
+            Some(input) => {
+                let result = parse_crate_attrs(sess, input);
+                match result {
+                    Ok(attrs) => Some(attrs),
+                    Err(mut parse_error) => {
+                        parse_error.emit();
+                        return Compilation::Stop;
+                    }
+                }
+            }
+        };
+        for req in &sess.opts.prints {
+            match *req {
+                TargetList => {
+                    let mut targets = rustc_target::spec::get_targets().collect::<Vec<String>>();
+                    targets.sort();
+                    println!("{}", targets.join("\n"));
+                },
+                Sysroot => println!("{}", sess.sysroot().display()),
+                TargetSpec => println!("{}", sess.target.target.to_json().pretty()),
+                FileNames | CrateName => {
+                    let input = match input {
+                        Some(input) => input,
+                        None => early_error(ErrorOutputType::default(), "no input file provided"),
+                    };
+                    let attrs = attrs.as_ref().unwrap();
+                    let t_outputs = driver::build_output_filenames(input, odir, ofile, attrs, sess);
+                    let id = rustc_codegen_utils::link::find_crate_name(Some(sess), attrs, input);
+                    if *req == PrintRequest::CrateName {
+                        println!("{}", id);
+                        continue;
+                    }
+                    let crate_types = driver::collect_crate_types(sess, attrs);
+                    for &style in &crate_types {
+                        let fname = rustc_codegen_utils::link::filename_for_input(
+                            sess,
+                            style,
+                            &id,
+                            &t_outputs
+                        );
+                        println!("{}",
+                                 fname.file_name()
+                                      .unwrap()
+                                      .to_string_lossy());
+                    }
+                }
+                Cfg => {
+                    let allow_unstable_cfg = UnstableFeatures::from_environment()
+                        .is_nightly_build();
+
+                    let mut cfgs = Vec::new();
+                    for &(name, ref value) in sess.parse_sess.config.iter() {
+                        let gated_cfg = GatedCfg::gate(&ast::MetaItem {
+                            ident: ast::Path::from_ident(name.to_ident()),
+                            node: ast::MetaItemKind::Word,
+                            span: DUMMY_SP,
+                        });
+
+                        // Note that crt-static is a specially recognized cfg
+                        // directive that's printed out here as part of
+                        // rust-lang/rust#37406, but in general the
+                        // `target_feature` cfg is gated under
+                        // rust-lang/rust#29717. For now this is just
+                        // specifically allowing the crt-static cfg and that's
+                        // it, this is intended to get into Cargo and then go
+                        // through to build scripts.
+                        let value = value.as_ref().map(|s| s.as_str());
+                        let value = value.as_ref().map(|s| s.as_ref());
+                        if name != "target_feature" || value != Some("crt-static") {
+                            if !allow_unstable_cfg && gated_cfg.is_some() {
+                                continue;
+                            }
+                        }
+
+                        cfgs.push(if let Some(value) = value {
+                            format!("{}=\"{}\"", name, value)
+                        } else {
+                            format!("{}", name)
+                        });
+                    }
+
+                    cfgs.sort();
+                    for cfg in cfgs {
+                        println!("{}", cfg);
+                    }
+                }
+                RelocationModels | CodeModels | TlsModels | TargetCPUs | TargetFeatures => {
+                    codegen_backend.print(*req, sess);
+                }
+                // Any output here interferes with Cargo's parsing of other printed output
+                PrintRequest::NativeStaticLibs => {}
+            }
+        }
+        return Compilation::Stop;
+    }
+}
 
 use rustc::session::config::{self, ErrorOutputType, Input};
 use rustc_errors as errors;

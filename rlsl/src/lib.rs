@@ -1407,17 +1407,23 @@ impl<'b, 'a, 'tcx> rustc::mir::visit::Visitor<'tcx> for FunctionCx<'b, 'a, 'tcx>
     fn visit_mir(&mut self, mir: &mir::Mir<'tcx>) {
         use mir::traversal::reverse_postorder;
         let order = reverse_postorder(mir);
+        if let Some(yield_ty) = &mir.yield_ty {
+            self.visit_ty(yield_ty, mir::visit::TyContext::YieldTy(mir::SourceInfo {
+                span: mir.span,
+                scope: mir::OUTERMOST_SOURCE_SCOPE,
+            }));
+        }
         for (bb, data) in order {
             self.visit_basic_block_data(bb, &data);
         }
 
-        for scope in &mir.visibility_scopes {
-            self.visit_visibility_scope_data(scope);
+        for scope in &mir.source_scopes {
+            self.visit_source_scope_data(scope);
         }
 
         let lookup = mir::visit::TyContext::ReturnTy(mir::SourceInfo {
             span: mir.span,
-            scope: mir::ARGUMENT_VISIBILITY_SCOPE,
+            scope: mir::OUTERMOST_SOURCE_SCOPE,
         });
         self.visit_ty(&mir.return_ty(), lookup);
 

@@ -15,6 +15,18 @@ use ConstructTy;
 use {Enum, Variable};
 use {Function, FunctionCall, Intrinsic, IntrinsicType, Ty, Value};
 
+trait ToParamEnvAnd<'tcx, T> {
+    fn to_param_env_and(self) -> ty::ParamEnvAnd<'tcx, ty::Ty<'tcx>>;
+}
+impl<'tcx> ToParamEnvAnd<'tcx, ty::Ty<'tcx>> for ty::Ty<'tcx> {
+    fn to_param_env_and(self) -> ty::ParamEnvAnd<'tcx, ty::Ty<'tcx>> {
+        ty::ParamEnvAnd{
+            param_env: ty::ParamEnv::reveal_all(),
+            value: self
+        }
+    }
+}
+
 pub struct CodegenCx<'a, 'tcx: 'a> {
     per_vertex: Option<Variable<'tcx>>,
     per_fragment: Option<Variable<'tcx>>,
@@ -53,12 +65,12 @@ impl<'a, 'tcx> CodegenCx<'a, 'tcx> {
     }
 
     pub fn constant_f32(&mut self, value: f32) -> Value {
-        let val = ty::Const::from_bits(self.tcx, value.to_bits() as u128, self.tcx.types.f32);
+        let val = ty::Const::from_bits(self.tcx, value.to_bits() as u128, self.tcx.types.f32.to_param_env_and());
         self.constant(val)
     }
 
     pub fn constant_u32(&mut self, value: u32) -> Value {
-        let val = ty::Const::from_bits(self.tcx, value as u128, self.tcx.types.u32);
+        let val = ty::Const::from_bits(self.tcx, value as u128, self.tcx.types.u32.to_param_env_and());
         self.constant(val)
     }
 
@@ -69,13 +81,13 @@ impl<'a, 'tcx> CodegenCx<'a, 'tcx> {
         let const_ty = const_val.ty;
         let spirv_val = match const_ty.sty {
             ty::TypeVariants::TyUint(_) | ty::TypeVariants::TyBool => {
-                let value = const_val.to_bits(const_ty).expect("bits from const");
+                let value = const_val.to_bits(self.tcx, const_ty.to_param_env_and()).expect("bits from const");
                 // [FIXME] Storageptr
                 let spirv_ty = self.to_ty_fn(const_ty);
                 self.builder.constant_u32(spirv_ty.word, value as u32)
             }
             ty::TypeVariants::TyFloat(_) => {
-                let value = const_val.to_bits(const_ty).expect("bits from const");
+                let value = const_val.to_bits(self.tcx, const_ty.to_param_env_and()).expect("bits from const");
                 let spirv_ty = self.to_ty_fn(const_ty);
                 self.builder
                     .constant_f32(spirv_ty.word, f32::from_bits(value as u32))
@@ -214,7 +226,7 @@ impl<'a, 'tcx> CodegenCx<'a, 'tcx> {
                                             self.builder.member_name(
                                                 spirv_struct,
                                                 index as u32,
-                                                field.name.as_str().to_string(),
+                                                field.ident.as_str().to_string(),
                                             );
                                         }
                                         self.name_from_def_id(variant.did, spirv_struct);
@@ -230,7 +242,7 @@ impl<'a, 'tcx> CodegenCx<'a, 'tcx> {
                                     self.builder.member_name(
                                         spirv_struct,
                                         index as u32,
-                                        field.name.as_str().to_string(),
+                                        field.ident.as_str().to_string(),
                                     );
                                 }
                                 self.name_from_def_id(adt.did, spirv_struct);
@@ -322,7 +334,7 @@ impl<'a, 'tcx> CodegenCx<'a, 'tcx> {
                                     self.builder.member_name(
                                         spirv_struct,
                                         index as u32,
-                                        field.name.as_str().to_string(),
+                                        field.ident.as_str().to_string(),
                                     );
                                 }
                             }
@@ -582,7 +594,7 @@ impl<'a, 'tcx> SpirvMir<'a, 'tcx> {
                 let terminator = mir::Terminator {
                     source_info: mir::SourceInfo {
                         span: DUMMY_SP,
-                        scope: mir::ARGUMENT_VISIBILITY_SCOPE,
+                        scope: mir::OUTERMOST_SOURCE_SCOPE,
                     },
                     kind: mir::TerminatorKind::Goto {
                         target: merge_block,
