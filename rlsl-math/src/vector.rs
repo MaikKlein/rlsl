@@ -1,5 +1,6 @@
 use std::ops::{Add, Mul};
 use num::Float;
+
 #[spirv(Vec4)]
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -153,6 +154,7 @@ impl<T: Float> Vector for Vec2<T> {
         self.x * other.x + self.y * other.y
     }
 }
+vec_impl_op!(Vec2 { x, y }, Add, add, +);
 
 pub trait Vector
 where

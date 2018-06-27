@@ -867,6 +867,11 @@ pub fn trans_spirv<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, items: &'a FxHashSet<M
         .map(|mcx| context::SpirvMir::from_mir(mcx))
         .collect();
 
+    spirv_instances.iter().for_each(|scx| {
+        println!("{:#?}", scx.def_id);
+        println!("{:#?}", scx.mir);
+    });
+
     // Finds functions that return a reference
     let fn_refs_def_id: Vec<_> = spirv_instances
         .iter()
@@ -875,6 +880,7 @@ pub fn trans_spirv<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, items: &'a FxHashSet<M
         .collect();
     // Inline all functions calls of functions that return a reference
     fn_refs_def_id.iter().for_each(|&def_id| {
+        println!("{:?}", def_id);
         spirv_instances.iter_mut().for_each(|scx| {
             let mir_source = MirSource {
                 def_id,
@@ -891,10 +897,6 @@ pub fn trans_spirv<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, items: &'a FxHashSet<M
     });
 
     //println!("{:#?}", ctx.intrinsic_fns);
-    spirv_instances.iter().for_each(|scx| {
-        println!("{:#?}", scx.def_id);
-        println!("{:#?}", scx.mir);
-    });
     // write_dot(&instances);
     //spirv_instances.iter().for_each(|mcx| {
     //    //println!("{:#?}", mcx.mir());
@@ -1900,6 +1902,25 @@ impl<'b, 'a, 'tcx> FunctionCx<'b, 'a, 'tcx> {
         match ty.sty {
             ty::TypeVariants::TyUint(_) => {
                 match op {
+                    mir::BinOp::Add => {
+                        println!("OP: {:?}", return_ty);
+                        let tup = self.scx.tcx.mk_tup([ty, ty].iter());
+                        let spirv_tup = self.to_ty_fn(tup);
+                        println!("tup: {:?}", tup);
+                        let add = self
+                            .scx
+                            .builder
+                            .iadd_carry(spirv_tup.word, None, left, right)
+                            .expect("fmul");
+                        let value = self.scx.builder.composite_extract(spirv_ty.word, None, add, &[ 0 ]).expect("extract");
+                        let carry_u32 = self.scx.builder.composite_extract(spirv_ty.word, None, add, &[ 1 ]).expect("extract");
+                        let bool_ty = self.scx.tcx.types.bool;
+                        let spirv_bool = self.to_ty_fn(bool_ty);
+                        let carry_bool = self.scx.builder.bitcast(spirv_bool.word, None, carry_u32).expect("failed to bitcast");
+                        let s = self.scx.builder.composite_construct(spirv_return_ty.word, None, &[value, carry_bool]).expect("c");
+                        //let cast = self.scx.builder.bitcast(spirv_return_ty.word, None, add).expect("bitcast");
+                        Value::new(s)
+                    }
                     mir::BinOp::Mul => {
                         let mul = self
                             .scx

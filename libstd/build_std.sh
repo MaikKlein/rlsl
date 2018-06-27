@@ -1,0 +1,1 @@
+XARGO_RUST_SRC=${PWD}/../rlsl/compiler/rust/src RUSTFLAGS='-Z always-encode-mir' rustup run rlsl xargo build --release --manifest-path Cargo.toml && cp -f ../target/release/libstd.rlib $HOME/.rlsl/lib && cp -f $HOME/.xargo/HOST/lib/rustlib/x86_64-unknown-linux-gnu/lib/libcore-*.rlib $HOME/.rlsl/lib/libcore.rlib
