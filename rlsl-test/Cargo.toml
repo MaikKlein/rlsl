@@ -8,4 +8,3 @@ gfx-hal = {git = "https://github.com/MaikKlein/gfx-rs"}
 gfx-backend-vulkan = {git = "https://github.com/MaikKlein/gfx-rs"}
 issues = {path = "../issues"}
 quickcheck = "0.6"
-quickcheck_macros = "0.6"

@@ -20,9 +20,9 @@ trait ToParamEnvAnd<'tcx, T> {
 }
 impl<'tcx> ToParamEnvAnd<'tcx, ty::Ty<'tcx>> for ty::Ty<'tcx> {
     fn to_param_env_and(self) -> ty::ParamEnvAnd<'tcx, ty::Ty<'tcx>> {
-        ty::ParamEnvAnd{
+        ty::ParamEnvAnd {
             param_env: ty::ParamEnv::reveal_all(),
-            value: self
+            value: self,
         }
     }
 }
@@ -65,12 +65,20 @@ impl<'a, 'tcx> CodegenCx<'a, 'tcx> {
     }
 
     pub fn constant_f32(&mut self, value: f32) -> Value {
-        let val = ty::Const::from_bits(self.tcx, value.to_bits() as u128, self.tcx.types.f32.to_param_env_and());
+        let val = ty::Const::from_bits(
+            self.tcx,
+            value.to_bits() as u128,
+            self.tcx.types.f32.to_param_env_and(),
+        );
         self.constant(val)
     }
 
     pub fn constant_u32(&mut self, value: u32) -> Value {
-        let val = ty::Const::from_bits(self.tcx, value as u128, self.tcx.types.u32.to_param_env_and());
+        let val = ty::Const::from_bits(
+            self.tcx,
+            value as u128,
+            self.tcx.types.u32.to_param_env_and(),
+        );
         self.constant(val)
     }
 
@@ -81,13 +89,17 @@ impl<'a, 'tcx> CodegenCx<'a, 'tcx> {
         let const_ty = const_val.ty;
         let spirv_val = match const_ty.sty {
             ty::TypeVariants::TyUint(_) | ty::TypeVariants::TyBool => {
-                let value = const_val.to_bits(self.tcx, const_ty.to_param_env_and()).expect("bits from const");
+                let value = const_val
+                    .to_bits(self.tcx, const_ty.to_param_env_and())
+                    .expect("bits from const");
                 // [FIXME] Storageptr
                 let spirv_ty = self.to_ty_fn(const_ty);
                 self.builder.constant_u32(spirv_ty.word, value as u32)
             }
             ty::TypeVariants::TyFloat(_) => {
-                let value = const_val.to_bits(self.tcx, const_ty.to_param_env_and()).expect("bits from const");
+                let value = const_val
+                    .to_bits(self.tcx, const_ty.to_param_env_and())
+                    .expect("bits from const");
                 let spirv_ty = self.to_ty_fn(const_ty);
                 self.builder
                     .constant_f32(spirv_ty.word, f32::from_bits(value as u32))
@@ -403,7 +415,10 @@ impl<'a, 'tcx> CodegenCx<'a, 'tcx> {
         use std::io::Write;
         use std::mem::size_of;
         let mut f = File::create(file_name.as_ref()).unwrap();
-        let spirv_module = self.builder.module();
+        let mut spirv_module = self.builder.module();
+        if let Some(header) = spirv_module.header.as_mut() {
+            header.set_version(1, 0);
+        }
         let bytes: Vec<u8> = spirv_module
             .assemble()
             .iter()

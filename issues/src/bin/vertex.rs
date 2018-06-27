@@ -1,10 +1,10 @@
 #![feature(custom_attribute)]
 extern crate rlsl_math;
 use rlsl_math::prelude::*;
-#[inline(always)]
-fn id(i: &u32) -> &u32 {
-    i
-}
+// #[inline(always)]
+// fn id(i: &u32) -> &u32 {
+//     i
+// }
 #[spirv(vertex)]
 fn vertex(
     vertex: &mut Vertex,

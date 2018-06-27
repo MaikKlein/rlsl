@@ -58,7 +58,7 @@ impl Opt {
     pub fn get_shader_path(&self) -> PathBuf {
         match self.compiler {
             ShaderCompiler::Rlsl => PathBuf::from("./../.shaders/"),
-            ShaderCompiler::Glsl => PathBuf::from("./../.shaders-glsl/"),
+            ShaderCompiler::Glsl => PathBuf::from("./../issues/.shaders-glsl/"),
         }
 
     }
@@ -85,7 +85,7 @@ fn main() {
             quad.render((vert_name, &vert_path), (frag_name, &frag_path));
         }
         Command::Compute => {
-            compute::compute();
+            //compute::compute();
         }
         Command::Compile => {
             //quad.compile_all(&base_path);

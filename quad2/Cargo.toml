@@ -7,7 +7,8 @@ build = "build.rs"
 [dependencies]
 winit = "0.11.1"
 image = "0.10.4"
-ash = {path = "/home/maik/projects/ash/ash"}
+ash = "0.24"
+#ash = {path = "/home/maik/projects/ash/ash"}
 clap = "*"
 structopt = "*"
 gfx-hal = {git = "https://github.com/MaikKlein/gfx-rs"}

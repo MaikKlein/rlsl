@@ -1,6 +1,5 @@
-#![feature(plugin)]
-#![plugin(quickcheck_macros)]
 extern crate gfx_backend_vulkan as back;
+#[macro_use]
 extern crate quickcheck;
 //extern crate glsl_to_spirv;
 extern crate gfx_hal as hal;
@@ -238,19 +237,18 @@ mod tests {
     use compute;
     use issues;
     use quickcheck::TestResult;
-    // #[quickcheck]
-    // fn compute_square(input: Vec<f32>) -> TestResult {
-    //     compute(input, "../.shaders/square.spv", issues::square)
-    // }
+    quickcheck! {
+        fn compute_square(input: Vec<f32>) -> TestResult {
+            compute("compute", input, "../.shaders/square.spv", issues::square)
+        }
 
-    #[quickcheck]
-    fn compute_single_branch(input: Vec<f32>) -> TestResult {
-        compute("compute", input, "../.shaders/single-branch.spv", issues::single_branch)
+        fn compute_single_branch(input: Vec<f32>) -> TestResult {
+            compute("compute", input, "../.shaders/single-branch.spv", issues::single_branch)
+        }
+
+        fn compute_single_branch_glsl(input: Vec<f32>) -> TestResult {
+            compute("main", input, "../issues/.shaders-glsl/single-branch.spv", issues::single_branch)
+        }
     }
 
-    #[quickcheck]
-    fn compute_single_branch_glsl(input: Vec<f32>) -> TestResult {
-        //compute(input, "../.shaders/single-branch.spv", issues::single_branch)
-        compute("main", input, "../issues/.shaders-glsl/single-branch.spv", issues::single_branch)
-    }
 }

@@ -6,6 +6,7 @@
 #![feature(core_panic)]
 #![feature(prelude_import)]
 #![feature(custom_attribute, attr_literals)]
+#![feature(panic_implementation)]
 
 //#[macro_reexport(assert, assert_eq, assert_ne, debug_assert, debug_assert_eq, debug_assert_ne, unreachable, unimplemented, write, writeln, try)]
 extern crate core as __core;
@@ -41,6 +42,7 @@ pub mod intrinsics {
         pub fn cosf32(x: f32) -> f32;
         pub fn sinf32(x: f32) -> f32;
         pub fn absf32(x: f32) -> f32;
+        pub fn fractf32(f: f32) -> f32;
     }
 }
 
@@ -67,14 +69,32 @@ pub mod f32 {
         pub fn abs(self) -> f32 {
             unsafe { intrinsics::absf32(self) }
         }
+
+        #[inline]
+        pub fn fract(self) -> f32 {
+            unsafe { intrinsics::fractf32(self) }
+        }
     }
 }
 #[lang = "eh_personality"]
 pub extern "C" fn eh_personality() {}
-#[lang = "panic_fmt"]
-pub extern "C" fn rust_begin_panic() -> ! {
+// #[lang = "panic_fmt"]
+// pub extern "C" fn rust_begin_panic() -> ! {
+//     unsafe { intrinsics::abort() }
+// }
+#[panic_implementation]
+#[unwind(allowed)]
+pub fn rust_begin_panic(info: &core::panic::PanicInfo) -> ! {
     unsafe { intrinsics::abort() }
 }
+// #[lang = "panic_fmt"]
+// #[no_mangle]
+// pub extern fn rust_begin_panic(_msg: core::fmt::Arguments,
+//                                _file: &'static str,
+//                                _line: u32,
+//                                _column: u32) -> ! {
+//     unsafe { intrinsics::abort() }
+// }
 #[lang = "start"]
 fn lang_start(main: fn(), argc: isize, argv: *const *const u8) -> isize {
     0

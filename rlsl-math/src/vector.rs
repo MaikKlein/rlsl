@@ -106,6 +106,20 @@ pub struct Vec2<T> {
     pub y: T,
 }
 impl<T: Float> Vec2<T> {
+    pub fn new(x: T, y: T) -> Vec2<T> {
+        Vec2 {
+            x,
+            y
+        }
+    }
+    pub fn single(val: T) -> Vec2<T> {
+        Vec2{
+            x: val,
+            y: val
+        }
+    }
+}
+impl<T: Float> Vec2<T> {
     pub fn dot(self, other: Self) -> T {
         <Self as Vector>::dot(self, other)
     }
@@ -136,7 +150,7 @@ impl<T: Float> Vector for Vec2<T> {
     const DIM: usize = 2;
     #[inline(always)]
     fn dot(self, other: Self) -> T {
-        self.x * other.y + self.y + other.y
+        self.x * other.x + self.y * other.y
     }
 }
 

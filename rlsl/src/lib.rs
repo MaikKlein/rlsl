@@ -805,29 +805,37 @@ pub fn trans_spirv<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, items: &'a FxHashSet<M
             None
         })
         .collect();
-    instances.iter().for_each(|mcx| {
-        use spirv::GLOp::*;
-        let intrinsic_name: String = tcx.item_name(mcx.def_id).into();
-        let id = match intrinsic_name.as_str() {
-            "sqrtf32" => Some(Sqrt),
-            "sinf32" => Some(Sin),
-            "cosf32" => Some(Cos),
-            "absf32" => Some(FAbs),
-            _ => None,
-        };
-        if let Some(id) = id {
-            ctx.intrinsic_fns
-                .insert(mcx.def_id, Intrinsic::GlslExt(id as u32));
-        }
-        let abort = match intrinsic_name.as_str() {
-            "abort" => Some(Intrinsic::Abort),
-            "spirv_discard" => Some(Intrinsic::Discard),
-            _ => None,
-        };
-        if let Some(abort) = abort {
-            ctx.intrinsic_fns.insert(mcx.def_id, abort);
-        }
-    });
+        items
+        .iter()
+        .for_each(|item| {
+            use spirv::GLOp::*;
+            if let &MonoItem::Fn(ref instance) = item {
+                let def_id = instance.def_id();
+                if tcx.is_foreign_item(def_id){
+                    let intrinsic_name: String = tcx.item_name(def_id).into();
+                    let id = match intrinsic_name.as_str() {
+                        "sqrtf32" => Some(Sqrt),
+                        "sinf32" => Some(Sin),
+                        "cosf32" => Some(Cos),
+                        "absf32" => Some(FAbs),
+                        "fractf32" => Some(Fract),
+                        _ => None,
+                    };
+                    if let Some(id) = id {
+                        ctx.intrinsic_fns
+                            .insert(def_id, Intrinsic::GlslExt(id as u32));
+                    }
+                    let abort = match intrinsic_name.as_str() {
+                        "abort" => Some(Intrinsic::Abort),
+                        "spirv_discard" => Some(Intrinsic::Discard),
+                        _ => None,
+                    };
+                    if let Some(abort) = abort {
+                        ctx.intrinsic_fns.insert(def_id, abort);
+                    }
+                }
+            }
+        });
 
     // Insert all the generic intrinsics, that can't be defined in an extern
     // block

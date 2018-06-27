@@ -14,7 +14,6 @@ extern crate winit;
 extern crate gfx_backend_vulkan as back;
 //extern crate glsl_to_spirv;
 extern crate gfx_hal as hal;
-pub mod compute;
 use ash::extensions::{DebugReport, Surface, Swapchain, Win32Surface, XlibSurface};
 use ash::util::Align;
 pub use ash::version::{DeviceV1_0, EntryV1_0, InstanceV1_0, V1_0};
@@ -133,8 +132,8 @@ impl GraphicsPipeline {
         vertex_info: (&str, &Path),
         fragment_info: (&str, &Path),
     ) -> vk::Pipeline {
-        let vertex_entry_name = CString::new(vertex_info.0).unwrap();
-        let frag_entry_name = CString::new(fragment_info.0).unwrap();
+        let vertex_entry_name = CString::new(vertex_info.0).expect("vertex name");
+        let frag_entry_name = CString::new(fragment_info.0).expect("frag name");
         let shader_module_vertex = load_shader(vertex_info.1, device);
         let shader_module = load_shader(fragment_info.1, &device);
         let shader_stage_create_infos = [
@@ -326,7 +325,7 @@ impl GraphicsPipeline {
                     &[graphic_pipeline_info],
                     None,
                 )
-                .unwrap();
+                .expect("pipeline");
 
             graphics_pipelines[0]
         }
@@ -1061,7 +1060,7 @@ unsafe extern "system" fn vulkan_debug_callback(
     _: *mut vk::c_void,
 ) -> u32 {
     println!("{:?}", CStr::from_ptr(p_message));
-    1
+    0
 }
 
 pub fn find_memorytype_index(
@@ -1236,6 +1235,7 @@ impl ExampleBase {
             let raw_name = app_name.as_ptr();
 
             let layer_names = [CString::new("VK_LAYER_LUNARG_standard_validation").unwrap()];
+            //let layer_names: [CString;0] = [];
             let layers_names_raw: Vec<*const i8> = layer_names
                 .iter()
                 .map(|raw_name| raw_name.as_ptr())
@@ -1248,7 +1248,7 @@ impl ExampleBase {
                 application_version: 0,
                 p_engine_name: raw_name,
                 engine_version: 0,
-                api_version: vk_make_version!(1, 0, 36),
+                api_version: vk_make_version!(1, 1, 0),
             };
             let create_info = vk::InstanceCreateInfo {
                 s_type: vk::StructureType::InstanceCreateInfo,
