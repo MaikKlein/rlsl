@@ -1,4 +1,3 @@
-use std::ops::{Add, Mul};
 use num::Float;
 
 #[spirv(Vec4)]
@@ -154,7 +153,6 @@ impl<T: Float> Vector for Vec2<T> {
         self.x * other.x + self.y * other.y
     }
 }
-vec_impl_op!(Vec2 { x, y }, Add, add, +);
 
 pub trait Vector
 where
@@ -167,5 +165,14 @@ where
         self.dot(self).sqrt()
     }
 }
+
+
+vec_ops_vec!(Vec2 { x, y });
+vec_ops_vec!(Vec3 { x, y, z });
+vec_ops_vec!(Vec4 { x, y, z, w });
+
+vec_ops_scalar!(Vec2 { x, y });
+vec_ops_scalar!(Vec3 { x, y, z });
+vec_ops_scalar!(Vec4 { x, y, z, w });
 
 
