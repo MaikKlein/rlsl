@@ -241,17 +241,17 @@ mod tests {
         fn compute_u32_add(input: Vec<f32>) -> TestResult {
             compute("compute", input, "../.shaders/u32-add.spv", issues::u32_add)
         }
-        // fn compute_square(input: Vec<f32>) -> TestResult {
-        //     compute("compute", input, "../.shaders/square.spv", issues::square)
-        // }
+        fn compute_square(input: Vec<f32>) -> TestResult {
+            compute("compute", input, "../.shaders/square.spv", issues::square)
+        }
 
-        // fn compute_single_branch(input: Vec<f32>) -> TestResult {
-        //     compute("compute", input, "../.shaders/single-branch.spv", issues::single_branch)
-        // }
+        fn compute_single_branch(input: Vec<f32>) -> TestResult {
+            compute("compute", input, "../.shaders/single-branch.spv", issues::single_branch)
+        }
 
-        // fn compute_single_branch_glsl(input: Vec<f32>) -> TestResult {
-        //     compute("main", input, "../issues/.shaders-glsl/single-branch.spv", issues::single_branch)
-        // }
+        fn compute_single_branch_glsl(input: Vec<f32>) -> TestResult {
+            compute("main", input, "../issues/.shaders-glsl/single-branch.spv", issues::single_branch)
+        }
     }
 
 }

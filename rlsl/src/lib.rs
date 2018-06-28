@@ -666,10 +666,11 @@ impl<'tcx> IntrinsicType<'tcx> {
                 let spirv_ty = cx.to_ty(rt_array.ty, storage_class);
                 let ty: spirv::Word = cx.builder.type_runtime_array(spirv_ty.word);
                 let layout = std430_layout(cx.tcx, rt_array.ty).expect("Should have layout");
-                cx.builder
-                    .decorate(ty, spirv::Decoration::ArrayStride, 
-                                            &[rspirv::mr::Operand::LiteralInt32(layout.size() as u32)],
-);
+                cx.builder.decorate(
+                    ty,
+                    spirv::Decoration::ArrayStride,
+                    &[rspirv::mr::Operand::LiteralInt32(layout.size() as u32)],
+                );
                 Ty::new(ty, rt_array.ty)
             }
             _ => unimplemented!(),
@@ -805,37 +806,35 @@ pub fn trans_spirv<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, items: &'a FxHashSet<M
             None
         })
         .collect();
-        items
-        .iter()
-        .for_each(|item| {
-            use spirv::GLOp::*;
-            if let &MonoItem::Fn(ref instance) = item {
-                let def_id = instance.def_id();
-                if tcx.is_foreign_item(def_id){
-                    let intrinsic_name: String = tcx.item_name(def_id).into();
-                    let id = match intrinsic_name.as_str() {
-                        "sqrtf32" => Some(Sqrt),
-                        "sinf32" => Some(Sin),
-                        "cosf32" => Some(Cos),
-                        "absf32" => Some(FAbs),
-                        "fractf32" => Some(Fract),
-                        _ => None,
-                    };
-                    if let Some(id) = id {
-                        ctx.intrinsic_fns
-                            .insert(def_id, Intrinsic::GlslExt(id as u32));
-                    }
-                    let abort = match intrinsic_name.as_str() {
-                        "abort" => Some(Intrinsic::Abort),
-                        "spirv_discard" => Some(Intrinsic::Discard),
-                        _ => None,
-                    };
-                    if let Some(abort) = abort {
-                        ctx.intrinsic_fns.insert(def_id, abort);
-                    }
+    items.iter().for_each(|item| {
+        use spirv::GLOp::*;
+        if let &MonoItem::Fn(ref instance) = item {
+            let def_id = instance.def_id();
+            if tcx.is_foreign_item(def_id) {
+                let intrinsic_name: String = tcx.item_name(def_id).into();
+                let id = match intrinsic_name.as_str() {
+                    "sqrtf32" => Some(Sqrt),
+                    "sinf32" => Some(Sin),
+                    "cosf32" => Some(Cos),
+                    "absf32" => Some(FAbs),
+                    "fractf32" => Some(Fract),
+                    _ => None,
+                };
+                if let Some(id) = id {
+                    ctx.intrinsic_fns
+                        .insert(def_id, Intrinsic::GlslExt(id as u32));
+                }
+                let abort = match intrinsic_name.as_str() {
+                    "abort" => Some(Intrinsic::Abort),
+                    "spirv_discard" => Some(Intrinsic::Discard),
+                    _ => None,
+                };
+                if let Some(abort) = abort {
+                    ctx.intrinsic_fns.insert(def_id, abort);
                 }
             }
-        });
+        }
+    });
 
     // Insert all the generic intrinsics, that can't be defined in an extern
     // block
@@ -867,10 +866,10 @@ pub fn trans_spirv<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, items: &'a FxHashSet<M
         .map(|mcx| context::SpirvMir::from_mir(mcx))
         .collect();
 
-    spirv_instances.iter().for_each(|scx| {
-        println!("{:#?}", scx.def_id);
-        println!("{:#?}", scx.mir);
-    });
+    // spirv_instances.iter().for_each(|scx| {
+    //     println!("{:#?}", scx.def_id);
+    //     println!("{:#?}", scx.mir);
+    // });
 
     // Finds functions that return a reference
     let fn_refs_def_id: Vec<_> = spirv_instances
@@ -880,7 +879,6 @@ pub fn trans_spirv<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, items: &'a FxHashSet<M
         .collect();
     // Inline all functions calls of functions that return a reference
     fn_refs_def_id.iter().for_each(|&def_id| {
-        println!("{:?}", def_id);
         spirv_instances.iter_mut().for_each(|scx| {
             let mir_source = MirSource {
                 def_id,
@@ -1041,6 +1039,7 @@ impl<'b, 'a, 'tcx> FunctionCx<'b, 'a, 'tcx> {
                 Param::alloca(scx, local_ty)
             })
             .collect();
+        //println!("{:?} {:#?}", def_id, params);
         scx.builder.begin_basic_block(None).expect("block");
         let mut args_map: HashMap<_, _> = params
             .into_iter()
@@ -1207,7 +1206,11 @@ impl<'b, 'a, 'tcx> FunctionCx<'b, 'a, 'tcx> {
             );
         }
 
-        let raw_builtin = variable_map.get(&mir::Local::new(1)).as_ref().expect("").word;
+        let raw_builtin = variable_map
+            .get(&mir::Local::new(1))
+            .as_ref()
+            .expect("")
+            .word;
         FunctionCx::new(
             InstanceType::Entry(entry_point.entry_type),
             &entry_point.mcx,
@@ -1230,13 +1233,18 @@ impl<'b, 'a, 'tcx> FunctionCx<'b, 'a, 'tcx> {
             .entry_point(model, spirv_function, name, inputs_raw);
         match entry_point.entry_type {
             IntrinsicEntry::Vertex | IntrinsicEntry::Fragment => {
-                scx.builder
-                    .execution_mode(spirv_function, spirv::ExecutionMode::OriginUpperLeft, &[]);
+                scx.builder.execution_mode(
+                    spirv_function,
+                    spirv::ExecutionMode::OriginUpperLeft,
+                    &[],
+                );
             }
             IntrinsicEntry::Compute => {
-                scx.builder
-                    .execution_mode(spirv_function, spirv::ExecutionMode::LocalSize, &[1, 1, 1]);
-
+                scx.builder.execution_mode(
+                    spirv_function,
+                    spirv::ExecutionMode::LocalSize,
+                    &[1, 1, 1],
+                );
             }
         }
     }
@@ -1286,6 +1294,7 @@ impl<'b, 'a, 'tcx> FunctionCx<'b, 'a, 'tcx> {
         mut variable_map: HashMap<mir::Local, Variable<'tcx>>,
         scx: &'b mut CodegenCx<'a, 'tcx>,
     ) -> Self {
+        //println!("{:?} {:?}", mcx.def_id, variable_map);
         let label_blocks: HashMap<_, _> = mcx
             .mir()
             .basic_blocks()
@@ -1314,6 +1323,7 @@ impl<'b, 'a, 'tcx> FunctionCx<'b, 'a, 'tcx> {
             scx.builder.branch(spirv_label.0).expect("branch");
         }
         variable_map.extend(local_vars.into_iter());
+        //println!("{:?}", variable_map);
         let visitor = FunctionCx {
             instance_ty,
             scx,
@@ -1345,6 +1355,7 @@ pub fn find_merge_block(
     true_order.intersection(&false_order).nth(0).map(|b| *b)
 }
 
+#[derive(Debug, Copy, Clone)]
 pub struct Enum<'tcx> {
     pub discr_ty: ty::Ty<'tcx>,
     pub index: usize,
@@ -1365,7 +1376,9 @@ impl<'tcx> Enum<'tcx> {
                         ref variants,
                     } = ty_layout.details.variants
                     {
-                        Some((ty, variants.len()))
+                        // TODO: Find the correct discr type
+                        let discr_ty = tcx.types.i32;
+                        Some((discr_ty, variants.len()))
                     } else {
                         None
                     }
@@ -1418,10 +1431,13 @@ impl<'b, 'a, 'tcx> rustc::mir::visit::Visitor<'tcx> for FunctionCx<'b, 'a, 'tcx>
         use mir::traversal::reverse_postorder;
         let order = reverse_postorder(mir);
         if let Some(yield_ty) = &mir.yield_ty {
-            self.visit_ty(yield_ty, mir::visit::TyContext::YieldTy(mir::SourceInfo {
-                span: mir.span,
-                scope: mir::OUTERMOST_SOURCE_SCOPE,
-            }));
+            self.visit_ty(
+                yield_ty,
+                mir::visit::TyContext::YieldTy(mir::SourceInfo {
+                    span: mir.span,
+                    scope: mir::OUTERMOST_SOURCE_SCOPE,
+                }),
+            );
         }
         for (bb, data) in order {
             self.visit_basic_block_data(bb, &data);
@@ -1487,6 +1503,9 @@ impl<'b, 'a, 'tcx> rustc::mir::visit::Visitor<'tcx> for FunctionCx<'b, 'a, 'tcx>
                     mir::Operand::Copy(place) | mir::Operand::Move(place) => place,
                     _ => unimplemented!(),
                 };
+                println!("{:?}", place);
+                println!("{:?}", self.references);
+                println!("{:?}", self.mcx.def_id);
                 let deref_place = self
                     .references
                     .get(place)
@@ -1714,7 +1733,7 @@ impl<'b, 'a, 'tcx> rustc::mir::visit::Visitor<'tcx> for FunctionCx<'b, 'a, 'tcx>
                 let fn_call = self
                     .scx
                     .get_function_call(resolve_instance.def_id(), resolve_instance.substs)
-                    .expect("function call");
+                    .expect(&format!("function call for {:?}", resolve_instance.def_id()));
                 // Split the rust-call tupled arguments off.
                 let (first_args, untuple) = if abi == Abi::RustCall && !args.is_empty() {
                     let (tup, args) = args.split_last().unwrap();
@@ -1818,7 +1837,10 @@ impl<'b, 'a, 'tcx> rustc::mir::visit::Visitor<'tcx> for FunctionCx<'b, 'a, 'tcx>
                                         &arg_operand_loads[1..2],
                                     )
                                     .expect("access chain");
-                                self.scx.builder.store(access_chain, arg_operand_loads[2], None, &[]).expect("store");
+                                self.scx
+                                    .builder
+                                    .store(access_chain, arg_operand_loads[2], None, &[])
+                                    .expect("store");
                                 None
                             }
                             RuntimeArrayIntrinsic::Get => {
@@ -1903,21 +1925,35 @@ impl<'b, 'a, 'tcx> FunctionCx<'b, 'a, 'tcx> {
             ty::TypeVariants::TyUint(_) => {
                 match op {
                     mir::BinOp::Add => {
-                        println!("OP: {:?}", return_ty);
                         let tup = self.scx.tcx.mk_tup([ty, ty].iter());
                         let spirv_tup = self.to_ty_fn(tup);
-                        println!("tup: {:?}", tup);
                         let add = self
                             .scx
                             .builder
                             .iadd_carry(spirv_tup.word, None, left, right)
                             .expect("fmul");
-                        let value = self.scx.builder.composite_extract(spirv_ty.word, None, add, &[ 0 ]).expect("extract");
-                        let carry_u32 = self.scx.builder.composite_extract(spirv_ty.word, None, add, &[ 1 ]).expect("extract");
+                        let value = self
+                            .scx
+                            .builder
+                            .composite_extract(spirv_ty.word, None, add, &[0])
+                            .expect("extract");
+                        let carry_u32 = self
+                            .scx
+                            .builder
+                            .composite_extract(spirv_ty.word, None, add, &[1])
+                            .expect("extract");
                         let bool_ty = self.scx.tcx.types.bool;
                         let spirv_bool = self.to_ty_fn(bool_ty);
-                        let carry_bool = self.scx.builder.bitcast(spirv_bool.word, None, carry_u32).expect("failed to bitcast");
-                        let s = self.scx.builder.composite_construct(spirv_return_ty.word, None, &[value, carry_bool]).expect("c");
+                        let carry_bool = self
+                            .scx
+                            .builder
+                            .bitcast(spirv_bool.word, None, carry_u32)
+                            .expect("failed to bitcast");
+                        let s = self
+                            .scx
+                            .builder
+                            .composite_construct(spirv_return_ty.word, None, &[value, carry_bool])
+                            .expect("c");
                         //let cast = self.scx.builder.bitcast(spirv_return_ty.word, None, add).expect("bitcast");
                         Value::new(s)
                     }
@@ -1929,84 +1965,82 @@ impl<'b, 'a, 'tcx> FunctionCx<'b, 'a, 'tcx> {
                             .expect("fmul");
                         Value::new(mul)
                     }
-                    _ => unimplemented!("op unsigned")
+                    _ => unimplemented!("op unsigned"),
                 }
             }
-            ty::TypeVariants::TyFloat(_) => {
-                match op {
-                    mir::BinOp::Mul => {
-                        let mul = self
-                            .scx
-                            .builder
-                            .fmul(spirv_ty.word, None, left, right)
-                            .expect("fmul");
-                        Value::new(mul)
-                    }
-                    mir::BinOp::Add => {
-                        let add = self
-                            .scx
-                            .builder
-                            .fadd(spirv_ty.word, None, left, right)
-                            .expect("fadd");
-                        Value::new(add)
-                    }
-                    mir::BinOp::Sub => {
-                        let add = self
-                            .scx
-                            .builder
-                            .fsub(spirv_ty.word, None, left, right)
-                            .expect("fsub");
-                        Value::new(add)
-                    }
-                    mir::BinOp::Div => {
-                        let add = self
-                            .scx
-                            .builder
-                            .fdiv(spirv_ty.word, None, left, right)
-                            .expect("fsub");
-                        Value::new(add)
-                    }
-                    mir::BinOp::Gt => {
-                        let gt = match ty.sty {
-                            TypeVariants::TyInt(_) => self
-                                .scx
-                                .builder
-                                .sgreater_than(spirv_return_ty.word, None, left, right)
-                                .expect("g"),
-                                TypeVariants::TyUint(_) | TypeVariants::TyBool => self
-                                    .scx
-                                    .builder
-                                    .ugreater_than(spirv_return_ty.word, None, left, right)
-                                    .expect("g"),
-                                TypeVariants::TyFloat(_) => self
-                                    .scx
-                                    .builder
-                                    .ford_greater_than(spirv_return_ty.word, None, left, right)
-                                    .expect("g"),
-                                    ref rest => unimplemented!("{:?}", rest),
-                        };
-                        Value::new(gt)
-                    }
-                    mir::BinOp::Shl => {
-                        let shl = self
-                            .scx
-                            .builder
-                            .shift_left_logical(spirv_ty.word, None, left, right)
-                            .expect("shl");
-                        Value::new(shl)
-                    }
-                    mir::BinOp::BitOr => {
-                        let bit_or = self
-                            .scx
-                            .builder
-                            .bitwise_or(spirv_ty.word, None, left, right)
-                            .expect("bitwise or");
-                        Value::new(bit_or)
-                    }
-                    rest => unimplemented!("{:?}", rest),
+            ty::TypeVariants::TyFloat(_) => match op {
+                mir::BinOp::Mul => {
+                    let mul = self
+                        .scx
+                        .builder
+                        .fmul(spirv_ty.word, None, left, right)
+                        .expect("fmul");
+                    Value::new(mul)
                 }
-            }
-        _ => unimplemented!("ops")
+                mir::BinOp::Add => {
+                    let add = self
+                        .scx
+                        .builder
+                        .fadd(spirv_ty.word, None, left, right)
+                        .expect("fadd");
+                    Value::new(add)
+                }
+                mir::BinOp::Sub => {
+                    let add = self
+                        .scx
+                        .builder
+                        .fsub(spirv_ty.word, None, left, right)
+                        .expect("fsub");
+                    Value::new(add)
+                }
+                mir::BinOp::Div => {
+                    let add = self
+                        .scx
+                        .builder
+                        .fdiv(spirv_ty.word, None, left, right)
+                        .expect("fsub");
+                    Value::new(add)
+                }
+                mir::BinOp::Gt => {
+                    let gt = match ty.sty {
+                        TypeVariants::TyInt(_) => self
+                            .scx
+                            .builder
+                            .sgreater_than(spirv_return_ty.word, None, left, right)
+                            .expect("g"),
+                        TypeVariants::TyUint(_) | TypeVariants::TyBool => self
+                            .scx
+                            .builder
+                            .ugreater_than(spirv_return_ty.word, None, left, right)
+                            .expect("g"),
+                        TypeVariants::TyFloat(_) => self
+                            .scx
+                            .builder
+                            .ford_greater_than(spirv_return_ty.word, None, left, right)
+                            .expect("g"),
+                        ref rest => unimplemented!("{:?}", rest),
+                    };
+                    Value::new(gt)
+                }
+                mir::BinOp::Shl => {
+                    let shl = self
+                        .scx
+                        .builder
+                        .shift_left_logical(spirv_ty.word, None, left, right)
+                        .expect("shl");
+                    Value::new(shl)
+                }
+                mir::BinOp::BitOr => {
+                    let bit_or = self
+                        .scx
+                        .builder
+                        .bitwise_or(spirv_ty.word, None, left, right)
+                        .expect("bitwise or");
+                    Value::new(bit_or)
+                }
+                rest => unimplemented!("{:?}", rest),
+            },
+            _ => unimplemented!("ops"),
         }
     }
 }

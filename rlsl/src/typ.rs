@@ -52,6 +52,7 @@ pub struct Variable<'tcx> {
     pub storage_class: spirv::StorageClass,
 }
 
+#[derive(Copy, Clone, Debug)]
 pub struct Param<'tcx> {
     pub word: spirv::Word,
     pub ty: ty::Ty<'tcx>,
