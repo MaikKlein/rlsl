@@ -150,6 +150,7 @@ impl<'a, 'tcx> CodegenCx<'a, 'tcx> {
         let ty = match ty.sty {
             TypeVariants::TyInt(_) => self.tcx.mk_ty(TypeVariants::TyInt(IntTy::I32)),
             TypeVariants::TyUint(_) => self.tcx.mk_ty(TypeVariants::TyUint(UintTy::U32)),
+            //TypeVariants::TyBool => self.tcx.mk_ty(TypeVariants::TyUint(UintTy::U32)),
             _ => ty,
         };
 

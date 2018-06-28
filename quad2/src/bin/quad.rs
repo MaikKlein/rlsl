@@ -7,7 +7,7 @@ extern crate structopt;
 use quad::*;
 use std::fmt::Display;
 use std::fmt::{Debug, Error, Formatter};
-use std::path::{PathBuf};
+use std::path::PathBuf;
 use std::str::FromStr;
 use structopt::StructOpt;
 
@@ -46,6 +46,8 @@ pub struct Opt {
 
 #[derive(StructOpt, Debug)]
 enum Command {
+    #[structopt(name = "all")]
+    All,
     #[structopt(name = "single")]
     Single { file: String },
     #[structopt(name = "compile")]
@@ -60,7 +62,6 @@ impl Opt {
             ShaderCompiler::Rlsl => PathBuf::from("./../.shaders/"),
             ShaderCompiler::Glsl => PathBuf::from("./../issues/.shaders-glsl/"),
         }
-
     }
     pub fn get_entry_names(&self) -> (&str, &str) {
         match self.compiler {
@@ -76,13 +77,26 @@ fn main() {
     //app.gen_completions("myapp", Shell::Bash, "");
     let base_path = opt.get_shader_path();
     match opt.command {
+        Command::All => {
+            let mut quad = Quad::new();
+            let vert_path = base_path.join("vertex.spv");
+            let shadertoy = base_path.join("shadertoy.spv");
+            let circle = base_path.join("circle.spv");
+            let random = base_path.join("random.spv");
+            let (vert_name, frag_name) = opt.get_entry_names();
+            let fragment_infos = vec![
+                (frag_name, shadertoy.as_path()),
+                (frag_name, circle.as_path()),
+                (frag_name, random.as_path()),
+            ];
+            quad.render_all((vert_name, &vert_path), &fragment_infos);
+        }
         Command::Single { ref file } => {
             let mut quad = Quad::new();
             let vert_path = base_path.join("vertex.spv");
             let frag_path = base_path.join(&file).with_extension("spv");
-            println!("{:#?}", frag_path.canonicalize());
             let (vert_name, frag_name) = opt.get_entry_names();
-            quad.render((vert_name, &vert_path), (frag_name, &frag_path));
+            quad.render_single((vert_name, &vert_path), (frag_name, &frag_path));
         }
         Command::Compute => {
             //compute::compute();

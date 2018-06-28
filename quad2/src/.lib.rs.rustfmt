@@ -36,6 +36,7 @@ use std::ops::Drop;
 use std::path::Path;
 use std::ptr;
 use std::sync::mpsc::{channel, Receiver};
+use std::time::Duration;
 use std::time::{Duration, SystemTime};
 
 // Simple offset_of macro akin to C++ offsetof
@@ -802,51 +803,25 @@ impl Quad {
     //     fragment_info: (&str, &Path),
     // ) -> Receiver<GraphicsPipeline> {
     // }
-    pub fn render_all(&mut self, vertex_info: (&str, &Path), fragment_infos: &[(&str, &Path)]) {
-        let pipelines: Vec<_> = fragment_infos
-            .iter()
-            .map(|&fragment_info| {
-                self.pipeline
-                    .create(&self.base.device, vertex_info, fragment_info)
-            })
-            .collect();
-        let count = pipelines.len();
-        let mut start_time = SystemTime::now();
-        let transition_duration = Duration::from_secs(10);
-        let mut index = 0;
-        self.render(|quad| {
-            let dur = SystemTime::now().duration_since(start_time).expect("duration");
-            if dur >= transition_duration {
-                index = (index + 1) % count;
-                start_time = SystemTime::now();
-            }
-            pipelines[index]
-        });
-    }
     /// Renders a single vertex and fragment shader
-    pub fn render_single(&mut self, vertex_info: (&str, &Path), fragment_info: (&str, &Path)) {
-        let (tx, rx) = channel();
-        let mut watcher: RecommendedWatcher =
-            Watcher::new(tx, Duration::from_millis(0)).expect("watcher");
-        watcher.watch(fragment_info.1, RecursiveMode::Recursive);
-        let mut graphics_pipeline =
-            self.pipeline
-                .create(&self.base.device, vertex_info, fragment_info);
-        self.render(|quad| {
-            if rx.try_recv().is_ok() {
-                graphics_pipeline =
-                    quad.pipeline
-                        .create(&quad.base.device, vertex_info, fragment_info);
-            }
-            graphics_pipeline
-        });
-    }
-    pub fn render<F: FnMut(&mut Self) -> vk::Pipeline>(&mut self, mut f: F) {
+    pub fn render(&mut self, vertex_info: (&str, &Path), fragment_info: (&str, &Path)) {
         unsafe {
             let start = SystemTime::now();
             let mut frame_start_time = SystemTime::now();
+            let (rx, tx) = channel();
+            let mut watcher: RecommendedWatcher =
+                Watcher::new(tx, Duration::from_secs(1)).expect("watcher");
+            watcher.watch(fragment_info.1, RecursiveMode::Recursive);
+            let mut graphics_pipeline =
+                self.pipeline
+                    .create(&self.base.device, vertex_info, fragment_info);
+
             self.render_loop(|quad| {
-                let graphics_pipeline = f(quad);
+                        if let Some(_) = rx.recv() {
+                    graphics_pipeline =
+                        self.pipeline
+                            .create(&self.base.device, vertex_info, fragment_info);
+                }
                 let current = SystemTime::now();
                 let duration = current.duration_since(start).expect("dur");
                 let secs = duration.as_secs() as f64;
@@ -963,6 +938,7 @@ impl Quad {
                 let current_time = SystemTime::now();
                 let dt = current_time.duration_since(frame_start_time);
                 frame_start_time = current_time;
+                println!("dt {:?}", dt);
             });
         }
     }

@@ -816,8 +816,11 @@ pub fn trans_spirv<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, items: &'a FxHashSet<M
                     "sqrtf32" => Some(Sqrt),
                     "sinf32" => Some(Sin),
                     "cosf32" => Some(Cos),
+                    "tanf32" => Some(Tan),
                     "absf32" => Some(FAbs),
                     "fractf32" => Some(Fract),
+                    "minf32" => Some(FMin),
+                    "floorf32" => Some(Floor),
                     _ => None,
                 };
                 if let Some(id) = id {
@@ -1377,7 +1380,7 @@ impl<'tcx> Enum<'tcx> {
                     } = ty_layout.details.variants
                     {
                         // TODO: Find the correct discr type
-                        let discr_ty = tcx.types.i32;
+                        let discr_ty = tcx.types.u32;
                         Some((discr_ty, variants.len()))
                     } else {
                         None
@@ -1581,6 +1584,19 @@ impl<'b, 'a, 'tcx> rustc::mir::visit::Visitor<'tcx> for FunctionCx<'b, 'a, 'tcx>
 
                 Value::new(cast)
             }
+            &mir::Rvalue::UnaryOp(ref op, ref operand) => match op {
+                mir::UnOp::Not => {
+                    let load = self.load_operand(operand).load(self.scx);
+                    let spirv_ty = self.to_ty_fn(ty);
+                    let not = self
+                        .scx
+                        .builder
+                        .not(spirv_ty.word, None, load.word)
+                        .expect("op not");
+                    Value::new(not)
+                }
+                _ => unimplemented!("unary op"),
+            },
             &mir::Rvalue::Cast(_, ref _op, _ty) => {
                 //let op_ty = op.ty(&self.mcx.mir().local_decls, self.mcx.tcx);
                 unimplemented!("cast")
@@ -1636,24 +1652,24 @@ impl<'b, 'a, 'tcx> rustc::mir::visit::Visitor<'tcx> for FunctionCx<'b, 'a, 'tcx>
                 ref targets,
                 ..
             } => {
-                let _selector = if switch_ty.is_bool() {
-                    // TODO bitcast api
-                    let load = self.load_operand(discr).load(self.scx).word;
-                    let target_ty = self.mcx.tcx.mk_mach_uint(syntax::ast::UintTy::U32);
-                    let target_ty_spirv = self.to_ty_fn(target_ty);
-                    // self.scx
-                    //     .builder
-                    //     .bitcast(target_ty_spirv.word, None, load)
-                    //     .expect("bitcast")
-                    let one = self.scx.constant_u32(1).word;
-                    let zero = self.scx.constant_u32(0).word;
-                    self.scx
-                        .builder
-                        .select(target_ty_spirv.word, None, load, one, zero)
-                        .expect("select")
-                } else {
-                    self.load_operand(discr).load(self.scx).word
-                };
+                // let _selector = if switch_ty.is_bool() {
+                //     // TODO bitcast api
+                //     let load = self.load_operand(discr).load(self.scx).word;
+                //     let target_ty = self.mcx.tcx.mk_mach_uint(syntax::ast::UintTy::U32);
+                //     let target_ty_spirv = self.to_ty_fn(target_ty);
+                //     // self.scx
+                //     //     .builder
+                //     //     .bitcast(target_ty_spirv.word, None, load)
+                //     //     .expect("bitcast")
+                //     let one = self.scx.constant_u32(1).word;
+                //     let zero = self.scx.constant_u32(0).word;
+                //     self.scx
+                //         .builder
+                //         .select(self.scx.bool_ty, None, load, one, zero)
+                //         .expect("select")
+                // } else {
+                //     self.load_operand(discr).load(self.scx).word
+                // };
                 let default_label = *self
                     .label_blocks
                     .get(targets.last().unwrap())
@@ -1685,7 +1701,18 @@ impl<'b, 'a, 'tcx> rustc::mir::visit::Visitor<'tcx> for FunctionCx<'b, 'a, 'tcx>
 
                 let merge_block_label = *self.label_blocks.get(&merge_block).expect("no label");
                 //println!("merge {:#?}", self.mcx.merge_blocks);;
-                let bool_load = self.load_operand(discr).load(self.scx).word;
+                let bool_load = if switch_ty.is_bool() {
+                    self.load_operand(discr).load(self.scx).word
+                } else {
+                    let bool_ty = self.scx.tcx.types.bool;
+                    let bool_ty_spirv = self.to_ty_fn(bool_ty);
+                    let zero = self.constant_u32(0);
+                    let bool_load = self.load_operand(discr).load(self.scx).word;
+                    self.scx
+                        .builder
+                        .inot_equal(bool_ty_spirv.word, None, bool_load, zero.word)
+                        .expect("cast")
+                };
                 self.scx
                     .builder
                     .selection_merge(merge_block_label.0, spirv::SelectionControl::empty())
@@ -1733,7 +1760,10 @@ impl<'b, 'a, 'tcx> rustc::mir::visit::Visitor<'tcx> for FunctionCx<'b, 'a, 'tcx>
                 let fn_call = self
                     .scx
                     .get_function_call(resolve_instance.def_id(), resolve_instance.substs)
-                    .expect(&format!("function call for {:?}", resolve_instance.def_id()));
+                    .expect(&format!(
+                        "function call for {:?}",
+                        resolve_instance.def_id()
+                    ));
                 // Split the rust-call tupled arguments off.
                 let (first_args, untuple) = if abi == Abi::RustCall && !args.is_empty() {
                     let (tup, args) = args.split_last().unwrap();
@@ -2022,6 +2052,17 @@ impl<'b, 'a, 'tcx> FunctionCx<'b, 'a, 'tcx> {
                     };
                     Value::new(gt)
                 }
+                mir::BinOp::Lt => {
+                    let lt = match ty.sty {
+                        TypeVariants::TyFloat(_) => self
+                            .scx
+                            .builder
+                            .ford_less_than(spirv_return_ty.word, None, left, right)
+                            .expect("g"),
+                        ref rest => unimplemented!("{:?}", rest),
+                    };
+                    Value::new(lt)
+                }
                 mir::BinOp::Shl => {
                     let shl = self
                         .scx
@@ -2037,6 +2078,14 @@ impl<'b, 'a, 'tcx> FunctionCx<'b, 'a, 'tcx> {
                         .bitwise_or(spirv_ty.word, None, left, right)
                         .expect("bitwise or");
                     Value::new(bit_or)
+                }
+                mir::BinOp::Ne => {
+                    let ne = self
+                        .scx
+                        .builder
+                        .logical_not_equal(spirv_return_ty.word, None, left, right)
+                        .expect("not equal");
+                    Value::new(ne)
                 }
                 rest => unimplemented!("{:?}", rest),
             },

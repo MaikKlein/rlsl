@@ -41,8 +41,11 @@ pub mod intrinsics {
         pub fn sqrtf32(x: f32) -> f32;
         pub fn cosf32(x: f32) -> f32;
         pub fn sinf32(x: f32) -> f32;
+        pub fn tanf32(x: f32) -> f32;
         pub fn absf32(x: f32) -> f32;
         pub fn fractf32(f: f32) -> f32;
+        pub fn minf32(f1: f32, f2: f32) -> f32;
+        pub fn floorf32(f: f32) -> f32;
     }
 }
 
@@ -51,8 +54,17 @@ pub mod f32 {
     #[lang = "f32_runtime"]
     impl f32 {
         #[inline]
+        pub fn floor(self) -> f32 {
+            unsafe { intrinsics::floorf32(self) }
+        }
+        #[inline]
         pub fn sqrt(self) -> f32 {
             unsafe { intrinsics::sqrtf32(self) }
+        }
+
+        #[inline]
+        pub fn tan(self) -> f32 {
+            unsafe { intrinsics::tanf32(self) }
         }
 
         #[inline]
@@ -74,6 +86,11 @@ pub mod f32 {
         pub fn fract(self) -> f32 {
             unsafe { intrinsics::fractf32(self) }
         }
+
+        // #[inline]
+        // pub fn min(self, other: f32) -> f32 {
+        //     unsafe { intrinsics::minf32(self, other) }
+        // }
     }
 }
 #[lang = "eh_personality"]

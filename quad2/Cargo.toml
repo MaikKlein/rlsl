@@ -11,6 +11,7 @@ ash = "0.24"
 #ash = {path = "/home/maik/projects/ash/ash"}
 clap = "*"
 structopt = "*"
+notify = "4.0.3"
 gfx-hal = {git = "https://github.com/MaikKlein/gfx-rs"}
 gfx-backend-vulkan = {git = "https://github.com/MaikKlein/gfx-rs"}
 
