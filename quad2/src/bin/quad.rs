@@ -83,11 +83,15 @@ fn main() {
             let shadertoy = base_path.join("shadertoy.spv");
             let circle = base_path.join("circle.spv");
             let random = base_path.join("random.spv");
+            let ray = base_path.join("ray.spv");
+            let shape = base_path.join("shape.spv");
             let (vert_name, frag_name) = opt.get_entry_names();
             let fragment_infos = vec![
                 (frag_name, shadertoy.as_path()),
                 (frag_name, circle.as_path()),
                 (frag_name, random.as_path()),
+                (frag_name, ray.as_path()),
+                //(frag_name, shape.as_path()),
             ];
             quad.render_all((vert_name, &vert_path), &fragment_infos);
         }
