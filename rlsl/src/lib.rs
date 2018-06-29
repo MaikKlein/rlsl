@@ -1708,9 +1708,10 @@ impl<'b, 'a, 'tcx> rustc::mir::visit::Visitor<'tcx> for FunctionCx<'b, 'a, 'tcx>
                     let bool_ty_spirv = self.to_ty_fn(bool_ty);
                     let zero = self.constant_u32(0);
                     let bool_load = self.load_operand(discr).load(self.scx).word;
+                    // TODO: Check for the discr correctly.
                     self.scx
                         .builder
-                        .inot_equal(bool_ty_spirv.word, None, bool_load, zero.word)
+                        .iequal(bool_ty_spirv.word, None, bool_load, zero.word)
                         .expect("cast")
                 };
                 self.scx

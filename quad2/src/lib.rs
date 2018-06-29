@@ -108,6 +108,7 @@ fn load_shader(path: &Path, device: &Device<V1_0>) -> vk::ShaderModule {
         let spv_file = File::open(path).expect("Could not find vert.spv.");
 
         let spv_bytes: Vec<u8> = spv_file.bytes().filter_map(|byte| byte.ok()).collect();
+        println!("{}", spv_bytes.len());
 
         let shader_info = vk::ShaderModuleCreateInfo {
             s_type: vk::StructureType::ShaderModuleCreateInfo,
@@ -593,15 +594,13 @@ impl Quad {
                 .device
                 .create_descriptor_pool(&descriptor_pool_info, None)
                 .unwrap();
-            let desc_layout_bindings = [
-                vk::DescriptorSetLayoutBinding {
-                    binding: 0,
-                    descriptor_type: vk::DescriptorType::UniformBuffer,
-                    descriptor_count: 1,
-                    stage_flags: vk::SHADER_STAGE_FRAGMENT_BIT,
-                    p_immutable_samplers: ptr::null(),
-                },
-            ];
+            let desc_layout_bindings = [vk::DescriptorSetLayoutBinding {
+                binding: 0,
+                descriptor_type: vk::DescriptorType::UniformBuffer,
+                descriptor_count: 1,
+                stage_flags: vk::SHADER_STAGE_FRAGMENT_BIT,
+                p_immutable_samplers: ptr::null(),
+            }];
             let descriptor_info = vk::DescriptorSetLayoutCreateInfo {
                 s_type: vk::StructureType::DescriptorSetLayoutCreateInfo,
                 p_next: ptr::null(),
@@ -633,20 +632,18 @@ impl Quad {
                 range: mem::size_of::<f32>() as u64,
             };
 
-            let write_desc_sets = [
-                vk::WriteDescriptorSet {
-                    s_type: vk::StructureType::WriteDescriptorSet,
-                    p_next: ptr::null(),
-                    dst_set: descriptor_sets[0],
-                    dst_binding: 0,
-                    dst_array_element: 0,
-                    descriptor_count: 1,
-                    descriptor_type: vk::DescriptorType::UniformBuffer,
-                    p_image_info: ptr::null(),
-                    p_buffer_info: &uniform_time_buffer_descriptor,
-                    p_texel_buffer_view: ptr::null(),
-                },
-            ];
+            let write_desc_sets = [vk::WriteDescriptorSet {
+                s_type: vk::StructureType::WriteDescriptorSet,
+                p_next: ptr::null(),
+                dst_set: descriptor_sets[0],
+                dst_binding: 0,
+                dst_array_element: 0,
+                descriptor_count: 1,
+                descriptor_type: vk::DescriptorType::UniformBuffer,
+                p_image_info: ptr::null(),
+                p_buffer_info: &uniform_time_buffer_descriptor,
+                p_texel_buffer_view: ptr::null(),
+            }];
             base.device.update_descriptor_sets(&write_desc_sets, &[]);
 
             let layout_create_info = vk::PipelineLayoutCreateInfo {
@@ -767,7 +764,9 @@ impl Quad {
         let transition_duration = Duration::from_secs(10);
         let mut index = 0;
         self.render(|quad| {
-            let dur = SystemTime::now().duration_since(start_time).expect("duration");
+            let dur = SystemTime::now()
+                .duration_since(start_time)
+                .expect("duration");
             if dur >= transition_duration {
                 index = (index + 1) % count;
                 start_time = SystemTime::now();
@@ -779,16 +778,22 @@ impl Quad {
     pub fn render_single(&mut self, vertex_info: (&str, &Path), fragment_info: (&str, &Path)) {
         let (tx, rx) = channel();
         let mut watcher: RecommendedWatcher =
-            Watcher::new(tx, Duration::from_millis(0)).expect("watcher");
+            Watcher::new(tx, Duration::from_millis(500)).expect("watcher");
         watcher.watch(fragment_info.1, RecursiveMode::Recursive);
         let mut graphics_pipeline =
             self.pipeline
                 .create(&self.base.device, vertex_info, fragment_info);
         self.render(|quad| {
-            if rx.try_recv().is_ok() {
-                graphics_pipeline =
-                    quad.pipeline
-                        .create(&quad.base.device, vertex_info, fragment_info);
+            if let Some(watch_res) = rx.try_recv().ok() {
+                match watch_res {
+                    notify::DebouncedEvent::Write(_) => {
+                        println!("Detected Chage: Recreate pipeline");
+                        graphics_pipeline =
+                            quad.pipeline
+                                .create(&quad.base.device, vertex_info, fragment_info);
+                    }
+                    _ => (),
+                };
             }
             graphics_pipeline
         });

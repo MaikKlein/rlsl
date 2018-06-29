@@ -14,6 +14,7 @@ pub struct Ray {
 
 impl Ray {
     pub fn new(origin: Vec3<f32>, dir: Vec3<f32>) -> Ray {
+        let dir = dir.normalize();
         Ray { origin, dir }
     }
     pub fn position(&self, t: f32) -> Vec3<f32> {
@@ -42,12 +43,11 @@ impl Sphere {
             -1.0
         } else {
             let two_a = 2.0 * a;
-            let t1 = (b* -1.0 - discr.sqrt()) / two_a;
-            let t2 = (b* -1.0 + discr.sqrt()) / two_a;
+            let t1 = (b * -1.0 - discr.sqrt()) / two_a;
+            let t2 = (b * -1.0 + discr.sqrt()) / two_a;
             if t1 < t2 {
                 t1
-            }
-            else {
+            } else {
                 t2
             }
         };
@@ -70,26 +70,40 @@ impl Sphere {
 fn fragment(
     frag: Fragment,
     uv: Input<N0, Vec2<f32>>,
-    time: Uniform<N2, N0, f32>,
+    time: Uniform<N0, N0, f32>,
 ) -> Output<N0, Vec4<f32>> {
     let uv = *uv;
     let time = *time;
     let coord = (uv * 2.0 - 1.0).extend(0.0);
+    // The vector where the camera points to
     let look = Vec3::new(0.0f32, 0.0, 1.0);
+    // The location of the camera
     let origin = Vec3::new(0.0, 0.0, 0.0);
-    let dir = origin + coord;
+    // The direction of the ray that we will shoot
+    let dir = look + coord;
     let ray = Ray::new(origin, dir);
-    let sphere = Sphere::new(Vec3::new(0.0, 0.0, 100.0), 0.00001);
+    let position = Vec2::from_polar(time, 2.0).extend(10.0);
+    let sphere = Sphere::new(position, 4.0);
     let hit = sphere.intersect(ray);
+    let light_pos = Vec3::new(2.0, -4.0, 0.0);
     let color = if let Some(hit) = hit {
-        Vec4::new(1.0, 0.0, 0.0, 1.0)
-    }
-    else{
-        Vec4::new(0.0, 0.0, 0.0, 1.0)
+        // Calculate the vector from the hit location to the light source
+        let light_vec = Vec3::normalize(light_pos - hit.position);
+        // The simple phong cosine term
+        let cos = light_vec.dot(hit.normal);
+        // Multiply the color with the cos term
+        let color_sphere = Vec3::new(0.9, 0.1, 0.1) * cos;
+        color_sphere.extend(1.0)
+    } else {
+        // Pseudo sky color. We lerp between white an blue. The uv.y value is 
+        // inbetween 0 and 1 and starts from the top. 
+        let t = uv.y;
+        let white = Vec3::single(1.0);
+        let blue = Vec3::new(0.2, 0.5, 1.0);
+        blue.lerp(white, t).extend(1.0)
     };
 
     Output::new(color)
 }
 
-fn main() {
-}
+fn main() {}
