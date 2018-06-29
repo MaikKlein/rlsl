@@ -114,18 +114,13 @@ impl<T: Float> Vector for Vec2<T> {
 impl<T: Float> Vector for Vec3<T> {
     type T = T;
     fn dot(self, other: Self) -> T {
-        self.x * other.x +
-        self.y * other.y +
-        self.z * other.z
+        self.x * other.x + self.y * other.y + self.z * other.z
     }
 }
 impl<T: Float> Vector for Vec4<T> {
     type T = T;
     fn dot(self, other: Self) -> T {
-        self.x * other.x +
-        self.y * other.y +
-        self.z * other.z +
-        self.w * other.w
+        self.x * other.x + self.y * other.y + self.z * other.z + self.w * other.w
     }
 }
 

@@ -3,7 +3,7 @@ extern crate rlsl_math;
 use rlsl_math::prelude::*;
 
 #[spirv(fragment)]
-fn fragment(frag: Fragment, uv: Input<N0, Vec2<f32>>, time: Uniform<N2, N0, f32>) -> Output<N0, Vec4<f32>> {
+fn fragment(frag: Fragment, uv: Input<N0, Vec2<f32>>, time: Uniform<N0, N0, f32>) -> Output<N0, Vec4<f32>> {
     let uv = *uv;
     let time = *time;
     let offset = Vec3::new(0.0, 2.0, 4.0);

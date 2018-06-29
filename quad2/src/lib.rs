@@ -66,7 +66,7 @@ pub struct Vector4 {
 
 pub struct Quad {
     base: ExampleBase,
-    uniform_time_buffer: Buffer<Vector4>,
+    uniform_time_buffer: Buffer<f32>,
     renderpass: vk::RenderPass,
     framebuffers: Vec<vk::Framebuffer>,
     pipeline_layout: vk::PipelineLayout,
@@ -569,16 +569,17 @@ impl Quad {
             );
             let mut uniform_time_buffer = Buffer::new(
                 &base,
-                Vector4 {
-                    x: 0.5,
-                    y: 0.0,
-                    z: 1.0,
-                    w: 1.0,
-                },
+                0.0,
+                // Vector4 {
+                //     x: 0.5,
+                //     y: 0.0,
+                //     z: 1.0,
+                //     w: 1.0,
+                // },
             );
             let descriptor_sizes = [vk::DescriptorPoolSize {
                 typ: vk::DescriptorType::UniformBuffer,
-                descriptor_count: 3,
+                descriptor_count: 1,
             }];
             let descriptor_pool_info = vk::DescriptorPoolCreateInfo {
                 s_type: vk::StructureType::DescriptorPoolCreateInfo,
@@ -595,20 +596,6 @@ impl Quad {
             let desc_layout_bindings = [
                 vk::DescriptorSetLayoutBinding {
                     binding: 0,
-                    descriptor_type: vk::DescriptorType::UniformBuffer,
-                    descriptor_count: 1,
-                    stage_flags: vk::SHADER_STAGE_FRAGMENT_BIT,
-                    p_immutable_samplers: ptr::null(),
-                },
-                vk::DescriptorSetLayoutBinding {
-                    binding: 1,
-                    descriptor_type: vk::DescriptorType::UniformBuffer,
-                    descriptor_count: 1,
-                    stage_flags: vk::SHADER_STAGE_FRAGMENT_BIT,
-                    p_immutable_samplers: ptr::null(),
-                },
-                vk::DescriptorSetLayoutBinding {
-                    binding: 2,
                     descriptor_type: vk::DescriptorType::UniformBuffer,
                     descriptor_count: 1,
                     stage_flags: vk::SHADER_STAGE_FRAGMENT_BIT,
@@ -640,21 +627,10 @@ impl Quad {
                 .allocate_descriptor_sets(&desc_alloc_info)
                 .unwrap();
 
-            let uniform_color_buffer_descriptor = vk::DescriptorBufferInfo {
-                buffer: uniform_color_buffer.buffer,
-                offset: 0,
-                range: mem::size_of::<Vector4>() as u64,
-            };
-
-            let uniform_color_buffer_descriptor2 = vk::DescriptorBufferInfo {
-                buffer: uniform_color_buffer2.buffer,
-                offset: 0,
-                range: mem::size_of::<Vector4>() as u64,
-            };
             let uniform_time_buffer_descriptor = vk::DescriptorBufferInfo {
                 buffer: uniform_time_buffer.buffer,
                 offset: 0,
-                range: mem::size_of::<Vector4>() as u64,
+                range: mem::size_of::<f32>() as u64,
             };
 
             let write_desc_sets = [
@@ -663,30 +639,6 @@ impl Quad {
                     p_next: ptr::null(),
                     dst_set: descriptor_sets[0],
                     dst_binding: 0,
-                    dst_array_element: 0,
-                    descriptor_count: 1,
-                    descriptor_type: vk::DescriptorType::UniformBuffer,
-                    p_image_info: ptr::null(),
-                    p_buffer_info: &uniform_color_buffer_descriptor,
-                    p_texel_buffer_view: ptr::null(),
-                },
-                vk::WriteDescriptorSet {
-                    s_type: vk::StructureType::WriteDescriptorSet,
-                    p_next: ptr::null(),
-                    dst_set: descriptor_sets[0],
-                    dst_binding: 1,
-                    dst_array_element: 0,
-                    descriptor_count: 1,
-                    descriptor_type: vk::DescriptorType::UniformBuffer,
-                    p_image_info: ptr::null(),
-                    p_buffer_info: &uniform_color_buffer_descriptor2,
-                    p_texel_buffer_view: ptr::null(),
-                },
-                vk::WriteDescriptorSet {
-                    s_type: vk::StructureType::WriteDescriptorSet,
-                    p_next: ptr::null(),
-                    dst_set: descriptor_sets[0],
-                    dst_binding: 2,
                     dst_array_element: 0,
                     descriptor_count: 1,
                     descriptor_type: vk::DescriptorType::UniformBuffer,
@@ -856,12 +808,13 @@ impl Quad {
                 //println!("{}", time);
                 quad.uniform_time_buffer.update(
                     &quad.base,
-                    Vector4 {
-                        x: time,
-                        y: 0.0,
-                        z: 0.0,
-                        w: 1.0,
-                    },
+                    time
+                    // Vector4 {
+                    //     x: time,
+                    //     y: 0.0,
+                    //     z: 0.0,
+                    //     w: 1.0,
+                    // },
                 );
                 let present_index = quad
                     .base

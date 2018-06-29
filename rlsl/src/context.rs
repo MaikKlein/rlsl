@@ -445,6 +445,8 @@ impl<'a, 'tcx> CodegenCx<'a, 'tcx> {
                 })
                 .is_some();
             let spirv_ty = self.to_ty(ty, spirv::StorageClass::Input);
+            self.builder
+                .decorate(spirv_ty.word, spirv::Decoration::Block, &[]);
             assert!(is_fragment, "Not a fragment");
             let var = Variable::alloca(self, ty, spirv::StorageClass::Input);
             // TODO
@@ -475,6 +477,8 @@ impl<'a, 'tcx> CodegenCx<'a, 'tcx> {
             let spirv_ty = self.to_ty(ty, spirv::StorageClass::Input);
             let var = Variable::alloca(self, ty, spirv::StorageClass::Input);
             // TODO
+            self.builder
+                .decorate(spirv_ty.word, spirv::Decoration::Block, &[]);
             self.builder.member_decorate(
                 spirv_ty.word,
                 0,
@@ -504,6 +508,8 @@ impl<'a, 'tcx> CodegenCx<'a, 'tcx> {
                 _ => unreachable!(),
             };
             let spirv_ty = self.to_ty(struct_ty, spirv::StorageClass::Output);
+            self.builder
+                .decorate(spirv_ty.word, spirv::Decoration::Block, &[]);
             let var = Variable::alloca(self, struct_ty, spirv::StorageClass::Output);
             self.builder.member_decorate(
                 spirv_ty.word,
