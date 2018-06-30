@@ -1,3 +1,16 @@
+#[macro_export]
+macro_rules! variadic2{
+    ($f:path, $e1:expr) => {
+        $e1
+    };
+    ($f:path, $e1:expr, $e2:expr) => {
+        $f($e1, $e2)
+    };
+    ($f:path, $e1:expr, $e2:expr, $($rest:expr),*) => {
+        $f(variadic2!($f, $e1, $e2), variadic2!($f, $($rest),*))
+    };
+}
+
 macro_rules! vec_op_vec {
     ($name: ident {$($fields:ident),*}, $trait: ident, $fn: ident, $op: tt) => {
         impl<T: Float> ::std::ops::$trait for $name<T> {
@@ -89,6 +102,23 @@ macro_rules! vec_common {
                     }
             }
 
+            pub fn any<F: FnMut(T) -> bool>(self, mut f: F) -> bool {
+                use std::ops::BitOr;
+                variadic2!(bool::bitor, $(f(self.$fields)),*) 
+            }
+
+            pub fn all<F: FnMut(T) -> bool>(self, mut f: F) -> bool {
+                use std::ops::BitAnd;
+                variadic2!(bool::bitand, $(f(self.$fields)),*) 
+            }
+
+            pub fn fold<R, F: FnMut(R, T) -> R>(self, acc: R, mut f: F) -> R {
+                $(
+                    let acc = f(acc, self.$fields);
+                )*
+                acc
+            }
+
             pub fn add(self, other: Self) -> Self {
                 self + other
             }
@@ -121,4 +151,3 @@ macro_rules! vec_common {
 
     }
 }
-

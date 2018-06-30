@@ -17,7 +17,7 @@ impl Float for f32 {
     fn sin(self) -> f32 {
         self.sin()
     }
-    
+
     fn cos(self) -> f32 {
         self.cos()
     }

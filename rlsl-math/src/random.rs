@@ -8,8 +8,6 @@ impl Rng {
     }
 
     pub fn from_seed(seed: f32) -> Rng {
-        Rng {
-            seed
-        }
+        Rng { seed }
     }
 }

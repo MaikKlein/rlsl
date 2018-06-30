@@ -1,8 +1,8 @@
+use constants::*;
+use intrinsics::spirv_discard;
+use std::marker::PhantomData;
 use std::ops::Deref;
 use vector::*;
-use constants::*;
-use std::marker::PhantomData;
-use intrinsics::spirv_discard;
 #[spirv(PerFragment)]
 pub struct Fragment {
     pub frag_coord: Vec4<f32>,
@@ -78,9 +78,7 @@ pub struct RuntimeArray<T> {
 #[inline(never)]
 #[spirv(runtime_array_get)]
 fn runtime_array_get<T, R>(data: T, index: u32) -> R {
-    unsafe {
-        ::std::intrinsics::abort()
-    }
+    unsafe { ::std::intrinsics::abort() }
 }
 #[inline(never)]
 #[spirv(runtime_array_store)]
