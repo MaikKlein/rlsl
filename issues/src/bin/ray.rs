@@ -9,16 +9,15 @@ pub struct Sphere {
 
 pub struct Ray {
     pub origin: Vec3<f32>,
-    pub dir: Vec3<f32>,
+    pub dir: Unit<Vec3<f32>>,
 }
 
 impl Ray {
-    pub fn new(origin: Vec3<f32>, dir: Vec3<f32>) -> Ray {
-        let dir = dir.normalize();
+    pub fn new(origin: Vec3<f32>, dir: Unit<Vec3<f32>>) -> Ray {
         Ray { origin, dir }
     }
     pub fn position(&self, t: f32) -> Vec3<f32> {
-        self.origin + self.dir * t
+        self.origin + *self.dir * t
     }
 }
 
@@ -72,6 +71,7 @@ fn fragment(
     uv: Input<N0, Vec2<f32>>,
     time: Uniform<N0, N0, f32>,
 ) -> Output<N0, Vec4<f32>> {
+    //let b: bool = true;
     let uv = *uv;
     let time = *time;
     let coord = (uv * 2.0 - 1.0).extend(0.0);
@@ -81,8 +81,8 @@ fn fragment(
     let origin = Vec3::new(0.0, 0.0, 0.0);
     // The direction of the ray that we will shoot
     let dir = look + coord;
-    let ray = Ray::new(origin, dir);
-    let position = Vec2::from_polar(time, 2.0).extend(10.0);
+    let ray = Ray::new(origin, dir.to_unit());
+    let position = Vec2::from_polar( 1.0 * time, 2.0).extend(10.0);
     let sphere = Sphere::new(position, 4.0);
     let hit = sphere.intersect(ray);
     let light_pos = Vec3::new(2.0, -4.0, 0.0);

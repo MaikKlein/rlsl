@@ -144,6 +144,22 @@ macro_rules! vec_common {
             }
 
             pub fn normalize(self) -> Self {
+                <Self as Vector>::normalize(self)
+            }
+
+            pub fn to_unit(self) -> $crate::unit::Unit<Self> {
+                $crate::unit::Unit::new(self)
+            }
+        }
+
+        impl<T: Float> Vector for $name<T> {
+            type T = T;
+
+            fn dot(self, other: Self) -> T {
+                variadic2!(T::add, $(self.$fields * other.$fields),*)
+            }
+
+            fn normalize(self) -> Self {
                 self / self.length()
             }
         }

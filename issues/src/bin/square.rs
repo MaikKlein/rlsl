@@ -1,6 +1,6 @@
 #![feature(custom_attribute)]
-extern crate rlsl_math;
 extern crate issues;
+extern crate rlsl_math;
 use rlsl_math::prelude::*;
 
 #[spirv(compute)]

@@ -11,6 +11,30 @@ pub mod num;
 pub mod random;
 pub mod range;
 
+pub mod unit {
+    use vector::Vector;
+    use std::ops::Deref;
+    pub struct Unit<T> {
+        inner: T,
+    }
+    impl<T> Unit<T>
+    where
+        T: Vector,
+    {
+        pub fn new(inner: T) -> Self {
+            Unit {
+                inner: inner.normalize(),
+            }
+        }
+    }
+    impl<T> Deref for Unit<T> {
+        type Target = T;
+        #[inline(always)]
+        fn deref(&self) -> &Self::Target {
+            &self.inner
+        }
+    }
+}
 pub mod polynomial {
     use vector::Vec2;
     pub fn quadratic(a: f32, b: f32, c: f32) -> Option<Vec2<f32>> {
@@ -31,4 +55,5 @@ pub mod prelude {
     pub use random::*;
     pub use range::*;
     pub use vector::*;
+    pub use unit::*;
 }
