@@ -788,6 +788,9 @@ impl Quad {
                 match watch_res {
                     notify::DebouncedEvent::Write(_) => {
                         println!("Detected Chage: Recreate pipeline");
+                        unsafe {
+                            quad.base.device.destroy_pipeline(graphics_pipeline, None);
+                        }
                         graphics_pipeline =
                             quad.pipeline
                                 .create(&quad.base.device, vertex_info, fragment_info);
