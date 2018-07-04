@@ -871,6 +871,8 @@ pub fn trans_spirv<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, items: &'a FxHashSet<M
 
     // spirv_instances.iter().for_each(|scx| {
     //     println!("{:#?}", scx.def_id);
+    //     println!("{}", tcx.item_name(scx.def_id));
+    //     println!("{}", tcx.absolute_item_path_str(scx.def_id));
     //     println!("{:#?}", scx.mir);
     // });
 

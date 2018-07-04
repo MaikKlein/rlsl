@@ -112,11 +112,12 @@ impl<'a> CompilerCalls<'a> for RlslCompilerCalls {
     }
 }
 fn main() {
+    use std::io::Write;
     let mut args: Vec<String> = std::env::args_os()
         .map(|arg| arg.to_str().unwrap().into())
         .collect();
     let is_build_script = args.iter()
-        .filter(|arg| arg.as_str() == "build_script_main")
+        .filter(|arg| arg.as_str() == "build_script_build")
         .nth(0)
         .is_some();
     if is_build_script {
@@ -136,11 +137,11 @@ fn main() {
     let core_path = format!("core={}", core.display());
     let std_path = format!("std={}", std.display());
     let builtins_path = format!("compiler_builtins={}", builtins.display());
-    args.extend_from_slice(&["--extern".into(), core_path]);
-    args.extend_from_slice(&["--extern".into(), std_path]);
-    args.extend_from_slice(&["--extern".into(), builtins_path]);
+    // args.extend_from_slice(&["--extern".into(), core_path]);
+    // args.extend_from_slice(&["--extern".into(), std_path]);
+    // args.extend_from_slice(&["--extern".into(), builtins_path]);
     args.extend_from_slice(&["-L".into(), l]);
-    //args.extend_from_slice(&["--cfg".into(), "spirv".into()]);
+    args.extend_from_slice(&["--cfg".into(), "spirv".into()]);
     args.extend_from_slice(&["-Z".into(), "always-encode-mir".into()]);
     args.extend_from_slice(&["-Z".into(), "mir-opt-level=3".into()]);
     let _ = run(move || run_compiler(&args, Box::new(RlslCompilerCalls), None, None));
