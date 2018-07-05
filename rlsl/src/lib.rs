@@ -863,6 +863,13 @@ pub fn trans_spirv<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, items: &'a FxHashSet<M
 
     let entry_fn_node_id = tcx.sess.entry_fn.borrow().expect("entry").0;
     let entry_fn = tcx.hir.local_def_id(entry_fn_node_id);
+    // instances
+    //     .iter()
+    //     .filter(|mcx| mcx.def_id != entry_fn && tcx.lang_items().start_fn() != Some(mcx.def_id))
+    //     .for_each(|mcx| {
+    //         println!("{:#?}", mcx.def_id);
+    //         println!("{:#?}", mcx.mir);
+    //     });
     let mut spirv_instances: Vec<_> = instances
         .iter()
         .filter(|mcx| mcx.def_id != entry_fn && tcx.lang_items().start_fn() != Some(mcx.def_id))
@@ -871,8 +878,6 @@ pub fn trans_spirv<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, items: &'a FxHashSet<M
 
     // spirv_instances.iter().for_each(|scx| {
     //     println!("{:#?}", scx.def_id);
-    //     println!("{}", tcx.item_name(scx.def_id));
-    //     println!("{}", tcx.absolute_item_path_str(scx.def_id));
     //     println!("{:#?}", scx.mir);
     // });
 
@@ -1299,7 +1304,6 @@ impl<'b, 'a, 'tcx> FunctionCx<'b, 'a, 'tcx> {
         mut variable_map: HashMap<mir::Local, Variable<'tcx>>,
         scx: &'b mut CodegenCx<'a, 'tcx>,
     ) -> Self {
-        //println!("{:?} {:?}", mcx.def_id, variable_map);
         let label_blocks: HashMap<_, _> = mcx
             .mir()
             .basic_blocks()
@@ -1409,6 +1413,7 @@ impl<'b, 'a, 'tcx> rustc::mir::visit::Visitor<'tcx> for FunctionCx<'b, 'a, 'tcx>
     fn visit_basic_block_data(&mut self, block: mir::BasicBlock, data: &mir::BasicBlockData<'tcx>) {
         {
             let spirv_label = self.label_blocks.get(&block).expect("no spirv label");
+            //println!("{:?} {:?} {:?}", self.mcx.def_id, block, spirv_label);
             self.scx.builder.name(spirv_label.0, format!("{:?}", block));
             let label = self
                 .scx
@@ -1508,9 +1513,6 @@ impl<'b, 'a, 'tcx> rustc::mir::visit::Visitor<'tcx> for FunctionCx<'b, 'a, 'tcx>
                     mir::Operand::Copy(place) | mir::Operand::Move(place) => place,
                     _ => unimplemented!(),
                 };
-                println!("{:?}", place);
-                println!("{:?}", self.references);
-                println!("{:?}", self.mcx.def_id);
                 let deref_place = self
                     .references
                     .get(place)
@@ -1702,33 +1704,43 @@ impl<'b, 'a, 'tcx> rustc::mir::visit::Visitor<'tcx> for FunctionCx<'b, 'a, 'tcx>
                 // }
 
                 let merge_block_label = *self.label_blocks.get(&merge_block).expect("no label");
-                //println!("merge {:#?}", self.mcx.merge_blocks);;
-                let bool_load = if switch_ty.is_bool() {
-                    self.load_operand(discr).load(self.scx).word
-                } else {
-                    let bool_ty = self.scx.tcx.types.bool;
-                    let bool_ty_spirv = self.to_ty_fn(bool_ty);
-                    let zero = self.constant_u32(0);
+                let bb = &self.mcx.mir.basic_blocks()[merge_block];
+                if switch_ty.is_bool() {
                     let bool_load = self.load_operand(discr).load(self.scx).word;
-                    // TODO: Check for the discr correctly.
                     self.scx
                         .builder
-                        .iequal(bool_ty_spirv.word, None, bool_load, zero.word)
-                        .expect("cast")
+                        .selection_merge(merge_block_label.0, spirv::SelectionControl::empty())
+                        .expect("selection merge");
+                    self.scx
+                        .builder
+                        .branch_conditional(bool_load, default_label.0, labels[0].1, &[])
+                        .expect("if");
+                } else {
+                    //let selector = self.load_operand(discr).load(self.scx).word;
+                    let selector = self.constant_u32(0).word;
+                    self.scx
+                        .builder
+                        .selection_merge(merge_block_label.0, spirv::SelectionControl::empty())
+                        .expect("selection merge");
+                    self.scx
+                        .builder
+                        .switch(selector, default_label.0, &labels)
+                        .expect("switch");
+                    // let bool_ty = self.scx.tcx.types.bool;
+                    // let bool_ty_spirv = self.to_ty_fn(bool_ty);
+                    // let zero = self.constant_u32(0);
+                    // let bool_load = self.load_operand(discr).load(self.scx).word;
+                    // // TODO: Check for the discr correctly.
+                    // self.scx
+                    //     .builder
+                    //     .iequal(bool_ty_spirv.word, None, bool_load, zero.word)
+                    //     .expect("cast")
                 };
-                self.scx
-                    .builder
-                    .selection_merge(merge_block_label.0, spirv::SelectionControl::empty())
-                    .expect("selection merge");
-                assert!(labels.len() == 1);
-                self.scx
-                    .builder
-                    .branch_conditional(bool_load, default_label.0, labels[0].1, &[])
-                    .expect("if");
+                // assert!(labels.len() == 1);
                 // self.scx
                 //     .builder
-                //     .switch(selector, default_label.0, &labels)
-                //     .expect("switch");
+                //     .branch_conditional(bool_load, default_label.0, labels[0].1, &[])
+                //     .expect("if");
                 // self.scx.builder.begin_basic_block(Some(new_block_id));
                 // self.scx.builder.branch(merge_block_label.0);
                 //self.merge_blocks.insert()
