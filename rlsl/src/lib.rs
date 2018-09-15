@@ -4,6 +4,7 @@
 #![feature(rustc_diagnostic_macros)]
 
 extern crate byteorder;
+extern crate petgraph;
 
 extern crate arena;
 extern crate env_logger;
@@ -37,6 +38,8 @@ use rustc_data_structures::indexed_vec::Idx;
 use rustc_target::spec::abi::Abi;
 pub mod collector;
 pub mod context;
+pub mod graph;
+pub mod iterate;
 pub mod typ;
 use self::context::{CodegenCx, MirContext, SpirvMir};
 use self::typ::*;
@@ -637,6 +640,7 @@ pub struct FunctionCx<'b, 'a: 'b, 'tcx: 'a> {
     pub vars: HashMap<mir::Local, Variable<'tcx>>,
     pub references: HashMap<mir::Place<'tcx>, mir::Place<'tcx>>,
     pub instance_ty: InstanceType,
+    pub resume_at: Option<mir::BasicBlock>,
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -806,6 +810,28 @@ pub fn trans_spirv<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, items: &'a FxHashSet<M
             None
         })
         .collect();
+    let mut graph =
+        std::fs::File::create("/home/maik/projects/rlsl/issues/mir/mir.dot").expect("graph");
+    for (id, mcx) in instances.iter().enumerate() {
+        use graph::PetMir;
+        use petgraph::visit::{Dfs, Reversed, Walker};
+        use rustc_data_structures::control_flow_graph::ControlFlowGraph;
+        let graph = PetMir::from_mir(mcx.mir);
+        println!("{:?}", mcx.def_id);
+        let ret = graph.return_block(graph.start_block());
+        println!("ret {:?}", ret);
+        if let Some(ret_bb) = ret {
+            let g = Reversed(&graph.graph);
+            let mut dfs = Dfs::new(g, ret_bb);
+            while let Some(idx) = dfs.next(g) {
+                println!("{:?}", idx);
+            }
+        }
+        graph.export(&format!("/home/maik/projects/rlsl/issues/mir/{}.dot", id));
+    }
+    for mcx in &instances {
+        rustc_mir::util::write_mir_fn_graphviz(tcx, mcx.def_id, &mcx.mir, &mut graph);
+    }
     items.iter().for_each(|item| {
         use spirv::GLOp::*;
         if let &MonoItem::Fn(ref instance) = item {
@@ -870,16 +896,20 @@ pub fn trans_spirv<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, items: &'a FxHashSet<M
     //         println!("{:#?}", mcx.def_id);
     //         println!("{:#?}", mcx.mir);
     //     });
+    instances
+        .iter()
+        .filter(|mcx| mcx.def_id != entry_fn && tcx.lang_items().start_fn() != Some(mcx.def_id))
+        .for_each(|mcx| {});
     let mut spirv_instances: Vec<_> = instances
         .iter()
         .filter(|mcx| mcx.def_id != entry_fn && tcx.lang_items().start_fn() != Some(mcx.def_id))
         .map(|mcx| context::SpirvMir::from_mir(mcx))
         .collect();
 
-    // spirv_instances.iter().for_each(|scx| {
-    //     println!("{:#?}", scx.def_id);
-    //     println!("{:#?}", scx.mir);
-    // });
+    spirv_instances.iter().for_each(|scx| {
+        println!("{:#?}", scx.def_id);
+        println!("{:#?}", scx.merge_blocks);
+    });
 
     // Finds functions that return a reference
     let fn_refs_def_id: Vec<_> = spirv_instances
@@ -1343,6 +1373,7 @@ impl<'b, 'a, 'tcx> FunctionCx<'b, 'a, 'tcx> {
             vars: variable_map,
             references: HashMap::new(),
             merge_blocks: HashMap::new(),
+            resume_at: None,
         };
         visitor
     }
@@ -1351,17 +1382,43 @@ fn is_ptr(ty: ty::Ty) -> bool {
     ty.is_unsafe_ptr() || ty.is_mutable_pointer() || ty.is_region_ptr()
 }
 
+fn is_unreachable(mir: &mir::Mir, block: mir::BasicBlock) -> bool {
+    match mir.basic_blocks()[block].terminator().kind {
+        mir::TerminatorKind::Unreachable => true,
+        _ => false,
+    }
+}
 // TODO: More than two cases
 pub fn find_merge_block(
     mir: &mir::Mir,
-    _root: mir::BasicBlock,
+    root: mir::BasicBlock,
     targets: &[mir::BasicBlock],
 ) -> Option<mir::BasicBlock> {
+    use graph::PetMir;
+    use petgraph::visit::{Bfs, Reversed, Walker};
     use rustc_data_structures::control_flow_graph::iterate::post_order_from;
     use std::collections::BTreeSet;
-    let true_order: BTreeSet<_> = post_order_from(mir, targets[0]).into_iter().rev().collect();
-    let false_order: BTreeSet<_> = post_order_from(mir, targets[1]).into_iter().rev().collect();
-    true_order.intersection(&false_order).nth(0).map(|b| *b)
+    let petmir = PetMir::from_mir(mir);
+    let ret_block = petmir
+        .return_block(root)
+        .or_else(|| petmir.resume_block(root))
+        .expect("Unable to find ending");
+    let reversed = Reversed(&petmir.graph);
+    let mut set: HashSet<_> = Bfs::new(reversed, root).iter(reversed).collect();
+    set.insert(ret_block);
+    let merge_targets: Vec<_> = targets
+        .iter()
+        .filter(|&bb| set.contains(bb))
+        .cloned()
+        .collect();
+    Bfs::new(&petmir.graph, root)
+        .iter(&petmir.graph)
+        .find(|&bb| {
+            bb != root
+                && merge_targets
+                    .iter()
+                    .all(|&target| petmir.is_reachable(target, bb))
+        })
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -1716,8 +1773,8 @@ impl<'b, 'a, 'tcx> rustc::mir::visit::Visitor<'tcx> for FunctionCx<'b, 'a, 'tcx>
                         .branch_conditional(bool_load, default_label.0, labels[0].1, &[])
                         .expect("if");
                 } else {
-                    //let selector = self.load_operand(discr).load(self.scx).word;
-                    let selector = self.constant_u32(0).word;
+                    let selector = self.load_operand(discr).load(self.scx).word;
+                    //let selector = self.constant_u32(0).word;
                     self.scx
                         .builder
                         .selection_merge(merge_block_label.0, spirv::SelectionControl::empty())
@@ -1936,12 +1993,28 @@ impl<'b, 'a, 'tcx> rustc::mir::visit::Visitor<'tcx> for FunctionCx<'b, 'a, 'tcx>
                 let target_label = self.label_blocks.get(&target).expect("no label");
                 self.scx.builder.branch(target_label.0).expect("label");
             }
-            &mir::TerminatorKind::Drop { target, .. } => {
-                let target_label = self.label_blocks.get(&target).expect("no label");
-                self.scx.builder.branch(target_label.0).expect("label");
+            &mir::TerminatorKind::Drop {
+                ref location,
+                target,
+                unwind,
+            } => {
+                if let Some(unwind) = unwind {
+                    self.resume_at = Some(target);
+                    let target_label = self.label_blocks.get(&unwind).expect("no label");
+                    self.scx.builder.branch(target_label.0).expect("label");
+                } else {
+                    let target_label = self.label_blocks.get(&target).expect("no label");
+                    self.scx.builder.branch(target_label.0).expect("label");
+                }
             }
-            &mir::TerminatorKind::Resume | &mir::TerminatorKind::Unreachable => {
-                self.scx.builder.unreachable().expect("Unreachable");
+            &mir::TerminatorKind::Resume => {
+                // let resume_at = self.resume_at.expect("Resume");
+                // let target_label = self.label_blocks.get(&resume_at).expect("no label");
+                // self.scx.builder.branch(target_label.0).expect("label");
+                self.scx.builder.unreachable();
+            }
+            mir::TerminatorKind::Unreachable => {
+                self.scx.builder.unreachable();
             }
             rest => unimplemented!("{:?}", rest),
         };

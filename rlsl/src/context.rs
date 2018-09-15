@@ -1,4 +1,5 @@
 use self::hir::def_id::DefId;
+use itertools::Itertools;
 use rspirv;
 use rspirv::mr::Builder;
 use rustc;
@@ -88,7 +89,19 @@ impl<'a, 'tcx> CodegenCx<'a, 'tcx> {
         }
         let const_ty = const_val.ty;
         let spirv_val = match const_ty.sty {
-            ty::TypeVariants::TyUint(_) | ty::TypeVariants::TyBool => {
+            ty::TypeVariants::TyBool => {
+                let value = const_val
+                    .to_bits(self.tcx, const_ty.to_param_env_and())
+                    .expect("bits from const");
+                // [FIXME] Storageptr
+                let spirv_ty = self.to_ty_fn(const_ty);
+                if value != 0 {
+                    self.builder.constant_true(spirv_ty.word)
+                } else {
+                    self.builder.constant_false(spirv_ty.word)
+                }
+            }
+            ty::TypeVariants::TyUint(_) => {
                 let value = const_val
                     .to_bits(self.tcx, const_ty.to_param_env_and())
                     .expect("bits from const");
@@ -564,6 +577,7 @@ impl<'a, 'tcx> SpirvMir<'a, 'tcx> {
     }
     pub fn from_mir(mcx: &::MirContext<'a, 'tcx>) -> Self {
         use mir::visit::Visitor;
+        println!("{:?}", mcx.def_id);
         struct FindMergeBlocks<'a, 'tcx: 'a> {
             mir: &'a mir::Mir<'tcx>,
             merge_blocks: HashMap<mir::BasicBlock, mir::BasicBlock>,
@@ -587,6 +601,7 @@ impl<'a, 'tcx> SpirvMir<'a, 'tcx> {
                     } => {
                         let merge_block =
                             ::find_merge_block(self.mir, block, targets).expect("no merge block");
+                        println!("Mergeblock {:?} for {:?}", block, merge_block);
                         self.merge_blocks.insert(block, merge_block);
                         if !self.first.contains_key(&merge_block) {
                             self.first.insert(merge_block, block);
@@ -610,41 +625,53 @@ impl<'a, 'tcx> SpirvMir<'a, 'tcx> {
         let mut fixed_merge_blocks = HashMap::new();
         use syntax_pos::DUMMY_SP;
         for (block, merge_block) in merge_blocks {
-            if *first.get(&merge_block).expect("merge block") == block {
-                fixed_merge_blocks.insert(block, merge_block);
-            } else {
-                let terminator = mir::Terminator {
-                    source_info: mir::SourceInfo {
-                        span: DUMMY_SP,
-                        scope: mir::OUTERMOST_SOURCE_SCOPE,
-                    },
-                    kind: mir::TerminatorKind::Goto {
-                        target: merge_block,
-                    },
-                };
-                use rustc_data_structures::control_flow_graph::iterate::post_order_from_to;
-                use rustc_data_structures::control_flow_graph::ControlFlowGraph;
-                use std::collections::HashSet;
-                let suc: HashSet<_> = post_order_from_to(&spirv_mir, block, Some(merge_block))
-                    .into_iter()
-                    .collect();
-                let pred: HashSet<_> = ControlFlowGraph::predecessors(&spirv_mir, merge_block)
-                    .into_iter()
-                    .collect();
-                let previous_blocks: HashSet<_> = pred.intersection(&suc).collect();
-                let goto_data = mir::BasicBlockData::new(Some(terminator));
-                let goto_block = spirv_mir.basic_blocks_mut().push(goto_data);
-                fixed_merge_blocks.insert(block, goto_block);
-                for &previous_block in previous_blocks {
-                    if let mir::TerminatorKind::Goto { ref mut target } = spirv_mir
-                        .basic_blocks_mut()[previous_block]
-                        .terminator_mut()
-                        .kind
-                    {
+            let terminator = mir::Terminator {
+                source_info: mir::SourceInfo {
+                    span: DUMMY_SP,
+                    scope: mir::OUTERMOST_SOURCE_SCOPE,
+                },
+                kind: mir::TerminatorKind::Goto {
+                    target: merge_block,
+                },
+            };
+            use rustc_data_structures::control_flow_graph::iterate::post_order_from_to;
+            use rustc_data_structures::control_flow_graph::ControlFlowGraph;
+            use std::collections::HashSet;
+            let suc: HashSet<_> = post_order_from_to(&spirv_mir, block, Some(merge_block))
+                .into_iter()
+                .collect();
+            // let dominators = mcx.mir.dominators();
+            // println!("!!! {:?} {:?} {:?}", mcx.def_id, block, merge_block);
+            // println!("pred {:?}", ControlFlowGraph::predecessors(&spirv_mir, merge_block));
+            // println!("dom {:?}", dominators.dominators(merge_block).collect_vec());
+            let previous_blocks =
+                ControlFlowGraph::predecessors(&spirv_mir, merge_block).filter(|block| true);
+            //.filter(|block| dominators.is_dominated_by(merge_block, *block));
+            let goto_data = mir::BasicBlockData::new(Some(terminator));
+            let goto_block = spirv_mir.basic_blocks_mut().push(goto_data);
+            fixed_merge_blocks.insert(block, goto_block);
+            for previous_block in previous_blocks {
+                //println!("prev {:?} for {:?}", previous_block, merge_block);
+                let kind = &mut spirv_mir.basic_blocks_mut()[previous_block]
+                    .terminator_mut()
+                    .kind;
+                match kind {
+                    mir::TerminatorKind::Goto { ref mut target } => {
                         *target = goto_block;
-                    } else {
-                        panic!("Should be a goto");
                     }
+                    mir::TerminatorKind::Drop { ref mut target, .. } => {
+                        *target = goto_block;
+                    }
+                    mir::TerminatorKind::SwitchInt {
+                        ref mut targets, ..
+                    } => {
+                        let bb = targets
+                            .iter_mut()
+                            .find(|bb| **bb == merge_block)
+                            .expect("Should contain merge block");
+                        *bb = goto_block;
+                    }
+                    _ => unimplemented!("Fix prev merge block"),
                 }
             }
         }

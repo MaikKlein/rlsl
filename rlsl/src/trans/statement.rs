@@ -15,6 +15,7 @@ pub fn trans_statement<'scope, 'a: 'scope, 'tcx: 'a>(
         let ty = place
             .ty(&visitor.mcx.mir().local_decls, visitor.mcx.tcx)
             .to_ty(visitor.mcx.tcx);
+        let ty = visitor.mcx.monomorphize(&ty);
         let e = Enum::from_ty(visitor.mcx.tcx, ty).expect("Enum");
         let discr_ty_spirv_ptr = visitor.to_ty_as_ptr_fn(e.discr_ty);
 

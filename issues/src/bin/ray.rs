@@ -32,24 +32,27 @@ impl Sphere {
         Sphere { origin, radius }
     }
     pub fn intersect(&self, ray: Ray) -> Option<RayHit> {
+        use rlsl_math::polynomial::quadratic;
         let oc = ray.origin - self.origin;
         //a is always one if the direction is a unit vector
         let a = 1.0f32;
         let b = 2.0 * ray.dir.dot(oc);
         let c = Vec3::dot(oc, oc) - self.radius * self.radius;
-        let discr = b * b - 4.0 * a * c;
-        let t = if discr < 0.0 {
-            -1.0
-        } else {
-            let two_a = 2.0 * a;
-            let t1 = (b * -1.0 - discr.sqrt()) / two_a;
-            let t2 = (b * -1.0 + discr.sqrt()) / two_a;
-            if t1 < t2 {
-                t1
-            } else {
-                t2
-            }
-        };
+        let s = quadratic(a, b, c)?;
+        let t = s.x;
+        // let discr = b * b - 4.0 * a * c;
+        // let t = if discr < 0.0 {
+        //     -1.0
+        // } else {
+        //     let two_a = 2.0 * a;
+        //     let t1 = (b * -1.0 - discr.sqrt()) / two_a;
+        //     let t2 = (b * -1.0 + discr.sqrt()) / two_a;
+        //     if t1 < t2 {
+        //         t1
+        //     } else {
+        //         t2
+        //     }
+        // };
         if t > 0.0001 {
             let position = ray.position(t);
             let normal = position - self.origin;
