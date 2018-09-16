@@ -1,3 +1,4 @@
+use rustc::middle::lang_items::LangItem;
 use self::hir::def_id::DefId;
 use itertools::Itertools;
 use rspirv;
@@ -576,8 +577,8 @@ impl<'a, 'tcx> SpirvMir<'a, 'tcx> {
         &self.mir
     }
     pub fn from_mir(mcx: &::MirContext<'a, 'tcx>) -> Self {
+        //println!("{:?}", mcx.def_id);
         use mir::visit::Visitor;
-        println!("{:?}", mcx.def_id);
         struct FindMergeBlocks<'a, 'tcx: 'a> {
             mir: &'a mir::Mir<'tcx>,
             merge_blocks: HashMap<mir::BasicBlock, mir::BasicBlock>,
@@ -601,7 +602,7 @@ impl<'a, 'tcx> SpirvMir<'a, 'tcx> {
                     } => {
                         let merge_block =
                             ::find_merge_block(self.mir, block, targets).expect("no merge block");
-                        println!("Mergeblock {:?} for {:?}", block, merge_block);
+                        //println!("{:?} for {:?}", block, merge_block);
                         self.merge_blocks.insert(block, merge_block);
                         if !self.first.contains_key(&merge_block) {
                             self.first.insert(merge_block, block);
@@ -640,10 +641,6 @@ impl<'a, 'tcx> SpirvMir<'a, 'tcx> {
             let suc: HashSet<_> = post_order_from_to(&spirv_mir, block, Some(merge_block))
                 .into_iter()
                 .collect();
-            // let dominators = mcx.mir.dominators();
-            // println!("!!! {:?} {:?} {:?}", mcx.def_id, block, merge_block);
-            // println!("pred {:?}", ControlFlowGraph::predecessors(&spirv_mir, merge_block));
-            // println!("dom {:?}", dominators.dominators(merge_block).collect_vec());
             let previous_blocks =
                 ControlFlowGraph::predecessors(&spirv_mir, merge_block).filter(|block| true);
             //.filter(|block| dominators.is_dominated_by(merge_block, *block));

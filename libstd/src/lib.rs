@@ -99,9 +99,14 @@ pub extern "C" fn eh_personality() {}
 // pub extern "C" fn rust_begin_panic() -> ! {
 //     unsafe { intrinsics::abort() }
 // }
-#[panic_implementation]
-#[unwind(allowed)]
-pub fn rust_begin_panic(info: &core::panic::PanicInfo) -> ! {
+// #[panic_implementation]
+// #[unwind(allowed)]
+// pub fn rust_begin_panic(info: &core::panic::PanicInfo) -> ! {
+//     unsafe { intrinsics::abort() }
+// }
+#[inline(never)] // this is the slow path, always
+#[lang = "panic"]
+pub fn panic(expr_file_line_col: &(&'static str, &'static str, u32, u32)) -> ! {
     unsafe { intrinsics::abort() }
 }
 // #[lang = "panic_fmt"]
@@ -120,7 +125,7 @@ fn lang_start(main: fn(), argc: isize, argv: *const *const u8) -> isize {
 #[macro_export]
 macro_rules! panic {
     () => {
-        $crate::rust_begin_panic()
+        unsafe { intrinsics::abort() }
     };
     ($msg:expr) => {
         panic!()

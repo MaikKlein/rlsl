@@ -14,9 +14,11 @@ pub mod range;
 pub mod unit {
     use vector::Vector;
     use std::ops::Deref;
+    #[derive(Copy, Clone)]
     pub struct Unit<T> {
         inner: T,
     }
+
     impl<T> Unit<T>
     where
         T: Vector,

@@ -810,28 +810,15 @@ pub fn trans_spirv<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, items: &'a FxHashSet<M
             None
         })
         .collect();
-    let mut graph =
+    let mut file =
         std::fs::File::create("/home/maik/projects/rlsl/issues/mir/mir.dot").expect("graph");
     for (id, mcx) in instances.iter().enumerate() {
-        use graph::PetMir;
-        use petgraph::visit::{Dfs, Reversed, Walker};
-        use rustc_data_structures::control_flow_graph::ControlFlowGraph;
-        let graph = PetMir::from_mir(mcx.mir);
-        println!("{:?}", mcx.def_id);
-        let ret = graph.return_block(graph.start_block());
-        println!("ret {:?}", ret);
-        if let Some(ret_bb) = ret {
-            let g = Reversed(&graph.graph);
-            let mut dfs = Dfs::new(g, ret_bb);
-            while let Some(idx) = dfs.next(g) {
-                println!("{:?}", idx);
-            }
-        }
-        graph.export(&format!("/home/maik/projects/rlsl/issues/mir/{}.dot", id));
+        let graph = graph::PetMir::from_mir(mcx.mir);
+        graph.export(&mut file);
     }
-    for mcx in &instances {
-        rustc_mir::util::write_mir_fn_graphviz(tcx, mcx.def_id, &mcx.mir, &mut graph);
-    }
+    // for mcx in &instances {
+    //     rustc_mir::util::write_mir_fn_graphviz(tcx, mcx.def_id, &mcx.mir, &mut graph);
+    // }
     items.iter().for_each(|item| {
         use spirv::GLOp::*;
         if let &MonoItem::Fn(ref instance) = item {
@@ -906,10 +893,10 @@ pub fn trans_spirv<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, items: &'a FxHashSet<M
         .map(|mcx| context::SpirvMir::from_mir(mcx))
         .collect();
 
-    spirv_instances.iter().for_each(|scx| {
-        println!("{:#?}", scx.def_id);
-        println!("{:#?}", scx.merge_blocks);
-    });
+    // spirv_instances.iter().for_each(|scx| {
+    //     println!("{:#?}", scx.def_id);
+    //     println!("{:#?}", scx.merge_blocks);
+    // });
 
     // Finds functions that return a reference
     let fn_refs_def_id: Vec<_> = spirv_instances
@@ -1404,13 +1391,15 @@ pub fn find_merge_block(
         .or_else(|| petmir.resume_block(root))
         .expect("Unable to find ending");
     let reversed = Reversed(&petmir.graph);
-    let mut set: HashSet<_> = Bfs::new(reversed, root).iter(reversed).collect();
-    set.insert(ret_block);
+    let mut set: HashSet<_> = Bfs::new(reversed, ret_block).iter(reversed).collect();
     let merge_targets: Vec<_> = targets
         .iter()
         .filter(|&bb| set.contains(bb))
         .cloned()
         .collect();
+    // println!("targets {:?}", merge_targets);
+    // println!("set {:?}", set);
+    // println!("ret {:?}", ret_block);
     Bfs::new(&petmir.graph, root)
         .iter(&petmir.graph)
         .find(|&bb| {

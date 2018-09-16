@@ -1,3 +1,4 @@
+use std::io::Write;
 use petgraph;
 use petgraph::graphmap::GraphMap;
 use petgraph::Directed;
@@ -59,10 +60,8 @@ impl<'a, 'tcx> PetMir<'a, 'tcx> {
         PetMir { mir, graph }
     }
 
-    pub fn export<P: AsRef<Path>>(&self, path: &P) {
-        use std::io::Write;
-        let mut file = File::create(path.as_ref()).expect("path");
+    pub fn export(&self, w: &mut impl Write) {
         let dot = petgraph::dot::Dot::with_config(&self.graph, &[]);
-        write!(&mut file, "{:?}", dot);
+        write!(w, "{:?}", dot);
     }
 }
