@@ -104,7 +104,7 @@ macro_rules! vec_common {
 
             pub fn any<F: FnMut(T) -> bool>(self, mut f: F) -> bool {
                 use std::ops::BitOr;
-                variadic2!(bool::bitor, $(f(self.$fields)),*) 
+                variadic2!(bool::bitor, $(f(self.$fields)),*)
             }
 
             pub fn all<F: FnMut(T) -> bool>(self, mut f: F) -> bool {
@@ -112,6 +112,27 @@ macro_rules! vec_common {
                 variadic2!(bool::bitand, $(f(self.$fields)),*) 
             }
 
+            pub fn max(self) -> T {
+                self.fold(self.x, |max, elem|{
+                    if elem > max {
+                        elem
+                    }
+                    else {
+                        max
+                    }
+                })
+            }
+
+            pub fn min(self) -> T {
+                self.fold(self.x, |min, elem|{
+                    if elem < min {
+                        elem
+                    }
+                    else {
+                        min
+                    }
+                })
+            }
             pub fn fold<R, F: FnMut(R, T) -> R>(self, acc: R, mut f: F) -> R {
                 $(
                     let acc = f(acc, self.$fields);

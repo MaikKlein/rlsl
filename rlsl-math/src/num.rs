@@ -1,6 +1,6 @@
 use std::ops::{Add, Div, Mul, Sub};
 pub trait Float:
-    Copy + Add<Output = Self> + Sub<Output = Self> + Mul<Output = Self> + Div<Output = Self>
+    PartialOrd + Copy + Add<Output = Self> + Sub<Output = Self> + Mul<Output = Self> + Div<Output = Self>
 {
     fn sqrt(self) -> Self;
     fn sin(self) -> Self;

@@ -99,16 +99,16 @@ pub extern "C" fn eh_personality() {}
 // pub extern "C" fn rust_begin_panic() -> ! {
 //     unsafe { intrinsics::abort() }
 // }
-// #[panic_implementation]
-// #[unwind(allowed)]
-// pub fn rust_begin_panic(info: &core::panic::PanicInfo) -> ! {
-//     unsafe { intrinsics::abort() }
-// }
-#[inline(never)] // this is the slow path, always
-#[lang = "panic"]
-pub fn panic(expr_file_line_col: &(&'static str, &'static str, u32, u32)) -> ! {
+#[panic_implementation]
+#[unwind(allowed)]
+pub fn rust_begin_panic(info: &core::panic::PanicInfo) -> ! {
     unsafe { intrinsics::abort() }
 }
+// #[inline(never)] // this is the slow path, always
+// #[lang = "panic"]
+// pub fn panic(expr_file_line_col: &(&'static str, &'static str, u32, u32)) -> ! {
+//     unsafe { intrinsics::abort() }
+// }
 // #[lang = "panic_fmt"]
 // #[no_mangle]
 // pub extern fn rust_begin_panic(_msg: core::fmt::Arguments,
