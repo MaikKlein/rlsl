@@ -1,7 +1,7 @@
 use self::hir::def_id::DefId;
 use graph::PetMir;
 use itertools::Itertools;
-use petgraph::visit::{Bfs, Dfs, Reversed, Walker};
+use petgraph::visit::{Bfs, Dfs, DfsPostOrder, Reversed, Walker};
 use rspirv;
 use rspirv::mr::Builder;
 use rustc;
@@ -11,7 +11,7 @@ use rustc::mir;
 use rustc::ty;
 use rustc::ty::subst::Substs;
 use rustc::ty::{subst, TyCtxt};
-use rustc_data_structures::control_flow_graph::ControlFlowGraph;
+use rustc_data_structures::control_flow_graph::{iterate::post_order_from_to, ControlFlowGraph};
 use spirv;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -569,7 +569,7 @@ pub struct MergeBlock {
 }
 
 pub fn find_merge_blocks(petmir: &PetMir) -> Vec<MergeBlock> {
-    let block_iter = Dfs::new(&petmir.graph, petmir.start_block()).iter(&petmir.graph);
+    let block_iter = DfsPostOrder::new(&petmir.graph, petmir.start_block()).iter(&petmir.graph);
     block_iter
         .filter_map(|bb| {
             let block_data = &petmir.mir.basic_blocks()[bb];
@@ -626,6 +626,50 @@ pub fn find_merge_block(
             not_root && reachable_by_branches
         })
 }
+
+/// Sometimes you will see two branches that share the same block. Or not all blocks
+/// that are between the branch header and the merge block are dominated by the 
+/// header. This can be fixed by duplicated those shared blocks.
+pub fn fix_overlapping_control_flow<'tcx>(
+    mut mir: mir::Mir<'tcx>,
+    merge_blocks: &[MergeBlock],
+) -> mir::Mir<'tcx> {
+    let overlapping_blocks: Vec<_> = {
+        let dominators = mir.dominators();
+        merge_blocks
+            .iter()
+            .map(|&merge_block| {
+                let order = post_order_from_to(
+                    &mir,
+                    merge_block.branch_header,
+                    Some(merge_block.merge_block),
+                );
+                let overlapping_bbs: Vec<_> = order
+                    .into_iter()
+                    .filter(|&bb| {
+                        bb != merge_block.merge_block
+                            && !dominators.is_dominated_by(bb, merge_block.branch_header)
+                    }).collect();
+                (merge_block.branch_header, overlapping_bbs)
+            }).collect()
+    };
+    for (header, overlapping_bbs) in overlapping_blocks {
+        let dominators = mir.dominators();
+        for overlapping_block in overlapping_bbs {
+            let terminator = mir.basic_blocks()[overlapping_block].terminator().clone();
+            let new_block = mir
+                .basic_blocks_mut()
+                .push(mir::BasicBlockData::new(Some(terminator)));
+            let previous_blocks: Vec<_> = ControlFlowGraph::predecessors(&mir, overlapping_block)
+                .filter(|&bb| dominators.is_dominated_by(bb, header))
+                .collect();
+            for previous_block in previous_blocks {
+                insert_block_inbetween(&mut mir, previous_block, overlapping_block, new_block);
+            }
+        }
+    }
+    mir
+}
 #[derive(Clone)]
 pub struct SpirvMir<'a, 'tcx: 'a> {
     pub def_id: hir::def_id::DefId,
@@ -634,22 +678,51 @@ pub struct SpirvMir<'a, 'tcx: 'a> {
     pub merge_blocks: HashMap<mir::BasicBlock, mir::BasicBlock>,
     pub tcx: TyCtxt<'a, 'tcx, 'tcx>,
 }
-
+fn insert_block_inbetween<'tcx>(
+    mir: &mut mir::Mir<'tcx>,
+    previous_block: mir::BasicBlock,
+    old_block: mir::BasicBlock,
+    target_block: mir::BasicBlock,
+) {
+    let kind = &mut mir.basic_blocks_mut()[previous_block].terminator_mut().kind;
+    match kind {
+        mir::TerminatorKind::Goto { ref mut target } => {
+            *target = target_block;
+        }
+        mir::TerminatorKind::Drop { ref mut target, .. } => {
+            *target = target_block;
+        }
+        mir::TerminatorKind::SwitchInt {
+            ref mut targets, ..
+        } => {
+            let bb = targets
+                .iter_mut()
+                .find(|bb| **bb == old_block)
+                .expect("Should contain merge block");
+            *bb = target_block;
+        }
+        _ => unimplemented!("Fix prev merge block"),
+    }
+}
 impl<'a, 'tcx> SpirvMir<'a, 'tcx> {
     pub fn mir(&self) -> &mir::Mir<'tcx> {
         &self.mir
     }
     pub fn from_mir(mcx: &::MirContext<'a, 'tcx>) -> Self {
+        //println!("{:?}", mcx.def_id);
         let mut spirv_mir = mcx.mir.clone();
         let mut fixed_merge_blocks = HashMap::new();
         let petmir = PetMir::from_mir(mcx.mir);
         let merge_blocks = find_merge_blocks(&petmir);
+        let mut spirv_mir = fix_overlapping_control_flow(spirv_mir, &merge_blocks);
+        // We need to run the merge block pass again because we might not have found
+        // correct merge block the first time if we had an overlapping block
+        let merge_blocks = find_merge_blocks(&PetMir::from_mir(&spirv_mir));
         for MergeBlock {
             branch_header: block,
             merge_block,
         } in merge_blocks
         {
-            //println!("Fix {:?} {:?}", block, merge_block);
             let terminator = mir::Terminator {
                 source_info: mir::SourceInfo {
                     span: DUMMY_SP,
@@ -660,38 +733,17 @@ impl<'a, 'tcx> SpirvMir<'a, 'tcx> {
                 },
             };
             let dominators = spirv_mir.dominators();
-            let previous_blocks =
+            let previous_blocks: Vec<_> =
                 ControlFlowGraph::predecessors(&spirv_mir, merge_block).filter(|&bb| {
                     let dominated = dominators.is_dominated_by(bb, block);
                     //println!("dom {:?} {:?} {}", bb, block, dominated);
                     dominated
-                });
+                }).collect();
             let goto_data = mir::BasicBlockData::new(Some(terminator));
             let goto_block = spirv_mir.basic_blocks_mut().push(goto_data);
             fixed_merge_blocks.insert(block, goto_block);
             for previous_block in previous_blocks {
-                //println!("prev {:?} for {:?}", previous_block, merge_block);
-                let kind = &mut spirv_mir.basic_blocks_mut()[previous_block]
-                    .terminator_mut()
-                    .kind;
-                match kind {
-                    mir::TerminatorKind::Goto { ref mut target } => {
-                        *target = goto_block;
-                    }
-                    mir::TerminatorKind::Drop { ref mut target, .. } => {
-                        *target = goto_block;
-                    }
-                    mir::TerminatorKind::SwitchInt {
-                        ref mut targets, ..
-                    } => {
-                        let bb = targets
-                            .iter_mut()
-                            .find(|bb| **bb == merge_block)
-                            .expect("Should contain merge block");
-                        *bb = goto_block;
-                    }
-                    _ => unimplemented!("Fix prev merge block"),
-                }
+                insert_block_inbetween(&mut spirv_mir, previous_block, merge_block, goto_block);
             }
         }
         SpirvMir {
