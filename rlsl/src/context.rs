@@ -1,18 +1,22 @@
-use rustc::middle::lang_items::LangItem;
 use self::hir::def_id::DefId;
+use graph::PetMir;
 use itertools::Itertools;
+use petgraph::visit::{Bfs, Dfs, Reversed, Walker};
 use rspirv;
 use rspirv::mr::Builder;
 use rustc;
 use rustc::hir;
+use rustc::middle::lang_items::LangItem;
 use rustc::mir;
 use rustc::ty;
 use rustc::ty::subst::Substs;
 use rustc::ty::{subst, TyCtxt};
+use rustc_data_structures::control_flow_graph::ControlFlowGraph;
 use spirv;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use syntax;
+use syntax_pos::DUMMY_SP;
 use ConstructTy;
 use {Enum, Variable};
 use {Function, FunctionCall, Intrinsic, IntrinsicType, Ty, Value};
@@ -245,8 +249,7 @@ impl<'a, 'tcx> CodegenCx<'a, 'tcx> {
                                         .map(|field| {
                                             let ty = field.ty(self.tcx, mono_substs);
                                             self.to_ty(ty, storage_class).word
-                                        })
-                                        .collect();
+                                        }).collect();
                                     let spirv_struct = self.builder.type_struct(&variant_field_ty);
                                     if self.debug_symbols {
                                         for (index, field) in variant.fields.iter().enumerate() {
@@ -259,8 +262,7 @@ impl<'a, 'tcx> CodegenCx<'a, 'tcx> {
                                         self.name_from_def_id(variant.did, spirv_struct);
                                     }
                                     spirv_struct
-                                })
-                                .collect();
+                                }).collect();
                             field_ty_spirv.push(discr_ty_spirv.word);
 
                             let spirv_struct = self.builder.type_struct(&field_ty_spirv);
@@ -301,7 +303,7 @@ impl<'a, 'tcx> CodegenCx<'a, 'tcx> {
                                 "Output" => Some(true),
                                 _ => None,
                             }).get(0)
-                                .is_some();
+                            .is_some();
                             let field_ty: Vec<_> = adt
                                 .all_fields()
                                 .map(|f| f.ty(self.tcx, mono_substs))
@@ -355,8 +357,7 @@ impl<'a, 'tcx> CodegenCx<'a, 'tcx> {
                                     .filter(|field| {
                                         let ty = field.ty(self.tcx, mono_substs);
                                         !ty.is_phantom_data()
-                                    })
-                                    .collect();
+                                    }).collect();
                                 for (index, field) in fields.iter().enumerate() {
                                     self.builder.member_name(
                                         spirv_struct,
@@ -456,8 +457,7 @@ impl<'a, 'tcx> CodegenCx<'a, 'tcx> {
                         "PerFragment" => Some(true),
                         _ => None,
                     })
-                })
-                .is_some();
+                }).is_some();
             let spirv_ty = self.to_ty(ty, spirv::StorageClass::Input);
             self.builder
                 .decorate(spirv_ty.word, spirv::Decoration::Block, &[]);
@@ -484,8 +484,7 @@ impl<'a, 'tcx> CodegenCx<'a, 'tcx> {
                     "Compute" => Some(true),
                     _ => None,
                 })
-            })
-            .is_some();
+            }).is_some();
         assert!(is_compute, "Not Compute");
         self.compute.unwrap_or_else(|| {
             let spirv_ty = self.to_ty(ty, spirv::StorageClass::Input);
@@ -563,6 +562,70 @@ impl<'a, 'tcx> CodegenCx<'a, 'tcx> {
     }
 }
 
+#[derive(Debug, Copy, Clone)]
+pub struct MergeBlock {
+    pub branch_header: mir::BasicBlock,
+    pub merge_block: mir::BasicBlock,
+}
+
+pub fn find_merge_blocks(petmir: &PetMir) -> Vec<MergeBlock> {
+    let block_iter = Dfs::new(&petmir.graph, petmir.start_block()).iter(&petmir.graph);
+    block_iter
+        .filter_map(|bb| {
+            let block_data = &petmir.mir.basic_blocks()[bb];
+            match block_data.terminator().kind {
+                mir::TerminatorKind::SwitchInt {
+                    ref discr,
+                    switch_ty,
+                    ref targets,
+                    ..
+                } => {
+                    let merge_block =
+                        find_merge_block(petmir, bb, targets).expect("no merge block");
+                    Some(MergeBlock {
+                        branch_header: bb,
+                        merge_block,
+                    })
+                }
+                _ => None,
+            }
+        }).collect()
+}
+pub fn find_merge_block(
+    petmir: &PetMir,
+    root: mir::BasicBlock,
+    targets: &[mir::BasicBlock],
+) -> Option<mir::BasicBlock> {
+    let dominators = petmir.mir.dominators();
+    let ret_block = petmir
+        .return_block(root)
+        .or_else(|| petmir.resume_block(root))
+        .expect("Unable to find ending");
+    let reversed = Reversed(&petmir.graph);
+    let mut set: HashSet<_> = Bfs::new(reversed, ret_block).iter(reversed).collect();
+    let merge_targets: Vec<_> = targets
+        .iter()
+        .filter(|&bb| set.contains(bb))
+        .cloned()
+        .collect();
+    // println!("root {:?}", root);
+    // println!("targets {:?}", merge_targets);
+    // println!("set {:?}", set);
+    // println!("ret {:?}", ret_block);
+    Bfs::new(&petmir.graph, root)
+        .iter(&petmir.graph)
+        .find(|&bb| {
+            let not_root = bb != root;
+            let reachable_by_branches = merge_targets
+                .iter()
+                .all(|&target| petmir.is_reachable(target, bb));
+            // println!("{:?}", bb);
+            // println!("not root {}", not_root);
+            // println!("reach {}", reachable_by_branches);
+
+            not_root && reachable_by_branches
+        })
+}
 #[derive(Clone)]
 pub struct SpirvMir<'a, 'tcx: 'a> {
     pub def_id: hir::def_id::DefId,
@@ -577,55 +640,16 @@ impl<'a, 'tcx> SpirvMir<'a, 'tcx> {
         &self.mir
     }
     pub fn from_mir(mcx: &::MirContext<'a, 'tcx>) -> Self {
-        //println!("{:?}", mcx.def_id);
-        use mir::visit::Visitor;
-        struct FindMergeBlocks<'a, 'tcx: 'a> {
-            mir: &'a mir::Mir<'tcx>,
-            merge_blocks: HashMap<mir::BasicBlock, mir::BasicBlock>,
-            first: HashMap<mir::BasicBlock, mir::BasicBlock>,
-        }
-        impl<'a, 'tcx> FindMergeBlocks<'a, 'tcx> {}
-
-        impl<'a, 'tcx> Visitor<'tcx> for FindMergeBlocks<'a, 'tcx> {
-            fn visit_terminator_kind(
-                &mut self,
-                block: mir::BasicBlock,
-                kind: &mir::TerminatorKind<'tcx>,
-                location: mir::Location,
-            ) {
-                match kind {
-                    &mir::TerminatorKind::SwitchInt {
-                        ref discr,
-                        switch_ty,
-                        ref targets,
-                        ..
-                    } => {
-                        let merge_block =
-                            ::find_merge_block(self.mir, block, targets).expect("no merge block");
-                        //println!("{:?} for {:?}", block, merge_block);
-                        self.merge_blocks.insert(block, merge_block);
-                        if !self.first.contains_key(&merge_block) {
-                            self.first.insert(merge_block, block);
-                        }
-                    }
-                    _ => (),
-                };
-            }
-        }
-
-        let mut visitor = FindMergeBlocks {
-            mir: mcx.mir,
-            merge_blocks: HashMap::new(),
-            first: HashMap::new(),
-        };
-
-        visitor.visit_mir(mcx.mir);
-        let merge_blocks = visitor.merge_blocks;
-        let first = visitor.first;
         let mut spirv_mir = mcx.mir.clone();
         let mut fixed_merge_blocks = HashMap::new();
-        use syntax_pos::DUMMY_SP;
-        for (block, merge_block) in merge_blocks {
+        let petmir = PetMir::from_mir(mcx.mir);
+        let merge_blocks = find_merge_blocks(&petmir);
+        for MergeBlock {
+            branch_header: block,
+            merge_block,
+        } in merge_blocks
+        {
+            //println!("Fix {:?} {:?}", block, merge_block);
             let terminator = mir::Terminator {
                 source_info: mir::SourceInfo {
                     span: DUMMY_SP,
@@ -635,15 +659,13 @@ impl<'a, 'tcx> SpirvMir<'a, 'tcx> {
                     target: merge_block,
                 },
             };
-            use rustc_data_structures::control_flow_graph::iterate::post_order_from_to;
-            use rustc_data_structures::control_flow_graph::ControlFlowGraph;
-            use std::collections::HashSet;
-            let suc: HashSet<_> = post_order_from_to(&spirv_mir, block, Some(merge_block))
-                .into_iter()
-                .collect();
+            let dominators = spirv_mir.dominators();
             let previous_blocks =
-                ControlFlowGraph::predecessors(&spirv_mir, merge_block).filter(|block| true);
-            //.filter(|block| dominators.is_dominated_by(merge_block, *block));
+                ControlFlowGraph::predecessors(&spirv_mir, merge_block).filter(|&bb| {
+                    let dominated = dominators.is_dominated_by(bb, block);
+                    //println!("dom {:?} {:?} {}", bb, block, dominated);
+                    dominated
+                });
             let goto_data = mir::BasicBlockData::new(Some(terminator));
             let goto_block = spirv_mir.basic_blocks_mut().push(goto_data);
             fixed_merge_blocks.insert(block, goto_block);

@@ -1,4 +1,3 @@
-use std::io::Write;
 use petgraph;
 use petgraph::graphmap::GraphMap;
 use petgraph::Directed;
@@ -6,6 +5,7 @@ use rustc::mir;
 use rustc_data_structures::control_flow_graph::{iterate::post_order_from_to, ControlFlowGraph};
 use std::collections::HashMap;
 use std::fs::File;
+use std::io::Write;
 use std::path::Path;
 
 pub struct PetMir<'a, 'tcx: 'a> {
@@ -35,8 +35,7 @@ impl<'a, 'tcx> PetMir<'a, 'tcx> {
                     mir::TerminatorKind::Resume => Some(bb),
                     _ => None,
                 }
-            })
-            .nth(0)
+            }).nth(0)
     }
     pub fn return_block(&self, start: mir::BasicBlock) -> Option<mir::BasicBlock> {
         post_order_from_to(self.mir, start, None)
@@ -47,8 +46,7 @@ impl<'a, 'tcx> PetMir<'a, 'tcx> {
                     mir::TerminatorKind::Return => Some(bb),
                     _ => None,
                 }
-            })
-            .nth(0)
+            }).nth(0)
     }
     pub fn from_mir(mir: &'a mir::Mir<'tcx>) -> Self {
         let mut graph = GraphMap::new();

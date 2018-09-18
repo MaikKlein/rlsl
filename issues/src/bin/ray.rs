@@ -7,6 +7,19 @@ pub struct Sphere {
     pub radius: f32,
 }
 
+// #[allow(unused_qualifications)]
+// impl ::std::clone::Clone for Ray {
+//     #[inline]
+//     fn clone(&self) -> Ray {
+//         match *self {
+//             Ray { origin: ref __self_0_0, dir: ref __self_0_1 } =>
+//             Ray{origin: ::std::clone::Clone::clone(&(*__self_0_0)),
+//                 dir: ::std::clone::Clone::clone(&(*__self_0_1)),},
+//         }
+//     }
+// }
+
+//#[derive(Clone)]
 pub struct Ray {
     pub origin: Vec3<f32>,
     pub dir: Unit<Vec3<f32>>,
@@ -31,40 +44,51 @@ impl Sphere {
     pub fn new(origin: Vec3<f32>, radius: f32) -> Sphere {
         Sphere { origin, radius }
     }
-    pub fn intersect(&self, ray: Ray) -> Option<RayHit> {
-        use rlsl_math::polynomial::quadratic;
-        let oc = ray.origin - self.origin;
-        //a is always one if the direction is a unit vector
-        let a = 1.0f32;
-        let b = 2.0 * ray.dir.dot(oc);
-        let c = Vec3::dot(oc, oc) - self.radius * self.radius;
-        let s = quadratic(a, b, c)?;
-        let t = s.x;
-        // let discr = b * b - 4.0 * a * c;
-        // let t = if discr < 0.0 {
-        //     -1.0
-        // } else {
-        //     let two_a = 2.0 * a;
-        //     let t1 = (b * -1.0 - discr.sqrt()) / two_a;
-        //     let t2 = (b * -1.0 + discr.sqrt()) / two_a;
-        //     if t1 < t2 {
-        //         t1
-        //     } else {
-        //         t2
-        //     }
-        // };
-        if t > 0.0001 {
-            let position = ray.position(t);
-            let normal = position - self.origin;
-            let normal = normal.normalize();
-            Some(RayHit {
-                position,
-                normal,
-                dist: t,
-            })
-        } else {
-            None
-        }
+    pub fn intersect(self, ray: Ray) -> Option<RayHit> {
+       use rlsl_math::polynomial::quadratic;
+       let oc = ray.origin - self.origin;
+       //a is always one if the direction is a unit vector
+       let a = 1.0f32;
+       let b = 2.0 * ray.dir.dot(oc);
+       let c = Vec3::dot(oc, oc) - self.radius * self.radius;
+       let dist = quadratic(a, b, c)?.min();
+       if dist < 0.0{
+           return None;
+       }
+       let position = ray.position(dist);
+       let normal = position - self.origin;
+       let normal = normal.normalize();
+       let hit = RayHit {
+           position,
+           normal,
+           dist,
+       };
+       Some(hit)
+       // let discr = b * b - 4.0 * a * c;
+       // let t = if discr < 0.0 {
+       //     -1.0
+       // } else {
+       //     let two_a = 2.0 * a;
+       //     let t1 = (b * -1.0 - discr.sqrt()) / two_a;
+       //     let t2 = (b * -1.0 + discr.sqrt()) / two_a;
+       //     if t1 < t2 {
+       //         t1
+       //     } else {
+       //         t2
+       //     }
+       // };
+       // if t > 0.0001 {
+       //     let position = ray.position(t);
+       //     let normal = position - self.origin;
+       //     let normal = normal.normalize();
+       //     Some(RayHit {
+       //         position,
+       //         normal,
+       //         dist: t,
+       //     })
+       // } else {
+       //     None
+       // }
     }
 }
 
@@ -85,7 +109,16 @@ fn fragment(
     // The direction of the ray that we will shoot
     let dir = look + coord;
     let ray = Ray::new(origin, dir.to_unit());
-    let position = Vec2::from_polar( 1.0 * time, 2.0).extend(10.0);
+    // let ray2 = Ray::new(origin, dir.to_unit());
+    // let ray3 = match ray2{
+    //      Ray { origin: ref oref, dir: ref dref } => {
+    //          Ray{
+    //              origin: oref.clone(),
+    //              dir: dref.clone(),
+    //          }
+    //      }
+    // };
+    let position = Vec2::from_polar(1.0 * time, 2.0).extend(10.0);
     let sphere = Sphere::new(position, 4.0);
     let hit = sphere.intersect(ray);
     let light_pos = Vec3::new(2.0, -4.0, 0.0);
@@ -98,15 +131,15 @@ fn fragment(
         let color_sphere = Vec3::new(0.9, 0.1, 0.1) * cos;
         color_sphere.extend(1.0)
     } else {
-        // Pseudo sky color. We lerp between white an blue. The uv.y value is 
-        // inbetween 0 and 1 and starts from the top. 
+        // Pseudo sky color. We lerp between white an blue. The uv.y value is
+        // inbetween 0 and 1 and starts from the top.
         let t = uv.y;
         let white = Vec3::single(1.0);
         let blue = Vec3::new(0.2, 0.5, 1.0);
         blue.lerp(white, t).extend(1.0)
     };
 
-    Output::new(color)
+    Output::new(Vec4::new(0.0, 0.0, 0.0, 0.0))
 }
 
 fn main() {}
