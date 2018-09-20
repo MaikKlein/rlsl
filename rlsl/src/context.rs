@@ -628,7 +628,7 @@ pub fn find_merge_block(
 }
 
 /// Sometimes you will see two branches that share the same block. Or not all blocks
-/// that are between the branch header and the merge block are dominated by the 
+/// that are between the branch header and the merge block are dominated by the
 /// header. This can be fixed by duplicated those shared blocks.
 pub fn fix_overlapping_control_flow<'tcx>(
     mut mir: mir::Mir<'tcx>,
@@ -733,8 +733,8 @@ impl<'a, 'tcx> SpirvMir<'a, 'tcx> {
                 },
             };
             let dominators = spirv_mir.dominators();
-            let previous_blocks: Vec<_> =
-                ControlFlowGraph::predecessors(&spirv_mir, merge_block).filter(|&bb| {
+            let previous_blocks: Vec<_> = ControlFlowGraph::predecessors(&spirv_mir, merge_block)
+                .filter(|&bb| {
                     let dominated = dominators.is_dominated_by(bb, block);
                     //println!("dom {:?} {:?} {}", bb, block, dominated);
                     dominated

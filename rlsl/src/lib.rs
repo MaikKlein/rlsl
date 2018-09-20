@@ -817,7 +817,9 @@ pub fn trans_spirv<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, items: &'a FxHashSet<M
         use spirv::GLOp::*;
         if let &MonoItem::Fn(ref instance) = item {
             let def_id = instance.def_id();
+            let name = tcx.def_path(def_id).to_filename_friendly_no_crate();
             if tcx.lang_items().panic_fn() == Some(def_id) {
+                println!("PANIC {:?}", def_id);
                 ctx.intrinsic_fns.insert(def_id, Intrinsic::Abort);
             }
             if tcx.is_foreign_item(def_id) {
@@ -873,13 +875,13 @@ pub fn trans_spirv<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, items: &'a FxHashSet<M
 
     let entry_fn_node_id = tcx.sess.entry_fn.borrow().expect("entry").0;
     let entry_fn = tcx.hir.local_def_id(entry_fn_node_id);
-    // instances
-    //     .iter()
-    //     .filter(|mcx| mcx.def_id != entry_fn && tcx.lang_items().start_fn() != Some(mcx.def_id))
-    //     .for_each(|mcx| {
-    //         println!("{:#?}", mcx.def_id);
-    //         println!("{:#?}", mcx.mir);
-    //     });
+    instances
+        .iter()
+        .filter(|mcx| mcx.def_id != entry_fn && tcx.lang_items().start_fn() != Some(mcx.def_id))
+        .for_each(|mcx| {
+            println!("{:#?}", mcx.def_id);
+            println!("{:#?}", mcx.mir);
+        });
     instances
         .iter()
         .filter(|mcx| mcx.def_id != entry_fn && tcx.lang_items().start_fn() != Some(mcx.def_id))
@@ -895,7 +897,12 @@ pub fn trans_spirv<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, items: &'a FxHashSet<M
         let graph = graph::PetMir::from_mir(&mcx.mir);
         graph.export(&mut mir_after);
     }
-
+    // let mut mir_after_orig =
+    //     std::fs::File::create("/home/maik/projects/rlsl/issues/mir/mir_after_orig.dot")
+    //         .expect("graph");
+    // for mcx in &spirv_instances {
+    //     rustc_mir::util::write_mir_fn_graphviz(tcx, mcx.def_id, &mcx.mir, &mut mir_after_orig);
+    // }
     // spirv_instances.iter().for_each(|scx| {
     //     println!("{:#?}", scx.def_id);
     //     println!("{:#?}", scx.merge_blocks);
@@ -1382,25 +1389,29 @@ pub struct Enum<'tcx> {
 impl<'tcx> Enum<'tcx> {
     pub fn from_ty<'a>(tcx: TyCtxt<'a, 'tcx, 'tcx>, ty: ty::Ty<'tcx>) -> Option<Enum<'tcx>> {
         use rustc::ty::layout::Variants;
-        let e = tcx
+        let layout = tcx
             .layout_of(ty::ParamEnvAnd {
                 param_env: ty::ParamEnv::reveal_all(),
                 value: ty,
-            }).ok()
-            .and_then(|ty_layout| {
-                let ty = ty_layout.ty;
-                if let Variants::Tagged {
+            }).ok();
+        let e = layout.and_then(|ty_layout| {
+            let ty = ty_layout.ty;
+            match ty_layout.details.variants {
+                Variants::Tagged {
                     ref tag,
                     ref variants,
-                } = ty_layout.details.variants
-                {
+                } => {
                     // TODO: Find the correct discr type
                     let discr_ty = tcx.types.u32;
                     Some((discr_ty, variants.len()))
-                } else {
+                }
+                Variants::NicheFilling { .. } => {
+                    // TODO: Handle Niechefilling enums
                     None
                 }
-            });
+                _ => None,
+            }
+        });
         if let Some((discr_ty, index)) = e {
             Some(Enum { discr_ty, index })
         } else {
@@ -1568,6 +1579,7 @@ impl<'b, 'a, 'tcx> rustc::mir::visit::Visitor<'tcx> for FunctionCx<'b, 'a, 'tcx>
                 };
                 let var = *self.vars.get(&local).expect("local");
                 let ty = self.mcx.mir().local_decls[local].ty;
+                let ty = self.mcx.monomorphize(&ty);
                 // TODO: Cleanup, currently generates 0 value for non enum types
                 let load = if let Some(enum_data) = Enum::from_ty(self.mcx.tcx, ty) {
                     let discr_ty = self.mcx.monomorphize(&enum_data.discr_ty);
@@ -1662,6 +1674,7 @@ impl<'b, 'a, 'tcx> rustc::mir::visit::Visitor<'tcx> for FunctionCx<'b, 'a, 'tcx>
                 ref discr,
                 switch_ty,
                 ref targets,
+                ref values,
                 ..
             } => {
                 // let _selector = if switch_ty.is_bool() {
@@ -1692,7 +1705,7 @@ impl<'b, 'a, 'tcx> rustc::mir::visit::Visitor<'tcx> for FunctionCx<'b, 'a, 'tcx>
                     .enumerate()
                     .map(|(index, target)| {
                         let label = self.label_blocks.get(&target).expect("label");
-                        (index as u32, label.0)
+                        (values[index] as u32, label.0)
                     }).collect();
                 // Sometimes we get duplicated merge block labels. To fix this we
                 // always create a new block and branch to it. This will give us a new unique
@@ -1943,14 +1956,16 @@ impl<'b, 'a, 'tcx> rustc::mir::visit::Visitor<'tcx> for FunctionCx<'b, 'a, 'tcx>
                 target,
                 unwind,
             } => {
-                if let Some(unwind) = unwind {
-                    self.resume_at = Some(target);
-                    let target_label = self.label_blocks.get(&unwind).expect("no label");
-                    self.scx.builder.branch(target_label.0).expect("label");
-                } else {
-                    let target_label = self.label_blocks.get(&target).expect("no label");
-                    self.scx.builder.branch(target_label.0).expect("label");
-                }
+                let target_label = self.label_blocks.get(&target).expect("no label");
+                self.scx.builder.branch(target_label.0).expect("label");
+                // if let Some(unwind) = unwind {
+                //     self.resume_at = Some(target);
+                //     let target_label = self.label_blocks.get(&unwind).expect("no label");
+                //     self.scx.builder.branch(target_label.0).expect("label");
+                // } else {
+                //     let target_label = self.label_blocks.get(&target).expect("no label");
+                //     self.scx.builder.branch(target_label.0).expect("label");
+                // }
             }
             &mir::TerminatorKind::Resume => {
                 // let resume_at = self.resume_at.expect("Resume");

@@ -45,50 +45,25 @@ impl Sphere {
         Sphere { origin, radius }
     }
     pub fn intersect(self, ray: Ray) -> Option<RayHit> {
-       use rlsl_math::polynomial::quadratic;
-       let oc = ray.origin - self.origin;
-       //a is always one if the direction is a unit vector
-       let a = 1.0f32;
-       let b = 2.0 * ray.dir.dot(oc);
-       let c = Vec3::dot(oc, oc) - self.radius * self.radius;
-       let dist = quadratic(a, b, c)?.min();
-       if dist < 0.0{
-           return None;
-       }
-       let position = ray.position(dist);
-       let normal = position - self.origin;
-       let normal = normal.normalize();
-       let hit = RayHit {
-           position,
-           normal,
-           dist,
-       };
-       Some(hit)
-       // let discr = b * b - 4.0 * a * c;
-       // let t = if discr < 0.0 {
-       //     -1.0
-       // } else {
-       //     let two_a = 2.0 * a;
-       //     let t1 = (b * -1.0 - discr.sqrt()) / two_a;
-       //     let t2 = (b * -1.0 + discr.sqrt()) / two_a;
-       //     if t1 < t2 {
-       //         t1
-       //     } else {
-       //         t2
-       //     }
-       // };
-       // if t > 0.0001 {
-       //     let position = ray.position(t);
-       //     let normal = position - self.origin;
-       //     let normal = normal.normalize();
-       //     Some(RayHit {
-       //         position,
-       //         normal,
-       //         dist: t,
-       //     })
-       // } else {
-       //     None
-       // }
+        use rlsl_math::polynomial::quadratic;
+        let oc = ray.origin - self.origin;
+        //a is always one if the direction is a unit vector
+        let a = 1.0f32;
+        let b = 2.0 * ray.dir.dot(oc);
+        let c = Vec3::dot(oc, oc) - self.radius * self.radius;
+        let t = quadratic(a, b, c)?.min();
+        if t < 0.0 {
+            return None;
+        }
+        let position = ray.position(t);
+        let normal = position - self.origin;
+        let normal = normal.normalize();
+        let hit = RayHit {
+            position,
+            normal,
+            dist: t,
+        };
+        Some(hit)
     }
 }
 
@@ -98,7 +73,6 @@ fn fragment(
     uv: Input<N0, Vec2<f32>>,
     time: Uniform<N0, N0, f32>,
 ) -> Output<N0, Vec4<f32>> {
-    //let b: bool = true;
     let uv = *uv;
     let time = *time;
     let coord = (uv * 2.0 - 1.0).extend(0.0);
@@ -109,17 +83,8 @@ fn fragment(
     // The direction of the ray that we will shoot
     let dir = look + coord;
     let ray = Ray::new(origin, dir.to_unit());
-    // let ray2 = Ray::new(origin, dir.to_unit());
-    // let ray3 = match ray2{
-    //      Ray { origin: ref oref, dir: ref dref } => {
-    //          Ray{
-    //              origin: oref.clone(),
-    //              dir: dref.clone(),
-    //          }
-    //      }
-    // };
     let position = Vec2::from_polar(1.0 * time, 2.0).extend(10.0);
-    let sphere = Sphere::new(position, 4.0);
+    let sphere = Sphere::new(position, 1.0);
     let hit = sphere.intersect(ray);
     let light_pos = Vec3::new(2.0, -4.0, 0.0);
     let color = if let Some(hit) = hit {
@@ -138,8 +103,7 @@ fn fragment(
         let blue = Vec3::new(0.2, 0.5, 1.0);
         blue.lerp(white, t).extend(1.0)
     };
-
-    Output::new(Vec4::new(0.0, 0.0, 0.0, 0.0))
+    Output::new(color)
 }
 
 fn main() {}

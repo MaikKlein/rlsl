@@ -5,18 +5,19 @@ extern crate quickcheck;
 extern crate gfx_hal as hal;
 extern crate issues;
 
-use quickcheck::TestResult;
 use hal::{buffer, command, memory, pool, pso, queue};
 use hal::{Backend, Compute, DescriptorPool, Device, Instance, PhysicalDevice, QueueFamily};
-use std::mem::size_of;
+use quickcheck::TestResult;
+use std::fmt::Debug;
 use std::fs;
+use std::mem::size_of;
 use std::path::Path;
 
 pub fn compute<T, P, F>(name: &str, numbers: Vec<T>, path: P, f: F) -> TestResult
 where
     F: Fn(u32, T) -> T,
     P: AsRef<Path>,
-    T: Copy + Clone + PartialEq,
+    T: Copy + Clone + PartialEq + Debug,
 {
     if numbers.is_empty() {
         return TestResult::discard();
@@ -34,8 +35,7 @@ where
             a.queue_families
                 .iter()
                 .any(|family| family.supports_compute())
-        })
-        .expect("Failed to find a GPU with compute support!");
+        }).expect("Failed to find a GPU with compute support!");
 
     let memory_properties = adapter.physical_device.memory_properties();
     let (mut device, mut queue_group) = adapter.open_with::<_, Compute>(1, |_family| true).unwrap();
@@ -46,8 +46,6 @@ where
     spirv_file.read_to_end(&mut data).expect("read");
 
     let shader = device.create_shader_module(&data).unwrap();
-    println!("Shader");
-
     let (pipeline_layout, pipeline, set_layout, mut desc_pool) = {
         let set_layout = device.create_descriptor_set_layout(
             &[pso::DescriptorSetLayoutBinding {
@@ -59,23 +57,18 @@ where
             }],
             &[],
         );
-        println!("Descr");
-
         let pipeline_layout = device.create_pipeline_layout(Some(&set_layout), &[]);
         let entry_point = pso::EntryPoint {
             entry: name,
             module: &shader,
             specialization: &[],
         };
-        println!("Layout");
         let pipeline = device
             .create_compute_pipeline(&pso::ComputePipelineDesc::new(
                 entry_point,
                 &pipeline_layout,
-            ))
-            .expect("Error creating compute pipeline!");
+            )).expect("Error creating compute pipeline!");
 
-        println!("Pipe");
         let desc_pool = device.create_descriptor_pool(
             1,
             &[pso::DescriptorRangeDesc {
@@ -83,7 +76,6 @@ where
                 count: 1,
             }],
         );
-        println!("Pool");
         (pipeline_layout, pipeline, set_layout, desc_pool)
     };
 
@@ -170,17 +162,49 @@ where
     queue_group.queues[0].submit(submission, Some(&fence));
     device.wait_for_fence(&fence, !0);
 
+    #[derive(Debug)]
+    struct Errors<T> {
+        input: Vec<T>,
+        rlsl: Vec<T>,
+        rustc: Vec<T>,
+    }
     let eq = {
-        let reader = device
-            .acquire_mapping_reader::<T>(&staging_buffer.memory, 0..stride * numbers.len() as u64)
-            .unwrap();
-        let numbers_gpu = reader.into_iter().map(|n| *n).collect::<Vec<T>>();
+        let numbers_gpu = {
+            let reader = device
+                .acquire_mapping_reader::<T>(
+                    &staging_buffer.memory,
+                    0..stride * numbers.len() as u64,
+                ).unwrap();
+            let numbers = reader.into_iter().map(|n| *n).collect::<Vec<T>>();
+            device.release_mapping_reader(reader);
+            numbers
+        };
         numbers_cpu.iter_mut().enumerate().for_each(|(index, val)| {
             let result = f(index as u32, *val);
             *val = result;
         });
-        device.release_mapping_reader(reader);
-        numbers_gpu == numbers_cpu
+        if numbers_gpu == numbers_cpu {
+            Ok(())
+        } else {
+            let indices: Vec<_> = Iterator::zip(numbers_gpu.iter(), numbers_cpu.iter())
+                .enumerate()
+                .filter_map(
+                    |(idx, (gpu, cpu))| {
+                        if gpu != cpu {
+                            Some(idx)
+                        } else {
+                            None
+                        }
+                    },
+                ).take(10)
+                .collect();
+            let input: Vec<_> = indices.iter().map(|&idx| numbers[idx]).collect();
+            let rustc: Vec<_> = indices.iter().map(|&idx| numbers_cpu[idx]).collect();
+            let rlsl: Vec<_> = indices.iter().map(|&idx| numbers_gpu[idx]).collect();
+            let errors = Errors { input, rustc, rlsl };
+            println!("{:#?}", errors);
+            Err(errors)
+        }
     };
 
     device.destroy_command_pool(command_pool.into_raw());
@@ -195,13 +219,16 @@ where
     device.free_memory(staging_buffer.memory);
     device.destroy_compute_pipeline(pipeline);
 
-    TestResult::from_bool(eq)
+    match eq {
+        Ok(_) => TestResult::passed(),
+        Err(errors) => TestResult::error(format!("{:#?}", errors)),
+    }
 }
 
 pub struct Buffer<B: Backend> {
     pub memory: B::Memory,
     pub buffer: B::Buffer,
-    pub requirements: memory::Requirements
+    pub requirements: memory::Requirements,
 }
 
 fn create_buffer<B: Backend>(
@@ -220,15 +247,16 @@ fn create_buffer<B: Backend>(
         .enumerate()
         .position(|(id, memory_type)| {
             requirements.type_mask & (1 << id) != 0 && memory_type.properties.contains(properties)
-        })
-        .unwrap()
+        }).unwrap()
         .into();
 
     let memory = device.allocate_memory(ty, requirements.size).unwrap();
     let buffer = device.bind_buffer_memory(&memory, 0, buffer).unwrap();
 
     Buffer {
-        memory, buffer, requirements
+        memory,
+        buffer,
+        requirements,
     }
 }
 
@@ -241,8 +269,27 @@ mod tests {
         fn compute_u32_add(input: Vec<f32>) -> TestResult {
             compute("compute", input, "../.shaders/u32-add.spv", issues::u32_add)
         }
+
         fn compute_square(input: Vec<f32>) -> TestResult {
             compute("compute", input, "../.shaders/square.spv", issues::square)
+        }
+
+        fn compute_questionmark_option(input: Vec<f32>) -> TestResult {
+            compute("compute", input, "../.shaders/questionmark-option.spv", issues::questionmark_option)
+        }
+
+        fn compute_ok_or(input: Vec<f32>) -> TestResult {
+            compute("compute", input, "../.shaders/ok_or.spv", issues::ok_or)
+        }
+        fn compute_match_enum(input: Vec<f32>) -> TestResult {
+            compute("compute", input, "../.shaders/match_enum.spv", issues::match_enum)
+        }
+        fn compute_match_result(input: Vec<f32>) -> TestResult {
+            compute("compute", input, "../.shaders/match_result.spv", issues::match_result)
+        }
+
+        fn compute_option(input: Vec<f32>) -> TestResult {
+            compute("compute", input, "../.shaders/option.spv", issues::option)
         }
 
         fn compute_single_branch(input: Vec<f32>) -> TestResult {
