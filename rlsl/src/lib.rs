@@ -875,13 +875,13 @@ pub fn trans_spirv<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, items: &'a FxHashSet<M
 
     let entry_fn_node_id = tcx.sess.entry_fn.borrow().expect("entry").0;
     let entry_fn = tcx.hir.local_def_id(entry_fn_node_id);
-    instances
-        .iter()
-        .filter(|mcx| mcx.def_id != entry_fn && tcx.lang_items().start_fn() != Some(mcx.def_id))
-        .for_each(|mcx| {
-            println!("{:#?}", mcx.def_id);
-            println!("{:#?}", mcx.mir);
-        });
+    // instances
+    //     .iter()
+    //     .filter(|mcx| mcx.def_id != entry_fn && tcx.lang_items().start_fn() != Some(mcx.def_id))
+    //     .for_each(|mcx| {
+    //         println!("{:#?}", mcx.def_id);
+    //         println!("{:#?}", mcx.mir);
+    //     });
     instances
         .iter()
         .filter(|mcx| mcx.def_id != entry_fn && tcx.lang_items().start_fn() != Some(mcx.def_id))
@@ -905,7 +905,7 @@ pub fn trans_spirv<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, items: &'a FxHashSet<M
     // }
     // spirv_instances.iter().for_each(|scx| {
     //     println!("{:#?}", scx.def_id);
-    //     println!("{:#?}", scx.merge_blocks);
+    //     println!("{:#?}", scx.mir);
     // });
 
     // Finds functions that return a reference
@@ -1472,6 +1472,7 @@ impl<'b, 'a, 'tcx> rustc::mir::visit::Visitor<'tcx> for FunctionCx<'b, 'a, 'tcx>
         for (bb, data) in order {
             self.visit_basic_block_data(bb, &data);
         }
+        //self.visit_basic_block_data(mir::START_BLOCK, &mir.basic_blocks()[mir::START_BLOCK]);
 
         for scope in &mir.source_scopes {
             self.visit_source_scope_data(scope);
@@ -1632,14 +1633,125 @@ impl<'b, 'a, 'tcx> rustc::mir::visit::Visitor<'tcx> for FunctionCx<'b, 'a, 'tcx>
         let variable = Variable::access_chain(self, lvalue);
         variable.store(self.scx, expr);
     }
+    // fn super_terminator_kind(
+    //     &mut self,
+    //     block: mir::BasicBlock,
+    //     kind: &mir::TerminatorKind<'tcx>,
+    //     source_location: mir::Location,
+    // ) {
+    //     use mir::TerminatorKind;
+    //     use rustc::mir::visit::PlaceContext;
+    //     match *kind {
+    //         TerminatorKind::Goto { target } => {
+    //             self.visit_branch(block, target);
+    //         }
 
+    //         TerminatorKind::SwitchInt {
+    //             ref discr,
+    //             ref switch_ty,
+    //             values: _,
+    //             ref targets,
+    //         } => {
+    //             self.visit_operand(discr, source_location);
+    //             self.visit_ty(switch_ty, TyContext::Location(source_location));
+    //             for &target in targets {
+    //                 self.visit_branch(block, target);
+    //             }
+    //         }
+
+    //         TerminatorKind::Resume
+    //         | TerminatorKind::Abort
+    //         | TerminatorKind::Return
+    //         | TerminatorKind::GeneratorDrop
+    //         | TerminatorKind::Unreachable => {}
+
+    //         TerminatorKind::Drop {
+    //             ref location,
+    //             target,
+    //             ..
+    //         } => {
+    //             self.visit_place(location, PlaceContext::Drop, source_location);
+    //             self.visit_branch(block, target);
+    //         }
+
+    //         TerminatorKind::DropAndReplace {
+    //             ref location,
+    //             ref value,
+    //             target,
+    //             ..
+    //         } => {
+    //             self.visit_place(location, PlaceContext::Drop, source_location);
+    //             self.visit_operand(value, source_location);
+    //             self.visit_branch(block, target);
+    //         }
+
+    //         TerminatorKind::Call {
+    //             ref func,
+    //             ref args,
+    //             ref destination,
+    //             cleanup
+    //         } => {
+    //             println!("CALL {:?} {:?}", destination, cleanup);
+    //             self.visit_operand(func, source_location);
+    //             for arg in args {
+    //                 self.visit_operand(arg, source_location);
+    //             }
+    //             if let Some((ref destination, target)) = *destination {
+    //                 self.visit_place(destination, PlaceContext::Call, source_location);
+    //                 self.visit_branch(block, target);
+    //             }
+    //         }
+
+    //         TerminatorKind::Assert {
+    //             ref cond,
+    //             expected: _,
+    //             ref msg,
+    //             target,
+    //             ..
+    //         } => {
+    //             self.visit_operand(cond, source_location);
+    //             self.visit_assert_message(msg, source_location);
+    //             self.visit_branch(block, target);
+    //         }
+
+    //         TerminatorKind::Yield {
+    //             ref value,
+    //             resume,
+    //             drop,
+    //         } => {
+    //             self.visit_operand(value, source_location);
+    //             self.visit_branch(block, resume);
+    //             drop.map(|t| self.visit_branch(block, t));
+    //         }
+
+    //         TerminatorKind::FalseEdges {
+    //             real_target,
+    //             ref imaginary_targets,
+    //         } => {
+    //             self.visit_branch(block, real_target);
+    //             for target in imaginary_targets {
+    //                 self.visit_branch(block, *target);
+    //             }
+    //         }
+
+    //         TerminatorKind::FalseUnwind {
+    //             real_target,
+    //             ..
+    //         } => {
+    //             self.visit_branch(block, real_target);
+    //         }
+    //     }
+    // }
+
+    // fn visit_branch(&mut self, source: mir::BasicBlock, target: mir::BasicBlock) {
+    //     self.visit_basic_block_data(target, &self.mcx.mir.basic_blocks()[target]);
+    // }
     fn visit_terminator_kind(
         &mut self,
         block: mir::BasicBlock,
         kind: &mir::TerminatorKind<'tcx>,
         location: mir::Location,
     ) {
-        self.super_terminator_kind(block, kind, location);
         let mir = self.mcx.mir();
         match kind {
             &mir::TerminatorKind::Return => {
@@ -1769,8 +1881,11 @@ impl<'b, 'a, 'tcx> rustc::mir::visit::Visitor<'tcx> for FunctionCx<'b, 'a, 'tcx>
                 ref func,
                 ref args,
                 ref destination,
-                ..
+                cleanup,
             } => {
+                if let Some(cleanup) = cleanup {
+                    self.resume_at = Some(cleanup);
+                }
                 let local_decls = &self.mcx.mir().local_decls;
                 let fn_ty = func.ty(self.mcx.mir(), self.mcx.tcx);
                 let (def_id, substs) = match fn_ty.sty {
@@ -1956,28 +2071,29 @@ impl<'b, 'a, 'tcx> rustc::mir::visit::Visitor<'tcx> for FunctionCx<'b, 'a, 'tcx>
                 target,
                 unwind,
             } => {
-                let target_label = self.label_blocks.get(&target).expect("no label");
-                self.scx.builder.branch(target_label.0).expect("label");
-                // if let Some(unwind) = unwind {
-                //     self.resume_at = Some(target);
-                //     let target_label = self.label_blocks.get(&unwind).expect("no label");
-                //     self.scx.builder.branch(target_label.0).expect("label");
-                // } else {
-                //     let target_label = self.label_blocks.get(&target).expect("no label");
-                //     self.scx.builder.branch(target_label.0).expect("label");
-                // }
+                // let target_label = self.label_blocks.get(&target).expect("no label");
+                // self.scx.builder.branch(target_label.0).expect("label");
+                if let Some(unwind) = unwind {
+                    self.resume_at = Some(target);
+                    let target_label = self.label_blocks.get(&unwind).expect("no label");
+                    self.scx.builder.branch(target_label.0).expect("label");
+                } else {
+                    let target_label = self.label_blocks.get(&target).expect("no label");
+                    self.scx.builder.branch(target_label.0).expect("label");
+                }
             }
             &mir::TerminatorKind::Resume => {
-                // let resume_at = self.resume_at.expect("Resume");
-                // let target_label = self.label_blocks.get(&resume_at).expect("no label");
-                // self.scx.builder.branch(target_label.0).expect("label");
-                self.scx.builder.unreachable();
+                let resume_at = self.resume_at.expect("Resume");
+                let target_label = self.label_blocks.get(&resume_at).expect("no label");
+                self.scx.builder.branch(target_label.0).expect("label");
+                //self.scx.builder.unreachable();
             }
             mir::TerminatorKind::Unreachable => {
                 self.scx.builder.unreachable();
             }
             rest => unimplemented!("{:?}", rest),
         };
+        self.super_terminator_kind(block, kind, location);
     }
 }
 
@@ -2138,6 +2254,24 @@ impl<'b, 'a, 'tcx> FunctionCx<'b, 'a, 'tcx> {
                 rest => unimplemented!("{:?}", rest),
             },
             _ => unimplemented!("ops"),
+        }
+    }
+}
+
+pub fn remove_unwind<'tcx>(mir: &mut mir::Mir<'tcx>) {
+    for data in mir.basic_blocks_mut() {
+        let term = data.terminator_mut();
+        match &mut term.kind {
+            mir::TerminatorKind::Call {
+                cleanup: unwind, ..
+            }
+            | mir::TerminatorKind::FalseUnwind { unwind, .. }
+            | mir::TerminatorKind::Assert { cleanup: unwind, .. }
+            | mir::TerminatorKind::DropAndReplace { unwind, .. }
+            | mir::TerminatorKind::Drop { unwind, .. } => {
+                *unwind = None;
+            }
+            _ => (),
         }
     }
 }

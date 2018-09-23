@@ -746,6 +746,7 @@ impl<'a, 'tcx> SpirvMir<'a, 'tcx> {
                 insert_block_inbetween(&mut spirv_mir, previous_block, merge_block, goto_block);
             }
         }
+        ::remove_unwind(&mut spirv_mir);
         SpirvMir {
             mir: spirv_mir,
             merge_blocks: fixed_merge_blocks,

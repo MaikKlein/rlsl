@@ -37,15 +37,17 @@ impl Ray {
 pub struct RayHit {
     pub dist: f32,
     pub position: Vec3<f32>,
-    pub normal: Vec3<f32>,
+    pub normal: Unit<Vec3<f32>>,
 }
 
 impl Sphere {
     pub fn new(origin: Vec3<f32>, radius: f32) -> Sphere {
         Sphere { origin, radius }
     }
-    pub fn intersect(self, ray: Ray) -> Option<RayHit> {
+    pub fn intersect(&self, ray: Ray) -> Option<RayHit> {
         use rlsl_math::polynomial::quadratic;
+        // a, b and c here are derived from the implicit surface equation of a sphere
+        // by inserting the ray formula and solving for t.
         let oc = ray.origin - self.origin;
         //a is always one if the direction is a unit vector
         let a = 1.0f32;
@@ -57,7 +59,7 @@ impl Sphere {
         }
         let position = ray.position(t);
         let normal = position - self.origin;
-        let normal = normal.normalize();
+        let normal = normal.to_unit();
         let hit = RayHit {
             position,
             normal,
@@ -83,7 +85,7 @@ fn fragment(
     // The direction of the ray that we will shoot
     let dir = look + coord;
     let ray = Ray::new(origin, dir.to_unit());
-    let position = Vec2::from_polar(1.0 * time, 2.0).extend(10.0);
+    let position = Vec2::from_polar(1.0 * time, 2.0).extend(8.0);
     let sphere = Sphere::new(position, 1.0);
     let hit = sphere.intersect(ray);
     let light_pos = Vec3::new(2.0, -4.0, 0.0);
@@ -91,7 +93,7 @@ fn fragment(
         // Calculate the vector from the hit location to the light source
         let light_vec = Vec3::normalize(light_pos - hit.position);
         // The simple phong cosine term
-        let cos = light_vec.dot(hit.normal);
+        let cos = light_vec.dot(*hit.normal);
         // Multiply the color with the cos term
         let color_sphere = Vec3::new(0.9, 0.1, 0.1) * cos;
         color_sphere.extend(1.0)
