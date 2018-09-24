@@ -817,11 +817,6 @@ pub fn trans_spirv<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, items: &'a FxHashSet<M
         use spirv::GLOp::*;
         if let &MonoItem::Fn(ref instance) = item {
             let def_id = instance.def_id();
-            let name = tcx.def_path(def_id).to_filename_friendly_no_crate();
-            if tcx.lang_items().panic_fn() == Some(def_id) {
-                println!("PANIC {:?}", def_id);
-                ctx.intrinsic_fns.insert(def_id, Intrinsic::Abort);
-            }
             if tcx.is_foreign_item(def_id) {
                 let intrinsic_name: String = tcx.item_name(def_id).into();
                 let id = match intrinsic_name.as_str() {
@@ -992,15 +987,15 @@ pub fn trans_spirv<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, items: &'a FxHashSet<M
         FunctionCx::trans_fn(mcx, &mut ctx);
     });
     std::fs::create_dir_all(".shaders").expect("create dir");
-    ctx.build_module(
-        tcx.sess
+    let file_name =tcx.sess
             .local_crate_source_file
             .as_ref()
             .and_then(|p| p.file_stem())
             .map(Path::new)
             .map(|p| Path::new(".shaders").join(p.with_extension("spv")))
-            .expect("file name"),
-    );
+            .expect("file name");
+    let module = ctx.build_module();
+    context::save_module(&module, file_name);
 }
 
 impl<'b, 'a, 'tcx> FunctionCx<'b, 'a, 'tcx> {

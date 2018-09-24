@@ -425,26 +425,12 @@ impl<'a, 'tcx> CodegenCx<'a, 'tcx> {
             self.builder.name(id, name);
         }
     }
-    pub fn build_module<P: AsRef<Path>>(self, file_name: P) {
-        use rspirv::binary::Assemble;
-        use std::fs::File;
-        use std::io::Write;
-        use std::mem::size_of;
-        let mut f = File::create(file_name.as_ref()).unwrap();
-        let mut spirv_module = self.builder.module();
-        if let Some(header) = spirv_module.header.as_mut() {
+    pub fn build_module(self) -> rspirv::mr::Module {
+        let mut module = self.builder.module();
+        if let Some(header) = module.header.as_mut() {
             header.set_version(1, 0);
         }
-        let bytes: Vec<u8> = spirv_module
-            .assemble()
-            .iter()
-            .flat_map(|val| (0..size_of::<u32>()).map(move |i| ((val >> (8 * i)) & 0xff) as u8))
-            .collect();
-
-        let mut loader = rspirv::mr::Loader::new();
-        //let bytes = b.module().assemble_bytes();
-        rspirv::binary::parse_bytes(&bytes, &mut loader);
-        f.write_all(&bytes).expect("write bytes");
+        module
     }
     // TODO: Hack to get the correct type for PerVertex
     pub fn get_per_fragment(&mut self, ty: ty::Ty<'tcx>) -> Variable<'tcx> {
@@ -783,4 +769,18 @@ impl<'a, 'tcx> MirContext<'a, 'tcx> {
         self.tcx
             .subst_and_normalize_erasing_regions(self.substs, ty::ParamEnv::reveal_all(), t)
     }
+}
+
+pub fn save_module<P: AsRef<Path>>(module: &rspirv::mr::Module, file_name: P) {
+    use rspirv::binary::Assemble;
+    use std::fs::File;
+    use std::io::Write;
+    use std::mem::size_of;
+    let bytes: Vec<u8> = module
+        .assemble()
+        .iter()
+        .flat_map(|val| (0..size_of::<u32>()).map(move |i| ((val >> (8 * i)) & 0xff) as u8))
+        .collect();
+    let mut file = File::create(file_name.as_ref()).expect("file");
+    file.write(&bytes);
 }
