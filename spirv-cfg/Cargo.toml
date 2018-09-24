@@ -1,0 +1,12 @@
+[package]
+name = "rspirv-cfg"
+version = "0.1.0"
+authors = ["maik"]
+edition = "2018"
+
+[dependencies]
+rspirv = "0.5"
+spirv_headers = "1.2"
+clap = "2.32"
+petgraph = "0.4"
+

@@ -995,6 +995,7 @@ pub fn trans_spirv<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, items: &'a FxHashSet<M
             .map(|p| Path::new(".shaders").join(p.with_extension("spv")))
             .expect("file name");
     let module = ctx.build_module();
+    graph::export_spirv_cfg(&module);
     context::save_module(&module, file_name);
 }
 

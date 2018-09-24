@@ -1,13 +1,15 @@
 use petgraph;
 use petgraph::graphmap::GraphMap;
 use petgraph::Directed;
+use rspirv::binary::Disassemble;
+use rspirv::mr::{BasicBlock, Function, Instruction, Module, Operand};
 use rustc::mir;
 use rustc_data_structures::control_flow_graph::{iterate::post_order_from_to, ControlFlowGraph};
+use spirv;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::Write;
 use std::path::Path;
-
 pub struct PetMir<'a, 'tcx: 'a> {
     pub mir: &'a mir::Mir<'tcx>,
     pub graph: GraphMap<mir::BasicBlock, (), Directed>,
