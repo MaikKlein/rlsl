@@ -70,15 +70,10 @@ pub struct PetSpirv<'spir> {
 
 pub fn export_spirv_cfg(module: &SpirvModule) {
     let mut file = File::create("test.dot").expect("file");
-    writeln!(&mut file, "digraph {{");
-    writeln!(&mut file, "graph [fontname=\"monospace\"];");
-    writeln!(&mut file, "node [fontname=\"monospace\"];");
-    writeln!(&mut file, "edge [fontname=\"monospace\"];");
     for f in &module.module.functions {
         let s = PetSpirv::new(module, f);
         s.add_fn_to_dot(&mut file);
     }
-    writeln!(&mut file, "}}");
 }
 pub enum Terminator {
     Branch {
@@ -184,6 +179,16 @@ impl<'spir> PetSpirv<'spir> {
     }
     pub fn add_fn_to_dot(&self, write: &mut impl Write) {
         let fn_name = self.module.get_name_fn(&self.function).unwrap_or("Unknown");
+        let dot_friendly_name: String = fn_name
+            .chars()
+            .filter(|c| match c {
+                '$' | '.' => false,
+                _ => true,
+            }).collect();
+        writeln!(write, "digraph {} {{", dot_friendly_name);
+        writeln!(write, "graph [fontname=\"monospace\"];");
+        writeln!(write, "node [fontname=\"monospace\"];");
+        writeln!(write, "edge [fontname=\"monospace\"];");
         let fn_id = self.function.def.as_ref().unwrap().result_id.unwrap();
         let entry = self.block_map.keys().nth(0).expect("entry key");
         writeln!(
@@ -212,7 +217,7 @@ impl<'spir> PetSpirv<'spir> {
             writeln!(write, "\t</td></tr></table>>];");
         }
         self.traverse(write);
-        //writeln!(write, "}}");
+        writeln!(write, "}}");
     }
     pub fn get_label(&self, id: u32) -> String {
         self.module
