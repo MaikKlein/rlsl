@@ -3,7 +3,7 @@ extern crate rspirv;
 extern crate spirv_headers as spirv;
 use petgraph::graphmap::GraphMap;
 use petgraph::{Directed, Direction};
-use rspirv::binary::Disassemble;
+use rspirv::binary::{Assemble, Disassemble};
 use rspirv::mr::{BasicBlock, Function, Instruction, Module, Operand};
 use std::collections::BTreeMap;
 use std::fs::{read, File};
@@ -71,54 +71,138 @@ pub struct PetSpirv<'spir> {
 pub fn export_spirv_cfg(module: &SpirvModule) {
     let mut file = File::create("test.dot").expect("file");
     writeln!(&mut file, "digraph {{");
+    writeln!(&mut file, "graph [fontname=\"monospace\"];");
+    writeln!(&mut file, "node [fontname=\"monospace\"];");
+    writeln!(&mut file, "edge [fontname=\"monospace\"];");
     for f in &module.module.functions {
         let s = PetSpirv::new(module, f);
         s.add_fn_to_dot(&mut file);
     }
     writeln!(&mut file, "}}");
 }
-impl<'spir> PetSpirv<'spir> {
-    pub fn get_block(&self, id: u32) -> &'spir BasicBlock {
-        self.block_map.get(&id).expect(&format!("BasicBlock {}", id))
-    }
-    pub fn successors(&self, bb: &BasicBlock) -> Vec<u32> {
-        if let Some(inst) = bb.instructions.last() {
-            match inst.class.opcode {
-                spirv::Op::FunctionCall => {
-                    vec![]
-                }
-                spirv::Op::Switch => {
-                    let default = extract!(inst.operands[1], Operand::IdRef);
-                    let mut targets: Vec<u32> = inst.operands.iter().skip(3).step_by(2).map(|operand|{
-                        *extract!(operand, Operand::IdRef)
+pub enum Terminator {
+    Branch {
+        target: spirv::Word,
+    },
+    BranchConditional {
+        merge_block: Option<spirv::Word>,
+        true_block: spirv::Word,
+        false_block: spirv::Word,
+    },
+    Switch {
+        merge_block: Option<spirv::Word>,
+        values: Vec<spirv::Word>,
+        targets: Vec<spirv::Word>,
+    },
+    /// Indicates that the control flow has stopped
+    End,
+}
 
-                    }).collect();
-                    targets.push(default);
-                    targets
+impl Terminator {
+    pub fn from_basic_block(bb: &BasicBlock) -> Terminator {
+        let get_merge_block = || -> Option<spirv::Word> {
+            let before_last = bb.instructions.get(bb.instructions.len() - 2)?;
+            match before_last.class.opcode {
+                spirv::Op::SelectionMerge => {
+                    Some(extract!(before_last.operands[0], Operand::IdRef))
                 }
-                spirv::Op::BranchConditional => {
-                    let id_true = extract!(inst.operands[1], Operand::IdRef);
-                    let id_false = extract!(inst.operands[2], Operand::IdRef);
-                    // let target_true = self.get_block(id_true);
-                    // let target_false = self.get_block(id_false);
-                    vec![id_true, id_false]
-                }
-                spirv::Op::Branch => {
-                    let target_id = extract!(inst.operands[0], Operand::IdRef);
-                    //let bb = self.get_block(target_id);
-                    vec![target_id]
-                }
-                _ => Vec::new(),
+                _ => None,
             }
+        };
+        let inst = if let Some(inst) = bb.instructions.last() {
+            inst
         } else {
-            Vec::new()
+            return Terminator::End;
+        };
+        match inst.class.opcode {
+            spirv::Op::Switch => {
+                let default = extract!(inst.operands[1], Operand::IdRef);
+                let merge_block = get_merge_block();
+                let mut values: Vec<u32> = inst
+                    .operands
+                    .iter()
+                    .skip(2)
+                    .step_by(2)
+                    .map(|operand| *extract!(operand, Operand::LiteralInt32))
+                    .collect();
+                let mut targets: Vec<spirv::Word> = inst
+                    .operands
+                    .iter()
+                    .skip(3)
+                    .step_by(2)
+                    .map(|operand| *extract!(operand, Operand::IdRef))
+                    .collect();
+                targets.push(default);
+                Terminator::Switch {
+                    merge_block,
+                    values,
+                    targets,
+                }
+            }
+            spirv::Op::BranchConditional => {
+                let merge_block = get_merge_block();
+                let true_block = extract!(inst.operands[1], Operand::IdRef);
+                let false_block = extract!(inst.operands[2], Operand::IdRef);
+                Terminator::BranchConditional {
+                    merge_block,
+                    true_block,
+                    false_block,
+                }
+            }
+            spirv::Op::Branch => {
+                let target = extract!(inst.operands[0], Operand::IdRef);
+                Terminator::Branch { target }
+            }
+            _ => Terminator::End,
         }
     }
+    pub fn successors(&self) -> impl Iterator<Item = spirv::Word> {
+        match self {
+            Terminator::Switch { ref targets, .. } => targets.clone(),
+            Terminator::Branch { target } => vec![*target],
+            Terminator::BranchConditional {
+                true_block,
+                false_block,
+                ..
+            } => vec![*true_block, *false_block],
+            _ => Vec::new(),
+        }.into_iter()
+    }
+}
+impl<'spir> PetSpirv<'spir> {
+    pub fn get_block(&self, id: u32) -> &'spir BasicBlock {
+        self.block_map
+            .get(&id)
+            .expect(&format!("BasicBlock {}", id))
+    }
     pub fn add_fn_to_dot(&self, write: &mut impl Write) {
+        let fn_name = self.module.get_name_fn(&self.function).unwrap_or("Unknown");
+        let fn_id = self.function.def.as_ref().unwrap().result_id.unwrap();
+        let entry = self.block_map.keys().nth(0).expect("entry key");
+        writeln!(
+            write,
+            "{id} [shape=\"box\", label={name:?}];",
+            id = fn_id,
+            name = fn_name
+        );
+        writeln!(write, "{} -> {}", fn_id, entry);
+
         for (id, block) in &self.block_map {
             let default = format!("{}", id);
             let name = self.module.get_name_bb(block).unwrap_or(&default);
-            writeln!(write, "  {id}[label={label:?}]", id = id, label = name);
+            writeln!(write, "  {id} [shape=none, label=<", id = id,);
+            writeln!(write, "\t<table>");
+            writeln!(
+                write,
+                "\t\t<tr><td align=\"center\" bgcolor=\"gray\" colspan=\"1\">{name} {id}</td></tr>",
+                id = id,
+                name = name
+            );
+            writeln!(write, "\t\t<tr><td align=\"left\" balign=\"left\">");
+            for inst in &block.instructions {
+                writeln!(write, "\t\t\t{}<br/>", inst.disassemble());
+            }
+            writeln!(write, "\t</td></tr></table>>];");
         }
         self.traverse(write);
         //writeln!(write, "}}");
@@ -145,19 +229,15 @@ impl<'spir> PetSpirv<'spir> {
                 let node_label = self.get_label(node);
                 for bb in map.neighbors_directed(node, Direction::Outgoing) {
                     let bb_label = self.get_label(bb);
-                    writeln!(
-                        write,
-                        "  {node} -> {target}",
-                        node = node,
-                        target = bb
-                    );
+                    writeln!(write, "  {node} -> {target}", node = node, target = bb);
                 }
             }
         }
     }
     fn traverse_from(&self, map: &mut GraphMap<u32, (), Directed>, root_id: u32) {
         let root = self.get_block(root_id);
-        for bb in self.successors(root) {
+        let terminator = Terminator::from_basic_block(root);
+        for bb in terminator.successors() {
             map.add_edge(root_id, bb, ());
             self.traverse_from(map, bb);
         }
