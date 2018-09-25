@@ -99,6 +99,13 @@ pub enum Terminator {
 }
 
 impl Terminator {
+    pub fn merge_block(&self) -> Option<spirv::Word> {
+        match self {
+            Terminator::Switch { merge_block, .. }
+            | Terminator::BranchConditional { merge_block, .. } => *merge_block,
+            _ => None,
+        }
+    }
     pub fn from_basic_block(bb: &BasicBlock) -> Terminator {
         let get_merge_block = || -> Option<spirv::Word> {
             let before_last = bb.instructions.get(bb.instructions.len() - 2)?;
@@ -227,6 +234,10 @@ impl<'spir> PetSpirv<'spir> {
             let mut dfs = Dfs::new(&map, id);
             while let Some(node) = dfs.next(&map) {
                 let node_label = self.get_label(node);
+                let terminator = Terminator::from_basic_block(self.get_block(node));
+                if let Some(merge_block) = terminator.merge_block() {
+                    writeln!(write, "\t{} -> {}[style=\"dashed\"]", node, merge_block);
+                }
                 for bb in map.neighbors_directed(node, Direction::Outgoing) {
                     let bb_label = self.get_label(bb);
                     writeln!(write, "  {node} -> {target}", node = node, target = bb);
