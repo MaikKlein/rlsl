@@ -102,16 +102,19 @@ macro_rules! vec_common {
                     }
             }
 
+            #[inline]
             pub fn any<F: FnMut(T) -> bool>(self, mut f: F) -> bool {
                 use std::ops::BitOr;
                 variadic2!(bool::bitor, $(f(self.$fields)),*)
             }
 
+            #[inline]
             pub fn all<F: FnMut(T) -> bool>(self, mut f: F) -> bool {
                 use std::ops::BitAnd;
                 variadic2!(bool::bitand, $(f(self.$fields)),*) 
             }
 
+            #[inline]
             pub fn max(self) -> T {
                 self.fold(self.x, |max, elem|{
                     if elem > max {
@@ -123,6 +126,7 @@ macro_rules! vec_common {
                 })
             }
 
+            #[inline]
             pub fn min(self) -> T {
                 self.fold(self.x, |min, elem|{
                     if elem < min {
@@ -133,6 +137,8 @@ macro_rules! vec_common {
                     }
                 })
             }
+
+            #[inline]
             pub fn fold<R, F: FnMut(R, T) -> R>(self, acc: R, mut f: F) -> R {
                 $(
                     let acc = f(acc, self.$fields);
@@ -140,34 +146,42 @@ macro_rules! vec_common {
                 acc
             }
 
+            #[inline]
             pub fn add(self, other: Self) -> Self {
                 self + other
             }
 
+            #[inline]
             pub fn sub(self, other: Self) -> Self {
                 self - other
             }
 
+            #[inline]
             pub fn mul(self, other: Self) -> Self {
                 self * other
             }
+            #[inline]
             pub fn div(self, other: Self) -> Self {
                 self / other
             }
 
+            #[inline]
             pub fn dot(self, other: Self) -> T {
                 <Self as Vector>::dot(self, other)
             }
 
+            #[inline]
             pub fn length(self) -> T {
                 <Self as Vector>::length(self)
 
             }
 
+            #[inline]
             pub fn normalize(self) -> Self {
                 <Self as Vector>::normalize(self)
             }
 
+            #[inline]
             pub fn to_unit(self) -> $crate::unit::Unit<Self> {
                 $crate::unit::Unit::new(self)
             }
@@ -176,10 +190,12 @@ macro_rules! vec_common {
         impl<T: Float> Vector for $name<T> {
             type T = T;
 
+            #[inline]
             fn dot(self, other: Self) -> T {
                 variadic2!(T::add, $(self.$fields * other.$fields),*)
             }
 
+            #[inline]
             fn normalize(self) -> Self {
                 self / self.length()
             }
