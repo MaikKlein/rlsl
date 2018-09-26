@@ -1,11 +1,8 @@
-extern crate petgraph;
 extern crate rspirv;
 extern crate spirv_headers as spirv;
-use petgraph::graphmap::GraphMap;
-use petgraph::{Directed, Direction};
-use rspirv::binary::{Assemble, Disassemble};
-use rspirv::mr::{BasicBlock, Function, Instruction, Module, Operand};
-use std::collections::BTreeMap;
+use rspirv::binary::{Disassemble};
+use rspirv::mr::{BasicBlock, Function, Module, Operand};
+use std::collections::{BTreeMap, HashSet};
 use std::fs::{read, File};
 use std::io::Write;
 use std::path::Path;
@@ -216,9 +213,21 @@ impl<'spir> PetSpirv<'spir> {
             }
             writeln!(write, "\t</td></tr></table>>];");
         }
-        self.traverse(write);
+
+        self.traverse(|node, termiantor| {
+            let node_label = self.get_label(node);
+            let terminator = Terminator::from_basic_block(self.get_block(node));
+            if let Some(merge_block) = terminator.merge_block() {
+                writeln!(write, "\t{} -> {}[style=\"dashed\"]", node, merge_block);
+            }
+            for bb in terminator.successors() {
+                let bb_label = self.get_label(bb);
+                writeln!(write, "  {node} -> {target}", node = node, target = bb);
+            }
+        });
         writeln!(write, "}}");
     }
+
     pub fn get_label(&self, id: u32) -> String {
         self.module
             .names
@@ -226,36 +235,31 @@ impl<'spir> PetSpirv<'spir> {
             .cloned()
             .unwrap_or(format!("{}", id))
     }
-    pub fn traverse(&self, write: &mut impl Write) {
+
+    pub fn traverse(&self, mut f: impl FnMut(u32, &Terminator)) {
         use petgraph::visit::Dfs;
-        let mut map = GraphMap::new();
-        for &node in self.block_map.keys() {
-            map.add_node(node);
-        }
+        let mut map = HashSet::new();
         if let Some(start_block) = self.function.basic_blocks.first() {
             let label = start_block.label.as_ref().unwrap();
             let id = label.result_id.unwrap();
-            self.traverse_from(&mut map, id);
-            let mut dfs = Dfs::new(&map, id);
-            while let Some(node) = dfs.next(&map) {
-                let node_label = self.get_label(node);
-                let terminator = Terminator::from_basic_block(self.get_block(node));
-                if let Some(merge_block) = terminator.merge_block() {
-                    writeln!(write, "\t{} -> {}[style=\"dashed\"]", node, merge_block);
-                }
-                for bb in map.neighbors_directed(node, Direction::Outgoing) {
-                    let bb_label = self.get_label(bb);
-                    writeln!(write, "  {node} -> {target}", node = node, target = bb);
-                }
-            }
+            self.traverse_from(&mut map, id, &mut f);
         }
     }
-    fn traverse_from(&self, map: &mut GraphMap<u32, (), Directed>, root_id: u32) {
+
+    fn traverse_from(
+        &self,
+        visited: &mut HashSet<u32>,
+        root_id: u32,
+        f: &mut impl FnMut(u32, &Terminator),
+    ) {
+        visited.insert(root_id);
         let root = self.get_block(root_id);
         let terminator = Terminator::from_basic_block(root);
+        f(root_id, &terminator);
         for bb in terminator.successors() {
-            map.add_edge(root_id, bb, ());
-            self.traverse_from(map, bb);
+            if !visited.contains(&bb) {
+                self.traverse_from(visited, bb, f);
+            }
         }
     }
     pub fn new(module: &'spir SpirvModule, function: &'spir Function) -> Self {

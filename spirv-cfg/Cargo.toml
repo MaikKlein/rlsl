@@ -8,5 +8,4 @@ edition = "2018"
 rspirv = "0.5"
 spirv_headers = "1.2"
 clap = "2.32"
-petgraph = "0.4"
 
