@@ -237,7 +237,6 @@ impl<'spir> PetSpirv<'spir> {
     }
 
     pub fn traverse(&self, mut f: impl FnMut(u32, &Terminator)) {
-        use petgraph::visit::Dfs;
         let mut map = HashSet::new();
         if let Some(start_block) = self.function.basic_blocks.first() {
             let label = start_block.label.as_ref().unwrap();
