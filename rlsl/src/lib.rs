@@ -890,7 +890,6 @@ pub fn trans_spirv<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, items: &'a FxHashSet<M
         std::fs::File::create("/home/maik/projects/rlsl/issues/mir/mir_after.dot").expect("graph");
     for (id, mcx) in spirv_instances.iter().enumerate() {
         let graph = graph::PetMir::from_mir(&mcx.mir);
-        let loops = graph.compute_natural_loops();
         //println!("{:#?}", loops);
         graph.export(&mut mir_after);
     }
@@ -993,13 +992,14 @@ pub fn trans_spirv<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, items: &'a FxHashSet<M
         FunctionCx::trans_fn(mcx, &mut ctx);
     });
     std::fs::create_dir_all(".shaders").expect("create dir");
-    let file_name =tcx.sess
-            .local_crate_source_file
-            .as_ref()
-            .and_then(|p| p.file_stem())
-            .map(Path::new)
-            .map(|p| Path::new(".shaders").join(p.with_extension("spv")))
-            .expect("file name");
+    let file_name = tcx
+        .sess
+        .local_crate_source_file
+        .as_ref()
+        .and_then(|p| p.file_stem())
+        .map(Path::new)
+        .map(|p| Path::new(".shaders").join(p.with_extension("spv")))
+        .expect("file name");
     let module = ctx.build_module();
     context::save_module(&module, file_name);
 }
@@ -1790,24 +1790,6 @@ impl<'b, 'a, 'tcx> rustc::mir::visit::Visitor<'tcx> for FunctionCx<'b, 'a, 'tcx>
                 ref values,
                 ..
             } => {
-                // let _selector = if switch_ty.is_bool() {
-                //     // TODO bitcast api
-                //     let load = self.load_operand(discr).load(self.scx).word;
-                //     let target_ty = self.mcx.tcx.mk_mach_uint(syntax::ast::UintTy::U32);
-                //     let target_ty_spirv = self.to_ty_fn(target_ty);
-                //     // self.scx
-                //     //     .builder
-                //     //     .bitcast(target_ty_spirv.word, None, load)
-                //     //     .expect("bitcast")
-                //     let one = self.scx.constant_u32(1).word;
-                //     let zero = self.scx.constant_u32(0).word;
-                //     self.scx
-                //         .builder
-                //         .select(self.scx.bool_ty, None, load, one, zero)
-                //         .expect("select")
-                // } else {
-                //     self.load_operand(discr).load(self.scx).word
-                // };
                 let default_label = *self
                     .label_blocks
                     .get(targets.last().unwrap())
@@ -1820,63 +1802,22 @@ impl<'b, 'a, 'tcx> rustc::mir::visit::Visitor<'tcx> for FunctionCx<'b, 'a, 'tcx>
                         let label = self.label_blocks.get(&target).expect("label");
                         (values[index] as u32, label.0)
                     }).collect();
-                // Sometimes we get duplicated merge block labels. To fix this we
-                // always create a new block and branch to it. This will give us a new unique
-                // block.
-                //let new_block_id = self.scx.builder.id();
-                let merge_block = *self.mcx.merge_blocks.get(&block).expect("merge block");
-                // {
-                //     use rustc_data_structures::control_flow_graph::ControlFlowGraph;
-                //     let pred: HashSet<_> = ControlFlowGraph::predecessors(&mir, merge_block)
-                //         .into_iter()
-                //         .collect();
-                //     let suc: HashSet<_> = ControlFlowGraph::successors(&mir, block)
-                //         .into_iter()
-                //         .collect();
-                //     println!("{:?}", pred.intersection(&suc),);
-                // }
-
-                let merge_block_label = *self.label_blocks.get(&merge_block).expect("no label");
-                let bb = &self.mcx.mir.basic_blocks()[merge_block];
                 if switch_ty.is_bool() {
                     let bool_load = self.load_operand(discr).load(self.scx).word;
-                    self.scx
-                        .builder
-                        .selection_merge(merge_block_label.0, spirv::SelectionControl::empty())
-                        .expect("selection merge");
+                    //self.mcx.control_flow.header(sel)
+                    self.header(block);
                     self.scx
                         .builder
                         .branch_conditional(bool_load, default_label.0, labels[0].1, &[])
                         .expect("if");
                 } else {
                     let selector = self.load_operand(discr).load(self.scx).word;
-                    //let selector = self.constant_u32(0).word;
-                    self.scx
-                        .builder
-                        .selection_merge(merge_block_label.0, spirv::SelectionControl::empty())
-                        .expect("selection merge");
+                    self.header(block);
                     self.scx
                         .builder
                         .switch(selector, default_label.0, &labels)
                         .expect("switch");
-                    // let bool_ty = self.scx.tcx.types.bool;
-                    // let bool_ty_spirv = self.to_ty_fn(bool_ty);
-                    // let zero = self.constant_u32(0);
-                    // let bool_load = self.load_operand(discr).load(self.scx).word;
-                    // // TODO: Check for the discr correctly.
-                    // self.scx
-                    //     .builder
-                    //     .iequal(bool_ty_spirv.word, None, bool_load, zero.word)
-                    //     .expect("cast")
                 };
-                // assert!(labels.len() == 1);
-                // self.scx
-                //     .builder
-                //     .branch_conditional(bool_load, default_label.0, labels[0].1, &[])
-                //     .expect("if");
-                // self.scx.builder.begin_basic_block(Some(new_block_id));
-                // self.scx.builder.branch(merge_block_label.0);
-                //self.merge_blocks.insert()
             }
             &mir::TerminatorKind::Call {
                 ref func,
@@ -2102,6 +2043,41 @@ impl<'b, 'a, 'tcx> rustc::mir::visit::Visitor<'tcx> for FunctionCx<'b, 'a, 'tcx>
 pub enum SpirvRvalue {}
 
 impl<'b, 'a, 'tcx> FunctionCx<'b, 'a, 'tcx> {
+    pub fn header(&mut self, block: mir::BasicBlock) {
+        use rustc_data_structures::control_flow_graph::ControlFlowGraph;
+        let merge_block = *self
+            .mcx
+            .control_flow
+            .merge_blocks
+            .get(&block)
+            .expect("merge block");
+        let merge_label = *self.label_blocks.get(&merge_block).expect("label");
+        if let Some(back_edges) = self.mcx.control_flow.loop_headers.get(&block) {
+            let back_edge = back_edges[0];
+            let dominators = self.mcx.mir.dominators();
+            let continue_block = self
+                .mcx
+                .mir
+                .successors(block)
+                .filter(|&suc| dominators.is_dominated_by(back_edge, suc))
+                .nth(0)
+                .expect("continue");
+            let continue_label = self.label_blocks.get(&continue_block).expect("label");
+            self.scx
+                .builder
+                .loop_merge(
+                    merge_label.0,
+                    continue_label.0,
+                    spirv::LoopControl::empty(),
+                    &[],
+                ).expect("selection merge");
+        } else {
+            self.scx
+                .builder
+                .selection_merge(merge_label.0, spirv::SelectionControl::empty())
+                .expect("selection merge");
+        }
+    }
     pub fn binary_op(
         &mut self,
         return_ty: ty::Ty<'tcx>,
@@ -2267,7 +2243,9 @@ pub fn remove_unwind<'tcx>(mir: &mut mir::Mir<'tcx>) {
                 cleanup: unwind, ..
             }
             | mir::TerminatorKind::FalseUnwind { unwind, .. }
-            | mir::TerminatorKind::Assert { cleanup: unwind, .. }
+            | mir::TerminatorKind::Assert {
+                cleanup: unwind, ..
+            }
             | mir::TerminatorKind::DropAndReplace { unwind, .. }
             | mir::TerminatorKind::Drop { unwind, .. } => {
                 *unwind = None;

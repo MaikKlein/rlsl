@@ -292,6 +292,10 @@ mod tests {
             compute("compute", input, "../.shaders/option.spv", issues::option)
         }
 
+        fn compute_simple_loop(input: Vec<f32>) -> TestResult {
+            compute("compute", input, "../.shaders/simple_loop.spv", issues::simple_loop)
+        }
+
         fn compute_single_branch(input: Vec<f32>) -> TestResult {
             compute("compute", input, "../.shaders/single-branch.spv", issues::single_branch)
         }

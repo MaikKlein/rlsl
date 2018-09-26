@@ -656,12 +656,18 @@ pub fn fix_overlapping_control_flow<'tcx>(
     }
     mir
 }
+
+#[derive(Debug, Clone)]
+pub struct ControlFlow {
+    pub merge_blocks: HashMap<mir::BasicBlock, mir::BasicBlock>,
+    pub loop_headers: HashMap<mir::BasicBlock, Vec<mir::BasicBlock>>,
+}
 #[derive(Clone)]
 pub struct SpirvMir<'a, 'tcx: 'a> {
     pub def_id: hir::def_id::DefId,
     pub mir: mir::Mir<'tcx>,
     pub substs: &'tcx rustc::ty::subst::Substs<'tcx>,
-    pub merge_blocks: HashMap<mir::BasicBlock, mir::BasicBlock>,
+    pub control_flow: ControlFlow,
     pub tcx: TyCtxt<'a, 'tcx, 'tcx>,
 }
 fn insert_block_inbetween<'tcx>(
@@ -733,9 +739,13 @@ impl<'a, 'tcx> SpirvMir<'a, 'tcx> {
             }
         }
         ::remove_unwind(&mut spirv_mir);
+        let control_flow = ControlFlow {
+            merge_blocks: fixed_merge_blocks,
+            loop_headers: PetMir::from_mir(&spirv_mir).compute_natural_loops(),
+        };
         SpirvMir {
             mir: spirv_mir,
-            merge_blocks: fixed_merge_blocks,
+            control_flow,
             substs: mcx.substs,
             tcx: mcx.tcx,
             def_id: mcx.def_id,
