@@ -1,6 +1,8 @@
 use petgraph;
 use petgraph::graphmap::GraphMap;
+use petgraph::visit::{Dfs, Reversed, Walker};
 use petgraph::Directed;
+use petgraph::Direction;
 use rspirv::binary::Disassemble;
 use rspirv::mr::{BasicBlock, Function, Instruction, Module, Operand};
 use rustc::mir;
@@ -15,10 +17,24 @@ pub struct PetMir<'a, 'tcx: 'a> {
     pub graph: GraphMap<mir::BasicBlock, (), Directed>,
 }
 impl<'a, 'tcx> PetMir<'a, 'tcx> {
+    pub fn compute_natural_loops(&self) -> HashMap<mir::BasicBlock, Vec<mir::BasicBlock>> {
+        let dominators = self.mir.dominators();
+        let mut map = HashMap::new();
+        Dfs::new(&self.graph, self.start_block())
+            .iter(&self.graph)
+            .for_each(|bb| {
+                for suc in self.graph.neighbors_directed(bb, Direction::Outgoing) {
+                    if dominators.is_dominated_by(bb, suc) {
+                        let back_edges = map.entry(suc).or_insert(Vec::new());
+                        back_edges.push(bb);
+                    }
+                }
+            });
+        map
+    }
     /// Checks if two basic blocks are connected
     /// `from` should appear before `to`.
     pub fn is_reachable(&self, from: mir::BasicBlock, to: mir::BasicBlock) -> bool {
-        use petgraph::visit::{Dfs, Reversed, Walker};
         let reversed = Reversed(&self.graph);
         Dfs::new(reversed, to)
             .iter(reversed)

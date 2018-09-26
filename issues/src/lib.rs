@@ -15,7 +15,13 @@ pub fn single_branch(_: u32, val: f32) -> f32 {
 }
 
 pub fn simple_loop(_: u32, val: f32) -> f32 {
-    val
+    let mut i = 0.0f32;
+    let mut sum = 0.0;
+    while i < 10.0 {
+        i += 1.0;
+        sum += 1.0;
+    }
+    sum
 }
 
 pub fn u32_add(_: u32, val: f32) -> f32 {

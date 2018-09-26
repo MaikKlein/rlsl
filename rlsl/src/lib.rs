@@ -890,6 +890,8 @@ pub fn trans_spirv<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, items: &'a FxHashSet<M
         std::fs::File::create("/home/maik/projects/rlsl/issues/mir/mir_after.dot").expect("graph");
     for (id, mcx) in spirv_instances.iter().enumerate() {
         let graph = graph::PetMir::from_mir(&mcx.mir);
+        let loops = graph.compute_natural_loops();
+        //println!("{:#?}", loops);
         graph.export(&mut mir_after);
     }
     // let mut mir_after_orig =
@@ -902,6 +904,10 @@ pub fn trans_spirv<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, items: &'a FxHashSet<M
     //     println!("{:#?}", scx.def_id);
     //     println!("{:#?}", scx.mir);
     // });
+    for (id, mcx) in spirv_instances.iter().enumerate() {
+        let graph = graph::PetMir::from_mir(&mcx.mir);
+        graph.export(&mut file);
+    }
 
     // Finds functions that return a reference
     let fn_refs_def_id: Vec<_> = spirv_instances
@@ -995,7 +1001,6 @@ pub fn trans_spirv<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, items: &'a FxHashSet<M
             .map(|p| Path::new(".shaders").join(p.with_extension("spv")))
             .expect("file name");
     let module = ctx.build_module();
-    graph::export_spirv_cfg(&module);
     context::save_module(&module, file_name);
 }
 

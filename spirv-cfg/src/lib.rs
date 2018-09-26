@@ -261,6 +261,7 @@ impl<'spir> PetSpirv<'spir> {
             }
         }
     }
+
     pub fn new(module: &'spir SpirvModule, function: &'spir Function) -> Self {
         let block_map = function
             .basic_blocks
