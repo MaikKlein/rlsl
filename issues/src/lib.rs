@@ -15,10 +15,12 @@ pub fn single_branch(_: u32, val: f32) -> f32 {
 }
 
 pub fn simple_loop(_: u32, val: f32) -> f32 {
-    let mut i = 0.0f32;
+    const LEN: usize = 2;
+    let arr: [f32; LEN] = [val, val];
+    let mut i = 0usize;
     let mut sum = 0.0;
-    while i < 10.0 {
-        i += 1.0;
+    while i < 2 {
+        i += 1;
         sum += 1.0;
     }
     sum

@@ -899,10 +899,10 @@ pub fn trans_spirv<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, items: &'a FxHashSet<M
     // for mcx in &spirv_instances {
     //     rustc_mir::util::write_mir_fn_graphviz(tcx, mcx.def_id, &mcx.mir, &mut mir_after_orig);
     // }
-    // spirv_instances.iter().for_each(|scx| {
-    //     println!("{:#?}", scx.def_id);
-    //     println!("{:#?}", scx.mir);
-    // });
+    spirv_instances.iter().for_each(|scx| {
+        println!("{:#?}", scx.def_id);
+        println!("{:#?}", scx.mir);
+    });
     for (id, mcx) in spirv_instances.iter().enumerate() {
         let graph = graph::PetMir::from_mir(&mcx.mir);
         graph.export(&mut file);
@@ -1802,16 +1802,21 @@ impl<'b, 'a, 'tcx> rustc::mir::visit::Visitor<'tcx> for FunctionCx<'b, 'a, 'tcx>
                         let label = self.label_blocks.get(&target).expect("label");
                         (values[index] as u32, label.0)
                     }).collect();
+                let selector = self.load_operand(discr).load(self.scx).word;
                 if switch_ty.is_bool() {
-                    let bool_load = self.load_operand(discr).load(self.scx).word;
-                    //self.mcx.control_flow.header(sel)
+                    let bool_ty = self.scx.bool_ty;
+                    let constant = self.scx.constant_u32(0);
+                    let bool_selector = self
+                        .scx
+                        .builder
+                        .inot_equal(bool_ty, None, selector, constant.word)
+                        .expect("bool selector");
                     self.header(block);
                     self.scx
                         .builder
-                        .branch_conditional(bool_load, default_label.0, labels[0].1, &[])
+                        .branch_conditional(bool_selector, default_label.0, labels[0].1, &[])
                         .expect("if");
                 } else {
-                    let selector = self.load_operand(discr).load(self.scx).word;
                     self.header(block);
                     self.scx
                         .builder
@@ -2092,6 +2097,7 @@ impl<'b, 'a, 'tcx> FunctionCx<'b, 'a, 'tcx> {
         let left = self.load_operand(l).load(self.scx).word;
         let right = self.load_operand(r).load(self.scx).word;
         // TODO: Impl ops
+        let bool_ty = self.scx.bool_ty;
         match ty.sty {
             ty::TypeVariants::TyUint(_) => {
                 match op {
@@ -2136,7 +2142,15 @@ impl<'b, 'a, 'tcx> FunctionCx<'b, 'a, 'tcx> {
                             .expect("fmul");
                         Value::new(mul)
                     }
-                    _ => unimplemented!("op unsigned"),
+                    mir::BinOp::Lt => {
+                        let lt = self
+                            .scx
+                            .builder
+                            .uless_than(bool_ty, None, left, right)
+                            .expect("less than");
+                        self.scx.bool_to_u32(lt)
+                    }
+                    rest => unimplemented!("{:?}", rest),
                 }
             }
             ty::TypeVariants::TyFloat(_) => match op {
@@ -2173,36 +2187,20 @@ impl<'b, 'a, 'tcx> FunctionCx<'b, 'a, 'tcx> {
                     Value::new(add)
                 }
                 mir::BinOp::Gt => {
-                    let gt = match ty.sty {
-                        TypeVariants::TyInt(_) => self
-                            .scx
-                            .builder
-                            .sgreater_than(spirv_return_ty.word, None, left, right)
-                            .expect("g"),
-                        TypeVariants::TyUint(_) | TypeVariants::TyBool => self
-                            .scx
-                            .builder
-                            .ugreater_than(spirv_return_ty.word, None, left, right)
-                            .expect("g"),
-                        TypeVariants::TyFloat(_) => self
-                            .scx
-                            .builder
-                            .ford_greater_than(spirv_return_ty.word, None, left, right)
-                            .expect("g"),
-                        ref rest => unimplemented!("{:?}", rest),
-                    };
-                    Value::new(gt)
+                    let gt = self
+                        .scx
+                        .builder
+                        .ford_greater_than(bool_ty, None, left, right)
+                        .expect("g");
+                    self.scx.bool_to_u32(gt)
                 }
                 mir::BinOp::Lt => {
-                    let lt = match ty.sty {
-                        TypeVariants::TyFloat(_) => self
-                            .scx
-                            .builder
-                            .ford_less_than(spirv_return_ty.word, None, left, right)
-                            .expect("g"),
-                        ref rest => unimplemented!("{:?}", rest),
-                    };
-                    Value::new(lt)
+                    let lt = self
+                        .scx
+                        .builder
+                        .ford_less_than(bool_ty, None, left, right)
+                        .expect("g");
+                    self.scx.bool_to_u32(lt)
                 }
                 mir::BinOp::Shl => {
                     let shl = self
@@ -2224,9 +2222,9 @@ impl<'b, 'a, 'tcx> FunctionCx<'b, 'a, 'tcx> {
                     let ne = self
                         .scx
                         .builder
-                        .logical_not_equal(spirv_return_ty.word, None, left, right)
+                        .logical_not_equal(bool_ty, None, left, right)
                         .expect("not equal");
-                    Value::new(ne)
+                    self.scx.bool_to_u32(ne)
                 }
                 rest => unimplemented!("{:?}", rest),
             },

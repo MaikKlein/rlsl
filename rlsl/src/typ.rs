@@ -208,11 +208,21 @@ impl<'tcx> Variable<'tcx> {
 }
 #[derive(Copy, Clone, Debug, Hash)]
 pub struct Value {
+    pub is_bool: bool,
     pub word: spirv::Word,
 }
 impl Value {
     pub fn new(word: spirv::Word) -> Value {
-        Value { word }
+        Value {
+            word,
+            is_bool: false,
+        }
+    }
+    pub fn as_bool(word: spirv::Word) -> Value {
+        Value {
+            word,
+            is_bool: true,
+        }
     }
 }
 

@@ -46,9 +46,21 @@ pub struct CodegenCx<'a, 'tcx: 'a> {
     pub intrinsic_fns: HashMap<hir::def_id::DefId, Intrinsic>,
     pub debug_symbols: bool,
     pub glsl_ext_id: spirv::Word,
+    pub bool_ty: spirv::Word,
 }
 
 impl<'a, 'tcx> CodegenCx<'a, 'tcx> {
+    pub fn bool_to_u32(&mut self, bool_load: spirv::Word) -> Value {
+        let zero = self.constant_u32(0);
+        let one = self.constant_u32(1);
+        let u32_ty = self.tcx.types.u32;
+        let u32_ty = self.to_ty_fn(u32_ty);
+        let val = self
+            .builder
+            .select(u32_ty.word, None, bool_load, one.word, zero.word)
+            .expect("convert to u32");
+        Value::new(val)
+    }
     pub fn to_ty_fn(&mut self, ty: ty::Ty<'tcx>) -> Ty<'tcx> {
         self.to_ty(ty, spirv::StorageClass::Function)
     }
@@ -94,18 +106,7 @@ impl<'a, 'tcx> CodegenCx<'a, 'tcx> {
         }
         let const_ty = const_val.ty;
         let spirv_val = match const_ty.sty {
-            ty::TypeVariants::TyBool => {
-                let value = const_val
-                    .to_bits(self.tcx, const_ty.to_param_env_and())
-                    .expect("bits from const");
-                // [FIXME] Storageptr
-                let spirv_ty = self.to_ty_fn(const_ty);
-                if value != 0 {
-                    self.builder.constant_true(spirv_ty.word)
-                } else {
-                    self.builder.constant_false(spirv_ty.word)
-                }
-            }
+            ty::TypeVariants::TyBool |
             ty::TypeVariants::TyUint(_) => {
                 let value = const_val
                     .to_bits(self.tcx, const_ty.to_param_env_and())
@@ -168,7 +169,7 @@ impl<'a, 'tcx> CodegenCx<'a, 'tcx> {
         let ty = match ty.sty {
             TypeVariants::TyInt(_) => self.tcx.mk_ty(TypeVariants::TyInt(IntTy::I32)),
             TypeVariants::TyUint(_) => self.tcx.mk_ty(TypeVariants::TyUint(UintTy::U32)),
-            //TypeVariants::TyBool => self.tcx.mk_ty(TypeVariants::TyUint(UintTy::U32)),
+            TypeVariants::TyBool => self.tcx.mk_ty(TypeVariants::TyUint(UintTy::U32)),
             _ => ty,
         };
 
@@ -185,7 +186,7 @@ impl<'a, 'tcx> CodegenCx<'a, 'tcx> {
                 let ty = self.tcx.mk_nil();
                 self.to_ty(ty, storage_class)
             }
-            TypeVariants::TyBool => self.builder.type_bool().construct_ty(ty),
+            //TypeVariants::TyBool => self.builder.type_bool().construct_ty(ty),
             TypeVariants::TyInt(int_ty) => self.builder.type_int(32, 1).construct_ty(ty),
             TypeVariants::TyUint(uint_ty) => self.builder.type_int(32, 0).construct_ty(ty),
             TypeVariants::TyFloat(f_ty) => {
@@ -373,6 +374,13 @@ impl<'a, 'tcx> CodegenCx<'a, 'tcx> {
                     ref r => unimplemented!("{:?}", r),
                 }
             }
+            TypeVariants::TyArray(ty, length) => {
+                let spirv_lenth = self.constant(length);
+                let spirv_ty = self.to_ty(ty, storage_class);
+                self.builder
+                    .type_array(spirv_ty.word, spirv_lenth.word)
+                    .construct_ty(ty)
+            }
             TypeVariants::TyClosure(def_id, substs) => {
                 let field_ty_spirv: Vec<_> = substs
                     .upvar_tys(def_id, self.tcx)
@@ -532,6 +540,7 @@ impl<'a, 'tcx> CodegenCx<'a, 'tcx> {
         let glsl_ext_id = builder.ext_inst_import("GLSL.std.450");
         builder.memory_model(spirv::AddressingModel::Logical, spirv::MemoryModel::GLSL450);
         CodegenCx {
+            bool_ty: builder.type_bool(),
             debug_symbols: true,
             builder,
             compute: None,
