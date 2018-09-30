@@ -111,7 +111,7 @@ macro_rules! vec_common {
             #[inline]
             pub fn all<F: FnMut(T) -> bool>(self, mut f: F) -> bool {
                 use std::ops::BitAnd;
-                variadic2!(bool::bitand, $(f(self.$fields)),*) 
+                variadic2!(bool::bitand, $(f(self.$fields)),*)
             }
 
             #[inline]

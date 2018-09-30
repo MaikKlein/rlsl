@@ -106,38 +106,50 @@ impl<'tcx> Param<'tcx> {
 }
 
 impl<'tcx> Variable<'tcx> {
-    pub fn access_chain<'fx, 'a>(
-        fx: &mut FunctionCx<'fx, 'a, 'tcx>,
-        lvalue: &mir::Place<'tcx>,
+    pub fn access_chain<'scope, 'fx, 'a>(
+        fx: &'scope mut FunctionCx<'fx, 'a, 'tcx>,
+        lvalue: &'scope mir::Place<'tcx>,
     ) -> Variable<'tcx> {
         use rustc_data_structures::indexed_vec::Idx;
-        fn access_chain_indices<'r, 'tcx>(
-            lvalue: &'r mir::Place<'tcx>,
-            mut indices: Vec<usize>,
-        ) -> (&'r mir::Place<'tcx>, Vec<usize>) {
+        // TODO: Clean up those lifetimes
+        fn access_chain_indices<'scope, 'fx, 'a, 'tcx>(
+            cx: &'scope mut FunctionCx<'fx, 'a, 'tcx>,
+            lvalue: &'scope mir::Place<'tcx>,
+            mut indices: Vec<spirv::Word>,
+        ) -> (mir::Local, Vec<spirv::Word>) {
             if let &mir::Place::Projection(ref proj) = lvalue {
                 match proj.elem {
                     mir::ProjectionElem::Field(field, _) => {
-                        indices.push(field.index());
-                        access_chain_indices(&proj.base, indices)
+                        let index = cx.constant_u32(field.index() as _);
+                        indices.push(index.word);
+                        access_chain_indices(cx, &proj.base, indices)
                     }
                     mir::ProjectionElem::Downcast(_, id) => {
-                        indices.push(id);
-                        access_chain_indices(&proj.base, indices)
+                        let index = cx.constant_u32(id as _);
+                        indices.push(index.word);
+                        access_chain_indices(cx, &proj.base, indices)
+                    }
+                    mir::ProjectionElem::Index(local) => {
+                        let value = {
+                            let var = cx.vars.get(&local).expect("local in index");
+                            var.load(&mut cx.scx)
+                        };
+                        indices.push(value.word);
+                        access_chain_indices(cx, &proj.base, indices)
                     }
                     // TODO: Is this actually correct?
-                    _ => access_chain_indices(&proj.base, indices),
+                    _ => access_chain_indices(cx, &proj.base, indices),
                 }
             } else {
-                (lvalue, indices)
+                let local = match lvalue {
+                    &mir::Place::Local(local) => local,
+                    _ => panic!("Should be local"),
+                };
+                (local, indices)
             }
         }
         let indices = Vec::new();
-        let (base, mut indices) = access_chain_indices(lvalue, indices);
-        let local = match base {
-            &mir::Place::Local(local) => local,
-            _ => panic!("Should be local"),
-        };
+        let (local, mut indices) = access_chain_indices(fx, lvalue, indices);
         let lvalue_ty = lvalue
             .ty(&fx.mcx.mir().local_decls, fx.scx.tcx)
             .to_ty(fx.scx.tcx);
@@ -159,10 +171,10 @@ impl<'tcx> Variable<'tcx> {
             let lvalue_ty = fx.mcx.monomorphize(&lvalue_ty);
             let lvalue_ty = ::remove_ptr_ty(lvalue_ty);
             let spirv_ty_ptr = fx.scx.to_ty_as_ptr(lvalue_ty, variable.storage_class);
-            let indices: Vec<_> = indices
-                .iter()
-                .map(|&i| fx.constant_u32(i as u32).word)
-                .collect();
+            // let indices: Vec<_> = indices
+            //     .iter()
+            //     .map(|&i| fx.constant_u32(i as u32).word)
+            //     .collect();
             let access = fx
                 .scx
                 .builder

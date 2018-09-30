@@ -17,7 +17,17 @@ pub struct PetMir<'a, 'tcx: 'a> {
     pub graph: GraphMap<mir::BasicBlock, (), Directed>,
 }
 impl<'a, 'tcx> PetMir<'a, 'tcx> {
-    pub fn compute_natural_loops(&self) -> HashMap<mir::BasicBlock, Vec<mir::BasicBlock>> {
+    pub fn return_block(&self) -> mir::BasicBlock {
+        self.mir
+            .basic_blocks()
+            .iter_enumerated()
+            .filter_map(|(bb, data)| match data.terminator().kind {
+                mir::TerminatorKind::Return => Some(bb),
+                _ => None,
+            }).nth(0)
+            .expect("return")
+    }
+    pub fn compute_natural_loops(&self) -> HashMap<mir::BasicBlock, mir::BasicBlock> {
         let dominators = self.mir.dominators();
         let mut map = HashMap::new();
         Dfs::new(&self.graph, self.start_block())
@@ -25,8 +35,7 @@ impl<'a, 'tcx> PetMir<'a, 'tcx> {
             .for_each(|bb| {
                 for suc in self.graph.neighbors_directed(bb, Direction::Outgoing) {
                     if dominators.is_dominated_by(bb, suc) {
-                        let back_edges = map.entry(suc).or_insert(Vec::new());
-                        back_edges.push(bb);
+                        map.insert(suc, bb);
                     }
                 }
             });
@@ -51,17 +60,6 @@ impl<'a, 'tcx> PetMir<'a, 'tcx> {
                 let data = &self.mir.basic_blocks()[bb];
                 match data.terminator().kind {
                     mir::TerminatorKind::Resume => Some(bb),
-                    _ => None,
-                }
-            }).nth(0)
-    }
-    pub fn return_block(&self, start: mir::BasicBlock) -> Option<mir::BasicBlock> {
-        post_order_from_to(self.mir, start, None)
-            .into_iter()
-            .filter_map(|bb| {
-                let data = &self.mir.basic_blocks()[bb];
-                match data.terminator().kind {
-                    mir::TerminatorKind::Return => Some(bb),
                     _ => None,
                 }
             }).nth(0)

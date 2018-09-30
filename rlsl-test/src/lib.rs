@@ -278,6 +278,10 @@ mod tests {
             compute("compute", input, "../.shaders/questionmark-option.spv", issues::questionmark_option)
         }
 
+        fn compute_reference(input: Vec<f32>) -> TestResult {
+            compute("compute", input, "../.shaders/reference.spv", issues::reference)
+        }
+
         fn compute_ok_or(input: Vec<f32>) -> TestResult {
             compute("compute", input, "../.shaders/ok_or.spv", issues::ok_or)
         }

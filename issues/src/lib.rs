@@ -14,6 +14,27 @@ pub fn single_branch(_: u32, val: f32) -> f32 {
     }
 }
 
+pub fn reference(_: u32, val: f32) -> f32 {
+    const LEN: usize = 2;
+    let arr: [f32; LEN] = [val, 2.0 * val];
+    trait Array<T> {
+        fn get(&self, indx: usize) -> T;
+    }
+    impl Array<f32> for [f32; LEN] {
+        fn get(&self, i: usize) -> f32 {
+            self[i]
+        }
+    }
+    #[inline(never)]
+    fn test(arr: &impl Array<f32>) -> f32 {
+        let a = arr.get(0);
+        let b = arr.get(1);
+        a + b
+
+    }
+    test(&arr)
+}
+
 pub fn simple_loop(_: u32, val: f32) -> f32 {
     const LEN: usize = 2;
     let arr: [f32; LEN] = [val, val];

@@ -10,7 +10,6 @@ extern crate arena;
 extern crate env_logger;
 extern crate getopts;
 extern crate itertools;
-extern crate log;
 extern crate rspirv;
 extern crate rustc;
 extern crate rustc_borrowck;
@@ -25,6 +24,8 @@ extern crate rustc_resolve;
 extern crate rustc_target;
 extern crate rustc_typeck;
 extern crate spirv_headers as spirv;
+#[macro_use]
+extern crate log;
 #[macro_use]
 extern crate syntax;
 extern crate syntax_pos;
@@ -808,11 +809,12 @@ pub fn trans_spirv<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, items: &'a FxHashSet<M
         let graph = graph::PetMir::from_mir(mcx.mir);
         graph.export(&mut file);
     }
-    // let mut mir_before =
-    //     std::fs::File::create("/home/maik/projects/rlsl/issues/mir/mir_before.dot").expect("graph");
-    // for mcx in &instances {
-    //     rustc_mir::util::write_mir_fn_graphviz(tcx, mcx.def_id, &mcx.mir, &mut mir_before);
-    // }
+    let mut mir_before =
+        std::fs::File::create("/home/maik/projects/rlsl/issues/mir/mir_before_orig.dot")
+            .expect("graph");
+    for mcx in &instances {
+        rustc_mir::util::write_mir_fn_graphviz(tcx, mcx.def_id, &mcx.mir, &mut mir_before);
+    }
     items.iter().for_each(|item| {
         use spirv::GLOp::*;
         if let &MonoItem::Fn(ref instance) = item {
@@ -886,23 +888,25 @@ pub fn trans_spirv<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, items: &'a FxHashSet<M
         .filter(|mcx| mcx.def_id != entry_fn && tcx.lang_items().start_fn() != Some(mcx.def_id))
         .map(|mcx| context::SpirvMir::from_mir(mcx))
         .collect();
-    let mut mir_after =
-        std::fs::File::create("/home/maik/projects/rlsl/issues/mir/mir_after.dot").expect("graph");
-    for (id, mcx) in spirv_instances.iter().enumerate() {
-        let graph = graph::PetMir::from_mir(&mcx.mir);
-        //println!("{:#?}", loops);
-        graph.export(&mut mir_after);
-    }
+    //let mut mir_after =
+    //    std::fs::File::create("/home/maik/projects/rlsl/issues/mir/mir_after.dot").expect("graph");
+    //for (id, mcx) in spirv_instances.iter().enumerate() {
+    //    let graph = graph::PetMir::from_mir(&mcx.mir);
+    //    //println!("{:#?}", loops);
+    //    graph.export(&mut mir_after);
+    //}
     // let mut mir_after_orig =
     //     std::fs::File::create("/home/maik/projects/rlsl/issues/mir/mir_after_orig.dot")
     //         .expect("graph");
     // for mcx in &spirv_instances {
     //     rustc_mir::util::write_mir_fn_graphviz(tcx, mcx.def_id, &mcx.mir, &mut mir_after_orig);
     // }
-    spirv_instances.iter().for_each(|scx| {
-        println!("{:#?}", scx.def_id);
-        println!("{:#?}", scx.mir);
-    });
+    // spirv_instances.iter().for_each(|scx| {
+    //     println!("{:#?}", scx.def_id);
+    //     println!("{:#?}", scx.mir);
+    // });
+    let mut file =
+        std::fs::File::create("/home/maik/projects/rlsl/issues/mir/mir_after.dot").expect("graph");
     for (id, mcx) in spirv_instances.iter().enumerate() {
         let graph = graph::PetMir::from_mir(&mcx.mir);
         graph.export(&mut file);
@@ -947,9 +951,11 @@ pub fn trans_spirv<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, items: &'a FxHashSet<M
         spirv_instances.retain(|mcx| mcx.def_id != def_id);
     });
 
+
     for mcx in &spirv_instances {
+        let id = ctx.builder.id();
         ctx.forward_fns
-            .insert((mcx.def_id, mcx.substs), Function(ctx.builder.id()));
+            .insert((mcx.def_id, mcx.substs), Function(id));
     }
 
     //println!("instances {:#?}", spirv_instances.iter().map(|m|m.def_id).collect::<Vec<_>>());
@@ -1500,6 +1506,7 @@ impl<'b, 'a, 'tcx> rustc::mir::visit::Visitor<'tcx> for FunctionCx<'b, 'a, 'tcx>
         location: mir::Location,
     ) {
         self.super_assign(block, lvalue, rvalue, location);
+        //println!("{:?} {:?}", lvalue, rvalue);
         let lvalue_ty = lvalue
             .ty(&self.mcx.mir().local_decls, self.scx.tcx)
             .to_ty(self.scx.tcx);
@@ -1508,12 +1515,14 @@ impl<'b, 'a, 'tcx> rustc::mir::visit::Visitor<'tcx> for FunctionCx<'b, 'a, 'tcx>
             return;
         }
         let ty = rvalue.ty(&self.mcx.mir().local_decls, self.scx.tcx);
+        let ty = self.mcx.monomorphize(&ty);
         if let TypeVariants::TyTuple(ref slice) = ty.sty {
             if slice.len() == 0 {
                 return;
             }
         }
-        let ty = self.mcx.monomorphize(&ty);
+        // println!("{:?}", lvalue_ty);
+        // println!("{:?}", ty);
         let lvalue_ty_spirv = self.to_ty_fn(lvalue_ty);
         // If we find an rvalue ref, this means that we are borrow some lvalue and
         // create a new lvalue variable that is a ptr. In rlsl this lvalue does not
@@ -1535,12 +1544,25 @@ impl<'b, 'a, 'tcx> rustc::mir::visit::Visitor<'tcx> for FunctionCx<'b, 'a, 'tcx>
                     mir::Operand::Copy(place) | mir::Operand::Move(place) => place,
                     _ => unimplemented!(),
                 };
+
+                // TODO: Insert local into references
+                if let mir::Place::Local(local) = place {
+                    if self.vars.get(local).is_some() {
+                        self.references
+                            .insert(lvalue.clone(), mir::Place::Local(*local));
+                        return;
+                    }
+                }
                 let deref_place = self
                     .references
                     .get(place)
-                    .expect("Reference not found")
-                    .clone();
+                    .expect(&format!(
+                        "Reference not found {:?} in {:?}",
+                        place, self.references
+                    )).clone();
+
                 self.references.insert(lvalue.clone(), deref_place);
+
                 return;
             }
         }
@@ -1625,7 +1647,7 @@ impl<'b, 'a, 'tcx> rustc::mir::visit::Visitor<'tcx> for FunctionCx<'b, 'a, 'tcx>
             },
             &mir::Rvalue::Cast(_, ref _op, _ty) => {
                 //let op_ty = op.ty(&self.mcx.mir().local_decls, self.mcx.tcx);
-                unimplemented!("cast")
+                unimplemented!("cast {:?} {:?} {:?}", _op, lvalue_ty, _ty)
             }
 
             rest => unimplemented!("{:?}", rest),
@@ -2050,24 +2072,14 @@ pub enum SpirvRvalue {}
 impl<'b, 'a, 'tcx> FunctionCx<'b, 'a, 'tcx> {
     pub fn header(&mut self, block: mir::BasicBlock) {
         use rustc_data_structures::control_flow_graph::ControlFlowGraph;
-        let merge_block = *self
-            .mcx
-            .control_flow
-            .merge_blocks
-            .get(&block)
-            .expect("merge block");
-        let merge_label = *self.label_blocks.get(&merge_block).expect("label");
-        if let Some(back_edges) = self.mcx.control_flow.loop_headers.get(&block) {
-            let back_edge = back_edges[0];
+        let cfg = self.mcx.control_flow.get(&block).expect("merge block");
+        let merge_label = *self.label_blocks.get(&cfg.merge_block).expect("label");
+        if let Some(loop_block) = cfg.loop_block.as_ref() {
             let dominators = self.mcx.mir.dominators();
-            let continue_block = self
-                .mcx
-                .mir
-                .successors(block)
-                .filter(|&suc| dominators.is_dominated_by(back_edge, suc))
-                .nth(0)
-                .expect("continue");
-            let continue_label = self.label_blocks.get(&continue_block).expect("label");
+            let continue_label = self
+                .label_blocks
+                .get(&loop_block.continue_block)
+                .expect("label");
             self.scx
                 .builder
                 .loop_merge(

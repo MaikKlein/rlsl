@@ -12,8 +12,8 @@ pub mod random;
 pub mod range;
 
 pub mod unit {
-    use vector::Vector;
     use std::ops::Deref;
+    use vector::Vector;
     #[derive(Copy, Clone)]
     pub struct Unit<T> {
         inner: T,
@@ -56,6 +56,29 @@ pub mod prelude {
     pub use num::*;
     pub use random::*;
     pub use range::*;
-    pub use vector::*;
     pub use unit::*;
+    pub use vector::*;
+}
+
+pub trait Array<T> {
+    fn get(&self, index: usize) -> T;
+    fn length(&self) -> usize;
+}
+
+impl<T: Copy> Array<T> for [T; 2] {
+    fn length(&self) -> usize {
+        2
+    }
+    fn get(&self, index: usize) -> T {
+        self[index]
+    }
+}
+
+impl<T: Copy> Array<T> for [T; 3] {
+    fn length(&self) -> usize {
+        3
+    }
+    fn get(&self, index: usize) -> T {
+        self[index]
+    }
 }

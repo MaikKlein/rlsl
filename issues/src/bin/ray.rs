@@ -1,6 +1,7 @@
 #![feature(custom_attribute)]
 extern crate rlsl_math;
 use rlsl_math::prelude::*;
+use rlsl_math::Array;
 
 pub struct Sphere {
     pub origin: Vec3<f32>,
@@ -39,7 +40,6 @@ pub struct RayHit {
     pub position: Vec3<f32>,
     pub normal: Unit<Vec3<f32>>,
 }
-
 impl Sphere {
     pub fn new(origin: Vec3<f32>, radius: f32) -> Sphere {
         Sphere { origin, radius }

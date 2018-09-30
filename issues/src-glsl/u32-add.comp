@@ -1,0 +1,24 @@
+#version 450
+layout(local_size_x = 1) in;
+
+layout(set = 0, binding = 0) buffer Data {
+    float[] data;
+};
+
+uint u32_add(uint _, uint val) {
+    uint i = 1;
+    uint i2 = i + i;
+    return i2;
+}
+void main() {
+    uint index = gl_GlobalInvocationID.x;
+    float val = data[index];
+    float result = 0;
+    if (val > 1.0) {
+        result = 1.0;
+    }
+    else {
+        result = 0.0;
+    }
+    data[index] = result;
+}

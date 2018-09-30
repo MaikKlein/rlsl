@@ -1,6 +1,11 @@
 use std::ops::{Add, Div, Mul, Sub};
 pub trait Float:
-    PartialOrd + Copy + Add<Output = Self> + Sub<Output = Self> + Mul<Output = Self> + Div<Output = Self>
+    PartialOrd
+    + Copy
+    + Add<Output = Self>
+    + Sub<Output = Self>
+    + Mul<Output = Self>
+    + Div<Output = Self>
 {
     fn sqrt(self) -> Self;
     fn sin(self) -> Self;
@@ -29,9 +34,4 @@ impl Float for f32 {
     fn zero() -> f32 {
         0.0
     }
-}
-
-pub trait Array<T: Copy> {
-    fn get(&self, index: u32) -> T;
-    //fn len(&self) -> u32;
 }
