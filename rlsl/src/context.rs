@@ -426,7 +426,7 @@ impl<'a, 'tcx> CodegenCx<'a, 'tcx> {
     pub fn name_from_def_id(&mut self, def_id: hir::def_id::DefId, id: spirv::Word) {
         if self.debug_symbols {
             //self.builder.name(id, self.tcx.item_name(def_id).as_ref());
-            self.builder.name(id, self.tcx.def_symbol_name(def_id).name);
+            self.builder.name(id, self.tcx.item_path_str(def_id));
         }
     }
     pub fn name_from_str(&mut self, name: &str, id: spirv::Word) {
