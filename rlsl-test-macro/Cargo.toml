@@ -1,0 +1,13 @@
+[package]
+name = "rlsl-test-macro"
+version = "0.1.0"
+authors = ["maik <maikklein@googlemail.com>"]
+edition = "2018"
+
+[lib]
+proc-macro = true
+
+[dependencies]
+syn = { version = "0.15", features = ["full", "extra-traits"] }
+quote = "0.6"
+proc-macro2 = { version = "0.4"}

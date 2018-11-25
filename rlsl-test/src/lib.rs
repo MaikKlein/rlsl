@@ -1,10 +1,13 @@
+#![feature(use_extern_macros)]
 extern crate gfx_backend_vulkan as back;
 #[macro_use]
 extern crate quickcheck;
+extern crate rlsl_test_macro;
 //extern crate glsl_to_spirv;
 extern crate gfx_hal as hal;
 extern crate issues;
 
+use rlsl_test_macro::rlsl_test;
 use hal::{buffer, command, memory, pool, pso, queue};
 use hal::{Backend, Compute, DescriptorPool, Device, Instance, PhysicalDevice, QueueFamily};
 use quickcheck::TestResult;
@@ -258,6 +261,19 @@ fn create_buffer<B: Backend>(
         buffer,
         requirements,
     }
+}
+
+    //pub fn u32_add(_: u32, val: f32) -> f32 {
+    //    let i = 1u32;
+    //    let i2 = i + i;
+    //    val
+    //}
+rlsl_test!{
+    pub fn u32_add(_: u32, val: f32) -> f32 {
+    }
+    pub fn u32_add(_: u32, val: f32) -> f32 {
+    }
+    
 }
 
 #[cfg(test)]
