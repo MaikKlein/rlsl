@@ -5,3 +5,4 @@ tools/target/
 libstd/target/
 scargo/target/
 **/*.rs.bk
+*.undodir

@@ -6,6 +6,5 @@ members = [
     "quad2",
     "rlsl-test",
     "libstd",
-    "spirv-cfg",
     "rlsl-test/testfiles",
 ]

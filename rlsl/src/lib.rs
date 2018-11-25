@@ -787,6 +787,8 @@ pub fn trans_spirv<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, items: &'a FxHashSet<M
     //struct_span_err!(tcx.sess, DUMMY_SP, E1337, "Test not allowed").emit();
 
     let mut ctx = CodegenCx::new(tcx);
+    ctx.builder
+        .extension("SPV_KHR_storage_buffer_storage_class");
 
     let mut instances: Vec<MirContext> = items
         .iter()
@@ -872,13 +874,14 @@ pub fn trans_spirv<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, items: &'a FxHashSet<M
 
     let entry_fn_node_id = tcx.sess.entry_fn.borrow().expect("entry").0;
     let entry_fn = tcx.hir.local_def_id(entry_fn_node_id);
-    // instances
-    //     .iter()
-    //     .filter(|mcx| mcx.def_id != entry_fn && tcx.lang_items().start_fn() != Some(mcx.def_id))
-    //     .for_each(|mcx| {
-    //         println!("{:#?}", mcx.def_id);
-    //         println!("{:#?}", mcx.mir);
-    //     });
+    //instances
+    //    .iter()
+    //    .filter(|mcx| mcx.def_id != entry_fn && tcx.lang_items().start_fn() != Some(mcx.def_id))
+    //    .for_each(|mcx| {
+    //        println!("{:#?}", mcx.def_id);
+    //        println!("{}", tcx.item_path_str(mcx.def_id));
+    //        //println!("{:#?}", mcx.mir);
+    //    });
     instances
         .iter()
         .filter(|mcx| mcx.def_id != entry_fn && tcx.lang_items().start_fn() != Some(mcx.def_id))
@@ -895,12 +898,12 @@ pub fn trans_spirv<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, items: &'a FxHashSet<M
     //    //println!("{:#?}", loops);
     //    graph.export(&mut mir_after);
     //}
-    // let mut mir_after_orig =
-    //     std::fs::File::create("/home/maik/projects/rlsl/issues/mir/mir_after_orig.dot")
-    //         .expect("graph");
-    // for mcx in &spirv_instances {
-    //     rustc_mir::util::write_mir_fn_graphviz(tcx, mcx.def_id, &mcx.mir, &mut mir_after_orig);
-    // }
+    let mut mir_after_orig =
+        std::fs::File::create("/home/maik/projects/rlsl/issues/mir/mir_after_orig.dot")
+            .expect("graph");
+    for mcx in &spirv_instances {
+        rustc_mir::util::write_mir_fn_graphviz(tcx, mcx.def_id, &mcx.mir, &mut mir_after_orig);
+    }
     // spirv_instances.iter().for_each(|scx| {
     //     println!("{:#?}", scx.def_id);
     //     println!("{:#?}", scx.mir);
@@ -950,7 +953,6 @@ pub fn trans_spirv<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, items: &'a FxHashSet<M
     ctx.intrinsic_fns.keys().for_each(|&def_id| {
         spirv_instances.retain(|mcx| mcx.def_id != def_id);
     });
-
 
     for mcx in &spirv_instances {
         let id = ctx.builder.id();
@@ -1656,116 +1658,6 @@ impl<'b, 'a, 'tcx> rustc::mir::visit::Visitor<'tcx> for FunctionCx<'b, 'a, 'tcx>
         let variable = Variable::access_chain(self, lvalue);
         variable.store(self.scx, expr);
     }
-    // fn super_terminator_kind(
-    //     &mut self,
-    //     block: mir::BasicBlock,
-    //     kind: &mir::TerminatorKind<'tcx>,
-    //     source_location: mir::Location,
-    // ) {
-    //     use mir::TerminatorKind;
-    //     use rustc::mir::visit::PlaceContext;
-    //     match *kind {
-    //         TerminatorKind::Goto { target } => {
-    //             self.visit_branch(block, target);
-    //         }
-
-    //         TerminatorKind::SwitchInt {
-    //             ref discr,
-    //             ref switch_ty,
-    //             values: _,
-    //             ref targets,
-    //         } => {
-    //             self.visit_operand(discr, source_location);
-    //             self.visit_ty(switch_ty, TyContext::Location(source_location));
-    //             for &target in targets {
-    //                 self.visit_branch(block, target);
-    //             }
-    //         }
-
-    //         TerminatorKind::Resume
-    //         | TerminatorKind::Abort
-    //         | TerminatorKind::Return
-    //         | TerminatorKind::GeneratorDrop
-    //         | TerminatorKind::Unreachable => {}
-
-    //         TerminatorKind::Drop {
-    //             ref location,
-    //             target,
-    //             ..
-    //         } => {
-    //             self.visit_place(location, PlaceContext::Drop, source_location);
-    //             self.visit_branch(block, target);
-    //         }
-
-    //         TerminatorKind::DropAndReplace {
-    //             ref location,
-    //             ref value,
-    //             target,
-    //             ..
-    //         } => {
-    //             self.visit_place(location, PlaceContext::Drop, source_location);
-    //             self.visit_operand(value, source_location);
-    //             self.visit_branch(block, target);
-    //         }
-
-    //         TerminatorKind::Call {
-    //             ref func,
-    //             ref args,
-    //             ref destination,
-    //             cleanup
-    //         } => {
-    //             println!("CALL {:?} {:?}", destination, cleanup);
-    //             self.visit_operand(func, source_location);
-    //             for arg in args {
-    //                 self.visit_operand(arg, source_location);
-    //             }
-    //             if let Some((ref destination, target)) = *destination {
-    //                 self.visit_place(destination, PlaceContext::Call, source_location);
-    //                 self.visit_branch(block, target);
-    //             }
-    //         }
-
-    //         TerminatorKind::Assert {
-    //             ref cond,
-    //             expected: _,
-    //             ref msg,
-    //             target,
-    //             ..
-    //         } => {
-    //             self.visit_operand(cond, source_location);
-    //             self.visit_assert_message(msg, source_location);
-    //             self.visit_branch(block, target);
-    //         }
-
-    //         TerminatorKind::Yield {
-    //             ref value,
-    //             resume,
-    //             drop,
-    //         } => {
-    //             self.visit_operand(value, source_location);
-    //             self.visit_branch(block, resume);
-    //             drop.map(|t| self.visit_branch(block, t));
-    //         }
-
-    //         TerminatorKind::FalseEdges {
-    //             real_target,
-    //             ref imaginary_targets,
-    //         } => {
-    //             self.visit_branch(block, real_target);
-    //             for target in imaginary_targets {
-    //                 self.visit_branch(block, *target);
-    //             }
-    //         }
-
-    //         TerminatorKind::FalseUnwind {
-    //             real_target,
-    //             ..
-    //         } => {
-    //             self.visit_branch(block, real_target);
-    //         }
-    //     }
-    // }
-
     // fn visit_branch(&mut self, source: mir::BasicBlock, target: mir::BasicBlock) {
     //     self.visit_basic_block_data(target, &self.mcx.mir.basic_blocks()[target]);
     // }
@@ -1775,6 +1667,7 @@ impl<'b, 'a, 'tcx> rustc::mir::visit::Visitor<'tcx> for FunctionCx<'b, 'a, 'tcx>
         kind: &mir::TerminatorKind<'tcx>,
         location: mir::Location,
     ) {
+        // TODO: This is terrible
         let mir = self.mcx.mir();
         match kind {
             &mir::TerminatorKind::Return => {
@@ -1802,6 +1695,9 @@ impl<'b, 'a, 'tcx> rustc::mir::visit::Visitor<'tcx> for FunctionCx<'b, 'a, 'tcx>
                 }
             }
             &mir::TerminatorKind::Goto { target } => {
+                if let Some(cfg) = self.mcx.control_flow.get(&block) {
+                    self.header(block);
+                }
                 let label = self.label_blocks.get(&target).expect("no goto label");
                 self.scx.builder.branch(label.0).expect("branch");
             }
@@ -1825,19 +1721,19 @@ impl<'b, 'a, 'tcx> rustc::mir::visit::Visitor<'tcx> for FunctionCx<'b, 'a, 'tcx>
                         (values[index] as u32, label.0)
                     }).collect();
                 let selector = self.load_operand(discr).load(self.scx).word;
-                if switch_ty.is_bool() {
+                if labels.len() == 1 {
                     let bool_ty = self.scx.bool_ty;
-                    let constant = self.scx.constant_u32(0);
+                    let constant = self.scx.constant_u32(values[0] as u32);
                     let bool_selector = self
                         .scx
                         .builder
-                        .inot_equal(bool_ty, None, selector, constant.word)
+                        .iequal(bool_ty, None, selector, constant.word)
                         .expect("bool selector");
                     self.header(block);
                     self.scx
                         .builder
-                        .branch_conditional(bool_selector, default_label.0, labels[0].1, &[])
-                        .expect("if");
+                        .branch_conditional(bool_selector, labels[0].1, default_label.0, &[])
+                        .expect("if")
                 } else {
                     self.header(block);
                     self.scx
@@ -2026,6 +1922,9 @@ impl<'b, 'a, 'tcx> rustc::mir::visit::Visitor<'tcx> for FunctionCx<'b, 'a, 'tcx>
                         };
                     }
                 }
+                if let Some(cfg) = self.mcx.control_flow.get(&block) {
+                    self.header(block);
+                }
                 let destination = destination.as_ref().expect("Fn call is diverging");
                 let &(_, target_block) = destination;
                 let target_label = self.label_blocks.get(&target_block).expect("no label");
@@ -2071,8 +1970,13 @@ pub enum SpirvRvalue {}
 
 impl<'b, 'a, 'tcx> FunctionCx<'b, 'a, 'tcx> {
     pub fn header(&mut self, block: mir::BasicBlock) {
+        //println!("Header for {:?}", block);
         use rustc_data_structures::control_flow_graph::ControlFlowGraph;
-        let cfg = self.mcx.control_flow.get(&block).expect("merge block");
+        let cfg = if let Some(cfg) = self.mcx.control_flow.get(&block) {
+            cfg
+        } else {
+            return;
+        };
         let merge_label = *self.label_blocks.get(&cfg.merge_block).expect("label");
         if let Some(loop_block) = cfg.loop_block.as_ref() {
             let dominators = self.mcx.mir.dominators();
@@ -2141,7 +2045,7 @@ impl<'b, 'a, 'tcx> FunctionCx<'b, 'a, 'tcx> {
                         let s = self
                             .scx
                             .builder
-                            .composite_construct(spirv_return_ty.word, None, &[value, carry_bool])
+                            .composite_construct(spirv_return_ty.word, None, &[value, carry_u32])
                             .expect("c");
                         //let cast = self.scx.builder.bitcast(spirv_return_ty.word, None, add).expect("bitcast");
                         Value::new(s)
@@ -2161,6 +2065,14 @@ impl<'b, 'a, 'tcx> FunctionCx<'b, 'a, 'tcx> {
                             .uless_than(bool_ty, None, left, right)
                             .expect("less than");
                         self.scx.bool_to_u32(lt)
+                    }
+                    mir::BinOp::Gt => {
+                        let gt = self
+                            .scx
+                            .builder
+                            .ugreater_than(bool_ty, None, left, right)
+                            .expect("greater than");
+                        self.scx.bool_to_u32(gt)
                     }
                     rest => unimplemented!("{:?}", rest),
                 }

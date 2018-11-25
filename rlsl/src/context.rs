@@ -1,5 +1,5 @@
 use self::hir::def_id::DefId;
-use graph::PetMir;
+use graph::{Loops, PetMir};
 use itertools::Itertools;
 use petgraph::visit::VisitMap;
 use petgraph::visit::{Bfs, Dfs, DfsPostOrder, Reversed, Walker};
@@ -108,7 +108,7 @@ impl<'a, 'tcx> CodegenCx<'a, 'tcx> {
         }
         let const_ty = const_val.ty;
         let spirv_val = match const_ty.sty {
-            ty::TypeVariants::TyBool | ty::TypeVariants::TyUint(_) => {
+            ty::TypeVariants::TyBool | ty::TypeVariants::TyUint(_) | ty::TypeVariants::TyInt(_) => {
                 let value = const_val
                     .to_bits(self.tcx, const_ty.to_param_env_and())
                     .expect("bits from const");
@@ -125,21 +125,21 @@ impl<'a, 'tcx> CodegenCx<'a, 'tcx> {
                     .constant_f32(spirv_ty.word, f32::from_bits(value as u32))
             }
             //[FIXME] Add other constants
-            ref rest => unimplemented!("Const"), // ConstValue::Integer(const_int) => {
-                                                 //     use rustc::ty::util::IntTypeExt;
-                                                 //     let ty = const_int.int_type().to_ty(self.tcx);
-                                                 //     let spirv_ty = self.to_ty(ty, spirv::StorageClass::Function);
-                                                 //     let value = const_int.to_u128_unchecked() as u32;
-                                                 //     self.builder.constant_u32(spirv_ty.word, value)
-                                                 // }
-                                                 // ConstValue::Bool(b) => self.constant_u32(b as u32).word,
-                                                 // ConstValue::Float(const_float) => {
-                                                 //     use rustc::infer::unify_key::ToType;
-                                                 //     let value: f32 = unsafe { ::std::mem::transmute(const_float.bits as u32) };
-                                                 //     let ty = const_float.ty.to_type(self.tcx);
-                                                 //     let spirv_ty = self.to_ty(ty, spirv::StorageClass::Function);
-                                                 //     self.builder.constant_f32(spirv_ty.word, value)
-                                                 // }
+            ref rest => unimplemented!("Const {:?}", rest), // ConstValue::Integer(const_int) => {
+                                                            //     use rustc::ty::util::IntTypeExt;
+                                                            //     let ty = const_int.int_type().to_ty(self.tcx);
+                                                            //     let spirv_ty = self.to_ty(ty, spirv::StorageClass::Function);
+                                                            //     let value = const_int.to_u128_unchecked() as u32;
+                                                            //     self.builder.constant_u32(spirv_ty.word, value)
+                                                            // }
+                                                            // ConstValue::Bool(b) => self.constant_u32(b as u32).word,
+                                                            // ConstValue::Float(const_float) => {
+                                                            //     use rustc::infer::unify_key::ToType;
+                                                            //     let value: f32 = unsafe { ::std::mem::transmute(const_float.bits as u32) };
+                                                            //     let ty = const_float.ty.to_type(self.tcx);
+                                                            //     let spirv_ty = self.to_ty(ty, spirv::StorageClass::Function);
+                                                            //     self.builder.constant_f32(spirv_ty.word, value)
+                                                            // }
         };
         let spirv_expr = Value::new(spirv_val);
         self.const_cache.insert(*const_val, spirv_expr);
@@ -393,6 +393,7 @@ impl<'a, 'tcx> CodegenCx<'a, 'tcx> {
             }
             ref r => unimplemented!("{:?}", r),
         };
+        self.name_from_str(&format!("{:?}", ty), spirv_type.word);
         if is_ptr {
             self.ty_ptr_cache.insert((ty, storage_class), spirv_type);
         } else {
@@ -620,11 +621,12 @@ pub fn find_merge_block(
         })
 }
 
-pub fn compute_control_flow(petmir: &PetMir) -> BTreeMap<mir::BasicBlock, Cfg> {
+pub fn compute_control_flow(petmir: &PetMir, loops: &Loops) -> BTreeMap<mir::BasicBlock, Cfg> {
     let mut map = BTreeMap::new();
-    let loops = petmir.compute_natural_loops();
-    //println!("{:#?}", loops);
-    let block_iter = DfsPostOrder::new(&petmir.graph, petmir.start_block()).iter(&petmir.graph);
+    let block_iter = Dfs::new(&petmir.graph, petmir.start_block()).iter(&petmir.graph);
+    // Temporary workaround for a driver bug. Spirv is underspecified and branches that are inside
+    // a loop that have an exit node should not be treated as selection merge
+    let mut no_selection_merge_needed = Vec::new();
     block_iter.for_each(|bb| {
         let block_data = &petmir.mir.basic_blocks()[bb];
         match block_data.terminator().kind {
@@ -634,11 +636,27 @@ pub fn compute_control_flow(petmir: &PetMir) -> BTreeMap<mir::BasicBlock, Cfg> {
                 ..
             } => {
                 if let Some(&back_edge) = loops.get(&bb) {
+                    let dominators = petmir.mir.dominators();
+                    let (block, merge_block) = Bfs::new(&petmir.graph, bb)
+                        .iter(&petmir.graph)
+                        .filter_map(|bb| {
+                            let block_data = &petmir.mir.basic_blocks()[bb];
+                            match block_data.terminator().kind {
+                                mir::TerminatorKind::SwitchInt { ref targets, .. } => targets
+                                    .iter()
+                                    .find(|&&target| !dominators.is_dominated_by(back_edge, target))
+                                    .map(|&merge_block| (bb, merge_block)),
+                                _ => None,
+                            }
+                        }).nth(0)
+                        .expect("Unable to find merge block");
+
+                    no_selection_merge_needed.push(block);
                     let cfg = Cfg {
                         header: bb,
-                        merge_block: target,
+                        merge_block,
                         loop_block: Some(Loop {
-                            continue_block: target,
+                            continue_block: back_edge,
                             back_edge,
                         }),
                     };
@@ -664,7 +682,7 @@ pub fn compute_control_flow(petmir: &PetMir) -> BTreeMap<mir::BasicBlock, Cfg> {
                         header: bb,
                         merge_block,
                         loop_block: Some(Loop {
-                            continue_block,
+                            continue_block: back_edge,
                             back_edge,
                         }),
                     };
@@ -678,14 +696,13 @@ pub fn compute_control_flow(petmir: &PetMir) -> BTreeMap<mir::BasicBlock, Cfg> {
                     };
                     map.insert(bb, cfg);
                 }
-                // Some(MergeBlock {
-                //     branch_header: bb,
-                //     merge_block,
-                // })
             }
             _ => (),
         }
     });
+    for block in no_selection_merge_needed {
+        map.remove(&block);
+    }
     map
 }
 
@@ -738,9 +755,10 @@ pub fn find_merge(
 }
 /// Sometimes you will see two branches that share the same block. Or not all blocks
 /// that are between the branch header and the merge block are dominated by the
-/// header. This can be fixed by duplicated those shared blocks.
+/// header. This can be fixed by duplicating those shared blocks.
 pub fn fix_overlapping_control_flow<'a, 'tcx>(
     mut mir: mir::Mir<'tcx>,
+    loops: &Loops,
     merge_blocks: impl Iterator<Item = &'a Cfg>,
 ) -> mir::Mir<'tcx> {
     let overlapping_blocks: Vec<_> = {
@@ -748,24 +766,30 @@ pub fn fix_overlapping_control_flow<'a, 'tcx>(
         merge_blocks
             .map(|cfg| {
                 let order = post_order_from_to(&mir, cfg.header, Some(cfg.merge_block));
+                //println!("{:?}", order);
                 let overlapping_bbs: Vec<_> = order
                     .into_iter()
                     .filter(|&bb| {
-                        bb != cfg.merge_block && !dominators.is_dominated_by(bb, cfg.header)
+                        bb != cfg.merge_block
+                            && !dominators.is_dominated_by(bb, cfg.header)
+                            && !loops.contains_key(&bb)
                     }).collect();
                 (cfg.header, overlapping_bbs)
             }).collect()
     };
+    //println!("Overlapping {:#?}", overlapping_blocks);
     for (header, overlapping_bbs) in overlapping_blocks {
         let dominators = mir.dominators();
         for overlapping_block in overlapping_bbs {
-            let terminator = mir.basic_blocks()[overlapping_block].terminator().clone();
-            let new_block = mir
-                .basic_blocks_mut()
-                .push(mir::BasicBlockData::new(Some(terminator)));
-            let previous_blocks: Vec<_> = ControlFlowGraph::predecessors(&mir, overlapping_block)
-                .filter(|&bb| dominators.is_dominated_by(bb, header))
-                .collect();
+            let block = mir.basic_blocks()[overlapping_block].clone();
+            let new_block = mir.basic_blocks_mut().push(block);
+            let previous_blocks: Vec<_> = {
+                let petmir = PetMir::from_mir(&mir);
+                ControlFlowGraph::predecessors(&mir, overlapping_block)
+                    .filter(|&bb| petmir.is_reachable(header ,bb))
+                    //.filter(|&bb| dominators.is_dominated_by(bb, header))
+                    .collect()
+            };
             assert!(
                 previous_blocks.len() > 0,
                 "Previous blocks should not be empty for {:?}",
@@ -784,6 +808,7 @@ pub struct ControlFlow {
     pub merge_blocks: HashMap<mir::BasicBlock, mir::BasicBlock>,
     pub loop_headers: HashMap<mir::BasicBlock, mir::BasicBlock>,
 }
+
 #[derive(Clone)]
 pub struct SpirvMir<'a, 'tcx: 'a> {
     pub def_id: hir::def_id::DefId,
@@ -826,14 +851,22 @@ impl<'a, 'tcx> SpirvMir<'a, 'tcx> {
     }
     pub fn from_mir(mcx: &::MirContext<'a, 'tcx>) -> Self {
         //println!("{:?}", mcx.def_id);
-        //println!("{:?}", mcx.def_id);
         let mut spirv_mir = mcx.mir.clone();
         ::remove_unwind(&mut spirv_mir);
-        let cfgs = compute_control_flow(&PetMir::from_mir(&spirv_mir));
+
+        let (cfgs, loops) = {
+            let petmir = PetMir::from_mir(&spirv_mir);
+            let loops = petmir.compute_natural_loops();
+            (compute_control_flow(&petmir, &loops), loops)
+        };
 
         //println!("{:#?}", cfgs);
-        let mut spirv_mir = fix_overlapping_control_flow(spirv_mir, cfgs.values());
-        let mut cfgs = compute_control_flow(&PetMir::from_mir(&spirv_mir));
+        let mut spirv_mir = fix_overlapping_control_flow(spirv_mir, &loops, cfgs.values());
+        let mut cfgs = {
+            let petmir = PetMir::from_mir(&spirv_mir);
+            let loops = petmir.compute_natural_loops();
+            compute_control_flow(&petmir, &loops)
+        };
         //println!("{:?}", cfgs.values().collect::<Vec<_>>());
         let order = post_order_from_to(&spirv_mir, mir::START_BLOCK, None);
         // TODO: Clean this up: We need to iterate over the cfgs in post order
@@ -873,6 +906,7 @@ impl<'a, 'tcx> SpirvMir<'a, 'tcx> {
             }
             cfg.merge_block = goto_block;
         });
+        //println!("{:#?}", cfgs);
         {
             //     let mut file =
             //         ::std::fs::File::create("/home/maik/projects/rlsl/issues/mir/mir-before.dot")
@@ -884,6 +918,14 @@ impl<'a, 'tcx> SpirvMir<'a, 'tcx> {
             // let graph = PetMir::from_mir(&spirv_mir);
             // graph.export(&mut file);
         }
+        cfgs.values().for_each(|cfg| {
+            let dominators = spirv_mir.dominators();
+            //println!("cfg {:?}", cfg.header);
+            //println!(
+            //    "dom {:?}",
+            //    dominators.dominators(cfg.header).collect::<Vec<_>>()
+            //);
+        });
         SpirvMir {
             mir: spirv_mir,
             control_flow: cfgs,

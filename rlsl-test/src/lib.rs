@@ -281,6 +281,9 @@ mod tests {
         fn compute_reference(input: Vec<f32>) -> TestResult {
             compute("compute", input, "../.shaders/reference.spv", issues::reference)
         }
+        fn compute_break_loop(input: Vec<f32>) -> TestResult {
+            compute("compute", input, "../.shaders/break_loop.spv", issues::break_loop)
+        }
 
         fn compute_ok_or(input: Vec<f32>) -> TestResult {
             compute("compute", input, "../.shaders/ok_or.spv", issues::ok_or)

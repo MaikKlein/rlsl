@@ -65,6 +65,14 @@ pub trait Array<T> {
     fn length(&self) -> usize;
 }
 
+impl<T: Copy> Array<T> for [T; 1] {
+    fn length(&self) -> usize {
+        1
+    }
+    fn get(&self, index: usize) -> T {
+        self[index]
+    }
+}
 impl<T: Copy> Array<T> for [T; 2] {
     fn length(&self) -> usize {
         2

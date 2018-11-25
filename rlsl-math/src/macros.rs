@@ -71,6 +71,10 @@ macro_rules! vec_common {
                 }
             }
             #[inline]
+            pub fn reflect(self, normal: Self) -> Self {
+                self -  normal * (T::one() + T::one()) * Self::dot(self, normal)
+            }
+            #[inline]
             pub fn lerp(self, other: Self, t: T) -> Self {
                 let i_t = T::one() - t;
                 $(

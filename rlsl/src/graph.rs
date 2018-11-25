@@ -12,6 +12,7 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::io::Write;
 use std::path::Path;
+pub type Loops = HashMap<mir::BasicBlock, mir::BasicBlock>;
 pub struct PetMir<'a, 'tcx: 'a> {
     pub mir: &'a mir::Mir<'tcx>,
     pub graph: GraphMap<mir::BasicBlock, (), Directed>,
@@ -27,7 +28,7 @@ impl<'a, 'tcx> PetMir<'a, 'tcx> {
             }).nth(0)
             .expect("return")
     }
-    pub fn compute_natural_loops(&self) -> HashMap<mir::BasicBlock, mir::BasicBlock> {
+    pub fn compute_natural_loops(&self) -> Loops {
         let dominators = self.mir.dominators();
         let mut map = HashMap::new();
         Dfs::new(&self.graph, self.start_block())

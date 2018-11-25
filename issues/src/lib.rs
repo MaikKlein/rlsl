@@ -14,25 +14,57 @@ pub fn single_branch(_: u32, val: f32) -> f32 {
     }
 }
 
+pub fn break_loop(_: u32, val: f32) -> f32 {
+    let mut sum = 0.0;
+    let mut i = 0u32;
+    while i > 100 {
+        sum += 1.0;
+        i += 1;
+        if i < 50 {
+            break;
+        }
+    }
+    sum
+}
+// pub fn break_loop(_: u32, val: f32) -> f32 {
+//     let mut sum = val;
+//     let mut i = Some(0usize);
+//     while let Some(idx) = i {
+//         sum += 1.0;
+//         if 100 < idx {
+//             break;
+//         }
+//         i = Some(idx + 1);
+//     }
+//     sum
+// }
 pub fn reference(_: u32, val: f32) -> f32 {
     const LEN: usize = 2;
     let arr: [f32; LEN] = [val, 2.0 * val];
     trait Array<T> {
-        fn get(&self, indx: usize) -> T;
+        fn get(&self, idx: usize) -> T;
+        fn length(&self) -> usize;
     }
-    impl Array<f32> for [f32; LEN] {
+    impl Array<f32> for [f32; 2] {
         fn get(&self, i: usize) -> f32 {
             self[i]
         }
+        fn length(&self) -> usize {
+            2
+        }
     }
     #[inline(never)]
-    fn test(arr: &impl Array<f32>) -> f32 {
-        let a = arr.get(0);
-        let b = arr.get(1);
-        a + b
-
+    fn sum(arr: &impl Array<f32>) -> f32 {
+        let mut sum = 42.0f32;
+        let mut i = 0usize;
+        //let len = arr.length();
+        while i < arr.length() {
+            sum += 1.0f32;
+            i += 1usize;
+        }
+        sum
     }
-    test(&arr)
+    sum(&arr)
 }
 
 pub fn simple_loop(_: u32, val: f32) -> f32 {
