@@ -1086,15 +1086,22 @@ impl<'b, 'a, 'tcx> FunctionCx<'b, 'a, 'tcx> {
         //println!("{:?} {:#?}", def_id, params);
         scx.builder.begin_basic_block(None).expect("block");
         let mut args_map: HashMap<_, _> = params
-            .into_iter()
+            .iter()
             .enumerate()
             .map(|(index, param)| {
                 let local_arg = mir::Local::new(index + 1);
                 let local_decl = &mcx.mir().local_decls[local_arg];
-                (
-                    local_arg,
-                    param.to_variable(scx, spirv::StorageClass::Function),
-                )
+                let variable = if ::is_ptr(param.ty) {
+                    let ty = ::remove_ptr_ty(param.ty);
+                    Variable {
+                        word: param.word,
+                        ty,
+                        storage_class: spirv::StorageClass::Function,
+                    }
+                } else {
+                    Variable::alloca(scx, param.ty, spirv::StorageClass::Function)
+                };
+                (local_arg, variable)
             }).collect();
         {
             use rustc_data_structures::indexed_vec::Idx;
@@ -1106,7 +1113,23 @@ impl<'b, 'a, 'tcx> FunctionCx<'b, 'a, 'tcx> {
             //scx.name_from_str("retvar", spirv_var);
             args_map.insert(local, variable);
         }
-        FunctionCx::new(InstanceType::Fn, mcx, args_map, scx).visit_mir(mcx.mir());
+        {
+            let mut function = FunctionCx::new(InstanceType::Fn, mcx, args_map.clone(), scx);
+            for (idx, param) in params.iter().enumerate() {
+                let local_arg = mir::Local::new(idx + 1);
+                let var = args_map
+                    .get(&local_arg)
+                    .expect("Argument not found for param");
+                let load = param.load(function.scx);
+                var.store(function.scx, load);
+            }
+            let spirv_label = *function
+                .label_blocks
+                .get(&mir::BasicBlock::new(0))
+                .expect("No first label");
+            function.scx.builder.branch(spirv_label.0).expect("branch");
+            function.visit_mir(mcx.mir());
+        }
     }
     pub fn trans_entry(
         entry_point: &EntryPoint<'a, 'tcx>,
@@ -1252,12 +1275,20 @@ impl<'b, 'a, 'tcx> FunctionCx<'b, 'a, 'tcx> {
             .as_ref()
             .expect("")
             .word;
-        FunctionCx::new(
-            InstanceType::Entry(entry_point.entry_type),
-            &entry_point.mcx,
-            variable_map,
-            scx,
-        ).visit_mir(&entry_point.mcx.mir);
+        {
+            let mut function = FunctionCx::new(
+                InstanceType::Entry(entry_point.entry_type),
+                &entry_point.mcx,
+                variable_map,
+                scx,
+            );
+            let spirv_label = *function
+                .label_blocks
+                .get(&mir::BasicBlock::new(0))
+                .expect("No first label");
+            function.scx.builder.branch(spirv_label.0).expect("branch");
+            function.visit_mir(mir);
+        }
         let mut inputs_raw = entry_input
             .variable_iter(&entry_point)
             .map(|(_, gv)| gv.var)
@@ -1355,12 +1386,6 @@ impl<'b, 'a, 'tcx> FunctionCx<'b, 'a, 'tcx> {
                 let variable = Variable::alloca(scx, local_ty, spirv::StorageClass::Function);
                 Some((local_var, variable))
             }).collect();
-        {
-            let spirv_label = label_blocks
-                .get(&mir::BasicBlock::new(0))
-                .expect("No first label");
-            scx.builder.branch(spirv_label.0).expect("branch");
-        }
         variable_map.extend(local_vars.into_iter());
         //println!("{:?}", variable_map);
         let visitor = FunctionCx {

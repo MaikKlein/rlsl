@@ -786,7 +786,7 @@ pub fn fix_overlapping_control_flow<'a, 'tcx>(
             let previous_blocks: Vec<_> = {
                 let petmir = PetMir::from_mir(&mir);
                 ControlFlowGraph::predecessors(&mir, overlapping_block)
-                    .filter(|&bb| petmir.is_reachable(header ,bb))
+                    .filter(|&bb| petmir.is_reachable(header, bb))
                     //.filter(|&bb| dominators.is_dominated_by(bb, header))
                     .collect()
             };
