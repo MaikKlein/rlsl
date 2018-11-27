@@ -1,3 +1,4 @@
+#![feature(proc_macro_gen)]
 #![feature(use_extern_macros)]
 extern crate gfx_backend_vulkan as back;
 #[macro_use]
@@ -7,10 +8,10 @@ extern crate rlsl_test_macro;
 extern crate gfx_hal as hal;
 extern crate issues;
 
-use rlsl_test_macro::rlsl_test;
 use hal::{buffer, command, memory, pool, pso, queue};
 use hal::{Backend, Compute, DescriptorPool, Device, Instance, PhysicalDevice, QueueFamily};
 use quickcheck::TestResult;
+use rlsl_test_macro::rlsl_test;
 use std::fmt::Debug;
 use std::fs;
 use std::mem::size_of;
@@ -263,69 +264,135 @@ fn create_buffer<B: Backend>(
     }
 }
 
-    //pub fn u32_add(_: u32, val: f32) -> f32 {
-    //    let i = 1u32;
-    //    let i2 = i + i;
-    //    val
-    //}
-rlsl_test!{
-    pub fn u32_add(_: u32, val: f32) -> f32 {
-    }
-    pub fn u32_add(_: u32, val: f32) -> f32 {
-    }
-    
-}
-
 #[cfg(test)]
 mod tests {
-    use compute;
-    use issues;
     use quickcheck::TestResult;
-    quickcheck! {
-        fn compute_u32_add(input: Vec<f32>) -> TestResult {
-            compute("compute", input, "../.shaders/u32-add.spv", issues::u32_add)
+    use rlsl_test_macro::rlsl_test;
+    rlsl_test!{
+        pub fn simple_loop(_: u32, val: f32) -> f32 {
+            const LEN: usize = 2;
+            let arr: [f32; LEN] = [val, val];
+            let mut i = 0usize;
+            let mut sum = 0.0;
+            while i < 2 {
+                i += 1;
+                sum += 1.0;
+            }
+            sum
+        }
+        pub fn reference(_: u32, val: f32) -> f32 {
+            const LEN: usize = 2;
+            let arr: [f32; LEN] = [val, 2.0 * val];
+            trait Array<T> {
+                fn get(&self, idx: usize) -> T;
+                fn length(&self) -> usize;
+            }
+            impl Array<f32> for [f32; 2] {
+                fn get(&self, i: usize) -> f32 {
+                    self[i]
+                }
+                fn length(&self) -> usize {
+                    2
+                }
+            }
+            #[inline(never)]
+            fn sum(arr: &impl Array<f32>) -> f32 {
+                let mut sum = 42.0f32;
+                let mut i = 0usize;
+                //let len = arr.length();
+                while i < arr.length() {
+                    sum += 1.0f32;
+                    i += 1usize;
+                }
+                sum
+            }
+            sum(&arr)
+        }
+        pub fn u32_add(_: u32, val: f32) -> f32 {
+           let i = 1u32;
+           let i2 = i + i;
+           val
+        }
+        pub fn match_result(_: u32, val: f32) -> f32 {
+            let foo = if val < 100.0 {
+                Ok(1.0)
+            } else {
+                Err(-1.0)
+            };
+            match foo {
+                Ok(val) => val,
+                Err(val) => val,
+            }
         }
 
-        fn compute_square(input: Vec<f32>) -> TestResult {
-            compute("compute", input, "../.shaders/square.spv", issues::square)
+        pub fn match_enum(_: u32, val: f32) -> f32 {
+            enum Foo {
+                A(f32),
+                B(f32),
+            }
+            let foo = if val < 100.0 {
+                Foo::A(1.0)
+            } else {
+                Foo::B(-1.0)
+            };
+            match foo {
+                Foo::A(val) => val,
+                Foo::B(val) => val,
+            }
         }
 
-        fn compute_questionmark_option(input: Vec<f32>) -> TestResult {
-            compute("compute", input, "../.shaders/questionmark-option.spv", issues::questionmark_option)
+        pub fn ok_or(_: u32, val: f32) -> f32 {
+            let o = Some(val).ok_or(-1.0f32);
+            match o {
+                Ok(val) => val,
+                Err(val) => val,
+            }
         }
 
-        fn compute_reference(input: Vec<f32>) -> TestResult {
-            compute("compute", input, "../.shaders/reference.spv", issues::reference)
-        }
-        fn compute_break_loop(input: Vec<f32>) -> TestResult {
-            compute("compute", input, "../.shaders/break_loop.spv", issues::break_loop)
-        }
-
-        fn compute_ok_or(input: Vec<f32>) -> TestResult {
-            compute("compute", input, "../.shaders/ok_or.spv", issues::ok_or)
-        }
-        fn compute_match_enum(input: Vec<f32>) -> TestResult {
-            compute("compute", input, "../.shaders/match_enum.spv", issues::match_enum)
-        }
-        fn compute_match_result(input: Vec<f32>) -> TestResult {
-            compute("compute", input, "../.shaders/match_result.spv", issues::match_result)
+        pub fn option(_: u32, val: f32) -> f32 {
+            let o = Some(val);
+            if let Some(f) = o {
+                f
+            } else {
+                -1.0
+            }
         }
 
-        fn compute_option(input: Vec<f32>) -> TestResult {
-            compute("compute", input, "../.shaders/option.spv", issues::option)
+        pub fn questionmark_option(_: u32, val: f32) -> f32 {
+            fn test(f: f32) -> Option<f32> {
+                let o = if f > 42.0 { Some(f) } else { None };
+                let r = o?;
+                Some(r + 10.0)
+            }
+            if let Some(val) = test(val) {
+                val
+            } else {
+                -1.0
+            }
+        }
+        pub fn square(_: u32, val: f32) -> f32 {
+            val * val
         }
 
-        fn compute_simple_loop(input: Vec<f32>) -> TestResult {
-            compute("compute", input, "../.shaders/simple_loop.spv", issues::simple_loop)
+        pub fn single_branch(_: u32, val: f32) -> f32 {
+            if val > 1.0 {
+                1.0
+            } else {
+                0.0
+            }
         }
 
-        fn compute_single_branch(input: Vec<f32>) -> TestResult {
-            compute("compute", input, "../.shaders/single-branch.spv", issues::single_branch)
-        }
-
-        fn compute_single_branch_glsl(input: Vec<f32>) -> TestResult {
-            compute("main", input, "../issues/.shaders-glsl/single-branch.spv", issues::single_branch)
+        pub fn break_loop(_: u32, val: f32) -> f32 {
+            let mut sum = 0.0;
+            let mut i = 0u32;
+            while i > 100 {
+                sum += 1.0;
+                i += 1;
+                if i < 50 {
+                    break;
+                }
+            }
+            sum
         }
     }
-
 }
