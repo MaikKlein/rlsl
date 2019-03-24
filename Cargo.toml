@@ -3,9 +3,7 @@ members = [
     "rlsl",
     "rlsl-math",
     "issues",
-    "quad2",
     "rlsl-test",
     "rlsl-test-macro",
     "libstd",
-    "rlsl-test/testfiles",
 ]
