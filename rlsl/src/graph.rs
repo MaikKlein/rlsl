@@ -6,7 +6,9 @@ use petgraph::Direction;
 use rspirv::binary::Disassemble;
 use rspirv::mr::{BasicBlock, Function, Instruction, Module, Operand};
 use rustc::mir;
-use rustc_data_structures::control_flow_graph::{iterate::post_order_from_to, ControlFlowGraph};
+use rustc_data_structures::graph::{
+    iterate::post_order_from_to, ControlFlowGraph, WithStartNode, WithSuccessors,
+};
 use spirv;
 use std::collections::HashMap;
 use std::fs::File;
@@ -25,7 +27,8 @@ impl<'a, 'tcx> PetMir<'a, 'tcx> {
             .filter_map(|(bb, data)| match data.terminator().kind {
                 mir::TerminatorKind::Return => Some(bb),
                 _ => None,
-            }).nth(0)
+            })
+            .nth(0)
             .expect("return")
     }
     pub fn compute_natural_loops(&self) -> Loops {
@@ -63,7 +66,8 @@ impl<'a, 'tcx> PetMir<'a, 'tcx> {
                     mir::TerminatorKind::Resume => Some(bb),
                     _ => None,
                 }
-            }).nth(0)
+            })
+            .nth(0)
     }
     pub fn from_mir(mir: &'a mir::Mir<'tcx>) -> Self {
         let mut graph = GraphMap::new();

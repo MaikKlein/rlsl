@@ -1,3 +1,4 @@
+use std::rc::Rc;
 use self::hir::def_id::DefId;
 use graph::{Loops, PetMir};
 use itertools::Itertools;
@@ -10,9 +11,11 @@ use rustc::hir;
 use rustc::middle::lang_items::LangItem;
 use rustc::mir;
 use rustc::ty;
-use rustc::ty::subst::Substs;
+use rustc::ty::subst::SubstsRef;
 use rustc::ty::{subst, TyCtxt};
-use rustc_data_structures::control_flow_graph::{iterate::post_order_from_to, ControlFlowGraph};
+use rustc_data_structures::graph::{
+    iterate::post_order_from_to, ControlFlowGraph, WithPredecessors,
+};
 use rustc_data_structures::indexed_vec::IndexVec;
 use spirv;
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -22,6 +25,7 @@ use syntax_pos::DUMMY_SP;
 use ConstructTy;
 use {Enum, Variable};
 use {Function, FunctionCall, Intrinsic, IntrinsicType, Ty, Value};
+use ::TypeDefId;
 
 trait ToParamEnvAnd<'tcx, T> {
     fn to_param_env_and(self) -> ty::ParamEnvAnd<'tcx, ty::Ty<'tcx>>;
@@ -44,7 +48,7 @@ pub struct CodegenCx<'a, 'tcx: 'a> {
     pub ty_cache: HashMap<ty::Ty<'tcx>, Ty<'tcx>>,
     pub ty_ptr_cache: HashMap<(ty::Ty<'tcx>, spirv::StorageClass), Ty<'tcx>>,
     pub const_cache: HashMap<ty::Const<'tcx>, Value>,
-    pub forward_fns: HashMap<(hir::def_id::DefId, &'a Substs<'tcx>), Function>,
+    pub forward_fns: HashMap<(hir::def_id::DefId, SubstsRef<'tcx>), Function>,
     pub intrinsic_fns: HashMap<hir::def_id::DefId, Intrinsic>,
     pub debug_symbols: bool,
     pub glsl_ext_id: spirv::Word,
@@ -73,7 +77,7 @@ impl<'a, 'tcx> CodegenCx<'a, 'tcx> {
     pub fn get_function_call(
         &self,
         def_id: DefId,
-        substs: &'a Substs<'tcx>,
+        substs: SubstsRef<'tcx>,
     ) -> Option<FunctionCall> {
         self.forward_fns
             .get(&(def_id, substs))
@@ -90,7 +94,7 @@ impl<'a, 'tcx> CodegenCx<'a, 'tcx> {
             value.to_bits() as u128,
             self.tcx.types.f32.to_param_env_and(),
         );
-        self.constant(val)
+        self.constant(&val)
     }
 
     pub fn constant_u32(&mut self, value: u32) -> Value {
@@ -99,7 +103,7 @@ impl<'a, 'tcx> CodegenCx<'a, 'tcx> {
             value as u128,
             self.tcx.types.u32.to_param_env_and(),
         );
-        self.constant(val)
+        self.constant(&val)
     }
 
     pub fn constant(&mut self, const_val: &ty::Const<'tcx>) -> Value {
@@ -108,7 +112,7 @@ impl<'a, 'tcx> CodegenCx<'a, 'tcx> {
         }
         let const_ty = const_val.ty;
         let spirv_val = match const_ty.sty {
-            ty::TypeVariants::TyBool | ty::TypeVariants::TyUint(_) | ty::TypeVariants::TyInt(_) => {
+            ty::TyKind::Bool | ty::TyKind::Uint(_) | ty::TyKind::Int(_) => {
                 let value = const_val
                     .to_bits(self.tcx, const_ty.to_param_env_and())
                     .expect("bits from const");
@@ -116,7 +120,7 @@ impl<'a, 'tcx> CodegenCx<'a, 'tcx> {
                 let spirv_ty = self.to_ty_fn(const_ty);
                 self.builder.constant_u32(spirv_ty.word, value as u32)
             }
-            ty::TypeVariants::TyFloat(_) => {
+            ty::TyKind::Float(_) => {
                 let value = const_val
                     .to_bits(self.tcx, const_ty.to_param_env_and())
                     .expect("bits from const");
@@ -125,21 +129,21 @@ impl<'a, 'tcx> CodegenCx<'a, 'tcx> {
                     .constant_f32(spirv_ty.word, f32::from_bits(value as u32))
             }
             //[FIXME] Add other constants
-            ref rest => unimplemented!("Const {:?}", rest), // ConstValue::Integer(const_int) => {
-                                                            //     use rustc::ty::util::IntTypeExt;
-                                                            //     let ty = const_int.int_type().to_ty(self.tcx);
-                                                            //     let spirv_ty = self.to_ty(ty, spirv::StorageClass::Function);
-                                                            //     let value = const_int.to_u128_unchecked() as u32;
-                                                            //     self.builder.constant_u32(spirv_ty.word, value)
-                                                            // }
-                                                            // ConstValue::Bool(b) => self.constant_u32(b as u32).word,
-                                                            // ConstValue::Float(const_float) => {
-                                                            //     use rustc::infer::unify_key::ToType;
-                                                            //     let value: f32 = unsafe { ::std::mem::transmute(const_float.bits as u32) };
-                                                            //     let ty = const_float.ty.to_type(self.tcx);
-                                                            //     let spirv_ty = self.to_ty(ty, spirv::StorageClass::Function);
-                                                            //     self.builder.constant_f32(spirv_ty.word, value)
-                                                            // }
+            ref rest => unimplemented!("Const"), // ConstValue::Integer(const_int) => {
+                                                 //     use rustc::ty::util::IntTypeExt;
+                                                 //     let ty = const_int.int_type().to_ty(self.tcx);
+                                                 //     let spirv_ty = self.to_ty(ty, spirv::StorageClass::Function);
+                                                 //     let value = const_int.to_u128_unchecked() as u32;
+                                                 //     self.builder.constant_u32(spirv_ty.word, value)
+                                                 // }
+                                                 // ConstValue::Bool(b) => self.constant_u32(b as u32).word,
+                                                 // ConstValue::Float(const_float) => {
+                                                 //     use rustc::infer::unify_key::ToType;
+                                                 //     let value: f32 = unsafe { ::std::mem::transmute(const_float.bits as u32) };
+                                                 //     let ty = const_float.ty.to_type(self.tcx);
+                                                 //     let spirv_ty = self.to_ty(ty, spirv::StorageClass::Function);
+                                                 //     self.builder.constant_f32(spirv_ty.word, value)
+                                                 // }
         };
         let spirv_expr = Value::new(spirv_val);
         self.const_cache.insert(*const_val, spirv_expr);
@@ -150,10 +154,10 @@ impl<'a, 'tcx> CodegenCx<'a, 'tcx> {
         ty: rustc::ty::Ty<'tcx>,
         storage_class: spirv::StorageClass,
     ) -> Ty<'tcx> {
-        use rustc::ty::TypeVariants;
+        use rustc::ty::TyKind;
         use syntax::ast::{IntTy, UintTy};
         let ty = match ty.sty {
-            TypeVariants::TyRef(_, ty, _) => {
+            TyKind::Ref(_, ty, _) => {
                 let t = ty::TypeAndMut {
                     ty,
                     mutbl: rustc::hir::Mutability::MutMutable,
@@ -163,14 +167,14 @@ impl<'a, 'tcx> CodegenCx<'a, 'tcx> {
             _ => ty,
         };
         let is_ptr = match ty.sty {
-            TypeVariants::TyRawPtr(_) => true,
+            TyKind::RawPtr(_) => true,
             _ => false,
         };
         // TODO: Should integer always be 32bit wide?
         let ty = match ty.sty {
-            TypeVariants::TyInt(_) => self.tcx.mk_ty(TypeVariants::TyInt(IntTy::I32)),
-            TypeVariants::TyUint(_) => self.tcx.mk_ty(TypeVariants::TyUint(UintTy::U32)),
-            TypeVariants::TyBool => self.tcx.mk_ty(TypeVariants::TyUint(UintTy::U32)),
+            TyKind::Int(_) => self.tcx.mk_ty(TyKind::Int(IntTy::I32)),
+            TyKind::Uint(_) => self.tcx.mk_ty(TyKind::Uint(UintTy::U32)),
+            TyKind::Bool => self.tcx.mk_ty(TyKind::Uint(UintTy::U32)),
             _ => ty,
         };
 
@@ -183,24 +187,22 @@ impl<'a, 'tcx> CodegenCx<'a, 'tcx> {
         }
         let spirv_type: Ty = match ty.sty {
             // TODO: Proper TyNever
-            TypeVariants::TyNever => {
-                let ty = self.tcx.mk_nil();
+            TyKind::Never => {
+                let ty = self.tcx.mk_unit();
                 self.to_ty(ty, storage_class)
             }
-            //TypeVariants::TyBool => self.builder.type_bool().construct_ty(ty),
-            TypeVariants::TyInt(int_ty) => self.builder.type_int(32, 1).construct_ty(ty),
-            TypeVariants::TyUint(uint_ty) => self.builder.type_int(32, 0).construct_ty(ty),
-            TypeVariants::TyFloat(f_ty) => {
+            //TyKind::Bool => self.builder.type_bool().construct_ty(ty),
+            TyKind::Int(int_ty) => self.builder.type_int(32, 1).construct_ty(ty),
+            TyKind::Uint(uint_ty) => self.builder.type_int(32, 0).construct_ty(ty),
+            TyKind::Float(f_ty) => {
                 use syntax::ast::FloatTy;
                 match f_ty {
                     FloatTy::F32 => self.builder.type_float(32).construct_ty(ty),
                     FloatTy::F64 => panic!("f64 is not supported"),
                 }
             }
-            TypeVariants::TyTuple(slice) if slice.len() == 0 => {
-                self.builder.type_void().construct_ty(ty)
-            }
-            TypeVariants::TyTuple(slice) => {
+            TyKind::Tuple(slice) if slice.len() == 0 => self.builder.type_void().construct_ty(ty),
+            TyKind::Tuple(slice) => {
                 let field_ty_spirv: Vec<_> = slice
                     .iter()
                     .map(|ty| self.to_ty(ty, storage_class).word)
@@ -209,7 +211,7 @@ impl<'a, 'tcx> CodegenCx<'a, 'tcx> {
                 let spirv_struct = self.builder.type_struct(&field_ty_spirv);
                 spirv_struct.construct_ty(ty)
             }
-            TypeVariants::TyFnPtr(sig) => {
+            TyKind::FnPtr(sig) => {
                 let ty = self.tcx.normalize_erasing_late_bound_regions(
                     ty::ParamEnv::reveal_all(),
                     &sig.output(),
@@ -225,14 +227,14 @@ impl<'a, 'tcx> CodegenCx<'a, 'tcx> {
                     .type_function(ret_ty.word, &input_ty)
                     .construct_ty(ty)
             }
-            TypeVariants::TyRawPtr(type_and_mut) => {
+            TyKind::RawPtr(type_and_mut) => {
                 let inner = self.to_ty(type_and_mut.ty, storage_class);
                 self.builder
                     .type_pointer(None, storage_class, inner.word)
                     .construct_ty(ty)
             }
-            TypeVariants::TyParam(_) => panic!("TyParam should have been monomorphized"),
-            TypeVariants::TyAdt(adt, substs) => {
+            TyKind::Param(_) => panic!("TyParam should have been monomorphized"),
+            TyKind::Adt(adt, substs) => {
                 //let mono_substs = mtx.monomorphize(&substs);
                 let mono_substs = substs;
                 match adt.adt_kind() {
@@ -243,15 +245,14 @@ impl<'a, 'tcx> CodegenCx<'a, 'tcx> {
                                 .variants
                                 .iter()
                                 .map(|variant| {
-                                    let variant_field_ty: Vec<
-                                        _,
-                                    > = variant
+                                    let variant_field_ty: Vec<_> = variant
                                         .fields
                                         .iter()
                                         .map(|field| {
                                             let ty = field.ty(self.tcx, mono_substs);
                                             self.to_ty(ty, storage_class).word
-                                        }).collect();
+                                        })
+                                        .collect();
                                     let spirv_struct = self.builder.type_struct(&variant_field_ty);
                                     if self.debug_symbols {
                                         for (index, field) in variant.fields.iter().enumerate() {
@@ -261,10 +262,11 @@ impl<'a, 'tcx> CodegenCx<'a, 'tcx> {
                                                 field.ident.as_str().to_string(),
                                             );
                                         }
-                                        self.name_from_def_id(variant.did, spirv_struct);
+                                        self.name_from_def_id(variant.def_id, spirv_struct);
                                     }
                                     spirv_struct
-                                }).collect();
+                                })
+                                .collect();
                             field_ty_spirv.push(discr_ty_spirv.word);
 
                             let spirv_struct = self.builder.type_struct(&field_ty_spirv);
@@ -283,7 +285,7 @@ impl<'a, 'tcx> CodegenCx<'a, 'tcx> {
                             // If we have an enum, but without an layout it should be enum Foo {}
                             // TODO: Empty struct correct?
                             //self.builder.type_struct(&[])
-                            let ty = self.tcx.mk_ty(TypeVariants::TyNever);
+                            let ty = self.tcx.mk_ty(TyKind::Never);
                             self.to_ty(ty, storage_class)
                             //self.builder.type_opaque(self.tcx.item_name(adt.did).as_ref())
                         }
@@ -304,7 +306,8 @@ impl<'a, 'tcx> CodegenCx<'a, 'tcx> {
                                 "Input" => Some(true),
                                 "Output" => Some(true),
                                 _ => None,
-                            }).get(0)
+                            })
+                            .get(0)
                             .is_some();
                             let field_ty: Vec<_> = adt
                                 .all_fields()
@@ -359,7 +362,8 @@ impl<'a, 'tcx> CodegenCx<'a, 'tcx> {
                                     .filter(|field| {
                                         let ty = field.ty(self.tcx, mono_substs);
                                         !ty.is_phantom_data()
-                                    }).collect();
+                                    })
+                                    .collect();
                                 for (index, field) in fields.iter().enumerate() {
                                     self.builder.member_name(
                                         spirv_struct,
@@ -375,14 +379,14 @@ impl<'a, 'tcx> CodegenCx<'a, 'tcx> {
                     ref r => unimplemented!("{:?}", r),
                 }
             }
-            TypeVariants::TyArray(ty, length) => {
+            TyKind::Array(ty, length) => {
                 let spirv_lenth = self.constant(length);
                 let spirv_ty = self.to_ty(ty, storage_class);
                 self.builder
                     .type_array(spirv_ty.word, spirv_lenth.word)
                     .construct_ty(ty)
             }
-            TypeVariants::TyClosure(def_id, substs) => {
+            TyKind::Closure(def_id, substs) => {
                 let field_ty_spirv: Vec<_> = substs
                     .upvar_tys(def_id, self.tcx)
                     .map(|ty| self.to_ty(ty, storage_class).word)
@@ -391,7 +395,7 @@ impl<'a, 'tcx> CodegenCx<'a, 'tcx> {
                 let spirv_struct = self.builder.type_struct(&field_ty_spirv);
                 spirv_struct.construct_ty(ty)
             }
-            ref r => unimplemented!("{:?}", r),
+            _ => unimplemented!(),
         };
         self.name_from_str(&format!("{:?}", ty), spirv_type.word);
         if is_ptr {
@@ -414,20 +418,21 @@ impl<'a, 'tcx> CodegenCx<'a, 'tcx> {
         let ty_ptr = self.tcx.mk_ptr(t);
         self.to_ty(ty_ptr, storage_class)
     }
-    fn attrs_from_def_id(&self, def_id: DefId) -> Option<&[syntax::ast::Attribute]> {
-        let node_id = self.tcx.hir.as_local_node_id(def_id);
-        let node = node_id.and_then(|id| self.tcx.hir.find(id));
-        let item = node.and_then(|node| match node {
-            hir::map::Node::NodeItem(item) => Some(item),
-            _ => None,
-        });
-        item.map(|item| &*item.attrs)
+    fn attrs_from_def_id(&self, def_id: DefId) -> Rc<[syntax::ast::Attribute]> {
+        // let node_id = self.tcx.hir().as_local_node_id(def_id);
+        // let node = node_id.and_then(|id| self.tcx.hir().find(id));
+        // let item = node.and_then(|node| match node {
+        //     hir::map::Node::Item(item) => Some(item),
+        //     _ => None,
+        // });
+        // item.map(|item| &*item.attrs)
+        self.tcx.item_attrs(def_id)
     }
 
     pub fn name_from_def_id(&mut self, def_id: hir::def_id::DefId, id: spirv::Word) {
         if self.debug_symbols {
             //self.builder.name(id, self.tcx.item_name(def_id).as_ref());
-            self.builder.name(id, self.tcx.item_path_str(def_id));
+            self.builder.name(id, self.tcx.def_path_str(def_id));
         }
     }
     pub fn name_from_str(&mut self, name: &str, id: spirv::Word) {
@@ -446,14 +451,15 @@ impl<'a, 'tcx> CodegenCx<'a, 'tcx> {
     pub fn get_per_fragment(&mut self, ty: ty::Ty<'tcx>) -> Variable<'tcx> {
         self.per_fragment.unwrap_or_else(|| {
             let is_fragment = ty
-                .ty_to_def_id()
+                .to_def_id()
                 .map(|def_id| {
                     let attrs = self.tcx.get_attrs(def_id);
                     ::extract_attr(&attrs, "spirv", |s| match s {
                         "PerFragment" => Some(true),
                         _ => None,
                     })
-                }).is_some();
+                })
+                .is_some();
             let spirv_ty = self.to_ty(ty, spirv::StorageClass::Input);
             self.builder
                 .decorate(spirv_ty.word, spirv::Decoration::Block, &[]);
@@ -471,16 +477,17 @@ impl<'a, 'tcx> CodegenCx<'a, 'tcx> {
         })
     }
     pub fn get_compute(&mut self, ty: ty::Ty<'tcx>) -> Variable<'tcx> {
-        use rustc::ty::TypeVariants;
+        use rustc::ty::TyKind;
         let is_compute = ty
-            .ty_to_def_id()
+            .to_def_id()
             .map(|def_id| {
                 let attrs = self.tcx.get_attrs(def_id);
                 ::extract_attr(&attrs, "spirv", |s| match s {
                     "Compute" => Some(true),
                     _ => None,
                 })
-            }).is_some();
+            })
+            .is_some();
         assert!(is_compute, "Not Compute");
         self.compute.unwrap_or_else(|| {
             let spirv_ty = self.to_ty(ty, spirv::StorageClass::Input);
@@ -509,11 +516,11 @@ impl<'a, 'tcx> CodegenCx<'a, 'tcx> {
         })
     }
     pub fn get_per_vertex(&mut self, ty: ty::Ty<'tcx>) -> Variable<'tcx> {
-        use rustc::ty::TypeVariants;
+        use rustc::ty::TyKind;
         assert!(::is_per_vertex(self.tcx, ty), "Not PerVertex");
         self.per_vertex.unwrap_or_else(|| {
             let struct_ty = match ty.sty {
-                TypeVariants::TyRef(_, ty_and_mut, _) => ty_and_mut,
+                TyKind::Ref(_, ty_and_mut, _) => ty_and_mut,
                 _ => unreachable!(),
             };
             let spirv_ty = self.to_ty(struct_ty, spirv::StorageClass::Output);
@@ -586,7 +593,8 @@ pub fn find_merge_blocks(petmir: &PetMir) -> Vec<MergeBlock> {
                 }
                 _ => None,
             }
-        }).collect()
+        })
+        .collect()
 }
 pub fn find_merge_block(
     petmir: &PetMir,
@@ -648,7 +656,8 @@ pub fn compute_control_flow(petmir: &PetMir, loops: &Loops) -> BTreeMap<mir::Bas
                                     .map(|&merge_block| (bb, merge_block)),
                                 _ => None,
                             }
-                        }).nth(0)
+                        })
+                        .nth(0)
                         .expect("Unable to find merge block");
 
                     no_selection_merge_needed.push(block);
@@ -773,9 +782,11 @@ pub fn fix_overlapping_control_flow<'a, 'tcx>(
                         bb != cfg.merge_block
                             && !dominators.is_dominated_by(bb, cfg.header)
                             && !loops.contains_key(&bb)
-                    }).collect();
+                    })
+                    .collect();
                 (cfg.header, overlapping_bbs)
-            }).collect()
+            })
+            .collect()
     };
     //println!("Overlapping {:#?}", overlapping_blocks);
     for (header, overlapping_bbs) in overlapping_blocks {
@@ -785,7 +796,7 @@ pub fn fix_overlapping_control_flow<'a, 'tcx>(
             let new_block = mir.basic_blocks_mut().push(block);
             let previous_blocks: Vec<_> = {
                 let petmir = PetMir::from_mir(&mir);
-                ControlFlowGraph::predecessors(&mir, overlapping_block)
+                WithPredecessors::predecessors(&mir, overlapping_block)
                     .filter(|&bb| petmir.is_reachable(header, bb))
                     //.filter(|&bb| dominators.is_dominated_by(bb, header))
                     .collect()
@@ -813,7 +824,7 @@ pub struct ControlFlow {
 pub struct SpirvMir<'a, 'tcx: 'a> {
     pub def_id: hir::def_id::DefId,
     pub mir: mir::Mir<'tcx>,
-    pub substs: &'tcx rustc::ty::subst::Substs<'tcx>,
+    pub substs: rustc::ty::subst::SubstsRef<'tcx>,
     pub control_flow: BTreeMap<mir::BasicBlock, Cfg>,
     pub tcx: TyCtxt<'a, 'tcx, 'tcx>,
 }
@@ -886,14 +897,15 @@ impl<'a, 'tcx> SpirvMir<'a, 'tcx> {
                 },
             };
             let dominators = spirv_mir.dominators();
-            let pre: Vec<_> = ControlFlowGraph::predecessors(&spirv_mir, cfg.merge_block).collect();
+            let pre: Vec<_> = WithPredecessors::predecessors(&spirv_mir, cfg.merge_block).collect();
             let previous_blocks: Vec<_> =
-                ControlFlowGraph::predecessors(&spirv_mir, cfg.merge_block)
+                WithPredecessors::predecessors(&spirv_mir, cfg.merge_block)
                     .filter(|&bb| {
                         let dominated = dominators.is_dominated_by(bb, cfg.header);
                         //println!("dom {:?} {:?} {}", bb, block, dominated);
                         dominated
-                    }).collect();
+                    })
+                    .collect();
             assert!(
                 previous_blocks.len() > 0,
                 "Previous blocks should not be empty for {:?}",
@@ -949,7 +961,7 @@ pub struct MirContext<'a, 'tcx: 'a> {
     pub def_id: hir::def_id::DefId,
     pub tcx: TyCtxt<'a, 'tcx, 'tcx>,
     pub mir: &'a mir::Mir<'tcx>,
-    pub substs: &'tcx subst::Substs<'tcx>,
+    pub substs: subst::SubstsRef<'tcx>,
 }
 impl<'a, 'tcx> MirContext<'a, 'tcx> {
     pub fn mir(&self) -> &'a mir::Mir<'tcx> {

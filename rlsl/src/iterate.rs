@@ -1,4 +1,4 @@
-use rustc_data_structures::{control_flow_graph::ControlFlowGraph, indexed_vec::IndexVec};
+use rustc_data_structures::{graph::ControlFlowGraph, indexed_vec::IndexVec};
 use std::collections::VecDeque;
 pub fn breadth_first_order_from<G: ControlFlowGraph>(
     graph: &G,

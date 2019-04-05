@@ -125,7 +125,7 @@ impl<'tcx> Variable<'tcx> {
                         access_chain_indices(cx, &proj.base, indices)
                     }
                     mir::ProjectionElem::Downcast(_, id) => {
-                        let index = cx.constant_u32(id as _);
+                        let index = cx.constant_u32(id.as_u32());
                         indices.push(index.word);
                         access_chain_indices(cx, &proj.base, indices)
                     }
@@ -141,10 +141,7 @@ impl<'tcx> Variable<'tcx> {
                     _ => access_chain_indices(cx, &proj.base, indices),
                 }
             } else {
-                let local = match lvalue {
-                    &mir::Place::Local(local) => local,
-                    _ => panic!("Should be local"),
-                };
+                let local = lvalue.local().expect("Should be local");
                 (local, indices)
             }
         }
@@ -156,7 +153,7 @@ impl<'tcx> Variable<'tcx> {
         let variable = fx.vars.get(&local).cloned().unwrap_or_else(|| {
             let place = fx
                 .references
-                .get(&mir::Place::Local(local))
+                .get(&mir::Place::Base(mir::PlaceBase::Local(local)))
                 .cloned()
                 .expect("ref");
             Variable::access_chain(fx, &place)

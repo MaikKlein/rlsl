@@ -1,6 +1,7 @@
 extern crate syn;
 #[macro_use]
 extern crate quote;
+extern crate proc_macro;
 extern crate proc_macro2;
 
 use proc_macro::TokenStream;
@@ -81,7 +82,7 @@ impl Parse for Functions {
     }
 }
 #[proc_macro]
-pub fn rlsl_test(input: TokenStream) -> TokenStream {
+pub fn shader_test(input: TokenStream) -> TokenStream {
     let functions = parse_macro_input!(input as Functions);
     let path = env::temp_dir().join("shader_test");
     project::generate_project(&path, &functions).expect("");
@@ -97,18 +98,15 @@ pub fn rlsl_test(input: TokenStream) -> TokenStream {
         path.display().to_string()
     });
     let test = quote!{
-        #[cfg(test)]
-        mod tests {
-            use ::*;
-            #(#function_iter)*
-            use quickcheck::TestResult;
-            quickcheck! {
-                #(
-                    fn #idents(input: Vec<f32>) -> TestResult {
-                        compute("compute", input, #file_names, #idents1)
-                    }
-                )*
-            }
+        use crate::compute;
+        #(#function_iter)*
+        use quickcheck::TestResult;
+        quickcheck! {
+            #(
+                fn #idents(input: Vec<f32>) -> TestResult {
+                    compute("compute", input, #file_names, #idents1)
+                }
+            )*
         }
     };
     Command::new("cargo")

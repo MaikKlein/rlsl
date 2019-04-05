@@ -6,7 +6,6 @@
 #![feature(core_panic)]
 #![feature(prelude_import)]
 #![feature(custom_attribute, attr_literals)]
-#![feature(panic_implementation)]
 
 //#[macro_reexport(assert, assert_eq, assert_ne, debug_assert, debug_assert_eq, debug_assert_ne, unreachable, unimplemented, write, writeln, try)]
 extern crate core as __core;
@@ -99,7 +98,7 @@ pub extern "C" fn eh_personality() {}
 // pub extern "C" fn rust_begin_panic() -> ! {
 //     unsafe { intrinsics::abort() }
 // }
-#[panic_implementation]
+#[panic_handler]
 #[unwind(allowed)]
 pub fn rust_begin_panic(info: &core::panic::PanicInfo) -> ! {
     unsafe { intrinsics::abort() }

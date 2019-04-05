@@ -9,7 +9,7 @@ authors = ["Maik Klein <maikklein@googlemail.com>"]
 #syntax = {path = "compiler/rust/src/libsyntax"}
 #syntax_pos = {path = "compiler/rust/src/libsyntax_pos"}
 #rustc_passes = {path = "compiler/rust/src/librustc_passes"}
-rustc_mir = {path = "rlsl/compiler/rust/src/librustc_mir"}
+#rustc_mir = {path = "rlsl/compiler/rust/src/librustc_mir"}
 #rustc_plugin = {path = "compiler/rust/src/librustc_plugin"}
 #arena = {path = "compiler/rust/src/libarena"}
 #rustc_borrowck = {path = "compiler/rust/src/librustc_borrowck"}

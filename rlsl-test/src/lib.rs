@@ -1,5 +1,3 @@
-#![feature(proc_macro_gen)]
-#![feature(use_extern_macros)]
 extern crate gfx_backend_vulkan as back;
 #[macro_use]
 extern crate quickcheck;
@@ -11,7 +9,7 @@ extern crate issues;
 use hal::{buffer, command, memory, pool, pso, queue};
 use hal::{Backend, Compute, DescriptorPool, Device, Instance, PhysicalDevice, QueueFamily};
 use quickcheck::TestResult;
-use rlsl_test_macro::rlsl_test;
+use rlsl_test_macro::shader_test;
 use std::fmt::Debug;
 use std::fs;
 use std::mem::size_of;
@@ -266,9 +264,8 @@ fn create_buffer<B: Backend>(
 
 #[cfg(test)]
 mod tests {
-    use quickcheck::TestResult;
-    use rlsl_test_macro::rlsl_test;
-    rlsl_test!{
+    use rlsl_test_macro::shader_test;
+    shader_test!{
         pub fn simple_loop(_: u32, val: f32) -> f32 {
             const LEN: usize = 2;
             let arr: [f32; LEN] = [val, val];
