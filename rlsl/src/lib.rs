@@ -1462,15 +1462,15 @@ impl<'tcx> Enum<'tcx> {
         let e = layout.and_then(|ty_layout| {
             let ty = ty_layout.ty;
             match ty_layout.details.variants {
-                Variants::Tagged {
-                    ref tag,
+                Variants::Multiple {
                     ref variants,
+                    ..
                 } => {
                     // TODO: Find the correct discr type
                     let discr_ty = tcx.types.u32;
                     Some((discr_ty, variants.len()))
                 }
-                Variants::NicheFilling { .. } => {
+                Variants::Single { .. } => {
                     // TODO: Handle Niechefilling enums
                     None
                 }
@@ -1566,8 +1566,7 @@ impl<'b, 'a, 'tcx> rustc::mir::visit::Visitor<'tcx> for FunctionCx<'b, 'a, 'tcx>
         self.super_assign(block, lvalue, rvalue, location);
         //println!("{:?} {:?}", lvalue, rvalue);
         let lvalue_ty = lvalue
-            .ty(&self.mcx.mir().local_decls, self.scx.tcx)
-            .to_ty(self.scx.tcx);
+            .ty(&self.mcx.mir().local_decls, self.scx.tcx).ty;
         let lvalue_ty = self.mcx.monomorphize(&lvalue_ty);
         if lvalue_ty.is_phantom_data() || lvalue_ty.is_unit() {
             return;

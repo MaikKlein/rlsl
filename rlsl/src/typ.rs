@@ -147,9 +147,7 @@ impl<'tcx> Variable<'tcx> {
         }
         let indices = Vec::new();
         let (local, mut indices) = access_chain_indices(fx, lvalue, indices);
-        let lvalue_ty = lvalue
-            .ty(&fx.mcx.mir().local_decls, fx.scx.tcx)
-            .to_ty(fx.scx.tcx);
+        let lvalue_ty = lvalue.ty(&fx.mcx.mir().local_decls, fx.scx.tcx).ty;
         let variable = fx.vars.get(&local).cloned().unwrap_or_else(|| {
             let place = fx
                 .references
@@ -162,9 +160,7 @@ impl<'tcx> Variable<'tcx> {
         if indices.is_empty() {
             variable
         } else {
-            let lvalue_ty = lvalue
-                .ty(&fx.mcx.mir().local_decls, fx.scx.tcx)
-                .to_ty(fx.scx.tcx);
+            let lvalue_ty = lvalue.ty(&fx.mcx.mir().local_decls, fx.scx.tcx).ty;
             let lvalue_ty = fx.mcx.monomorphize(&lvalue_ty);
             let lvalue_ty = ::remove_ptr_ty(lvalue_ty);
             let spirv_ty_ptr = fx.scx.to_ty_as_ptr(lvalue_ty, variable.storage_class);

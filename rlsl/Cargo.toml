@@ -29,3 +29,4 @@ spirv_headers = "1.2"
 itertools = "*"
 byteorder = "1.2"
 petgraph = "0.4"
+tools = {path = "../tools"}
