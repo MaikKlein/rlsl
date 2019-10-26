@@ -109,6 +109,16 @@ pub fn build_custom_libstd() -> ToolResult<()> {
     Ok(())
 }
 
+pub fn install_rlsl() -> ToolResult<()> {
+    Command::new("cargo")
+        .arg("+rlsl")
+        .arg("install")
+        .arg("--path")
+        .arg("rlsl")
+        .arg("-f")
+        .status()?;
+    Ok(())
+}
 pub fn install_custom_libstd() -> ToolResult<()> {
     use std::fs;
     let triple = platforms::guess_current().unwrap().target_triple;

@@ -24,5 +24,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("Installing libstd/libcore");
     tools::install_custom_libstd();
+
+    tools::install_rlsl()?;
     Ok(())
 }
