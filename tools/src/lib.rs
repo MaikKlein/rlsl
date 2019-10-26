@@ -41,12 +41,12 @@ pub fn install_nightly(version: &str) -> ToolResult<()> {
     Ok(())
 }
 pub fn check_rustup() -> ToolResult<()> {
-    Command::new("rustup").output().map_err(|_| Error::Rustup)?;
+    Command::new("rustup").output().context("Please install rustup. Visit https://rustup.rs")?;
     Ok(())
 }
 
 pub fn check_xargo() -> ToolResult<()> {
-    Command::new("xargo").output().map_err(|_| Error::Rustup)?;
+    Command::new("xargo").output().context("Please install xargo with `cargo install xargo`")?;
     Ok(())
 }
 
