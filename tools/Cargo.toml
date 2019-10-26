@@ -7,3 +7,5 @@ edition = "2018"
 [dependencies]
 
 dirs = "1.0"
+platforms = "0.2.1"
+anyhow = "1"
