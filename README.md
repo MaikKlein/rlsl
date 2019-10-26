@@ -30,6 +30,32 @@ RUSTC=rlsl cargo build
 
 ![compile](https://raw.githubusercontent.com/MaikKlein/rlsl/master/media/compile.gif)
 
+## How to install rlsl
+
+**Not ready to be used. Anything might happen**
+
+``` 
+git clone https://github.com/MaikKlein/rlsl.git
+
+```
+
+Make sure you have both rustup and xargo installed.
+
+```
+cargo install-rlsl
+```
+
+## Run tests
+
+```
+cd rlsl-test
+```
+
+```
+cargo +rlsl test
+```
+
+
 ## Blog
 
 1. [What is RLSL](https://maikklein.github.io/rlsl-progress-report/)
