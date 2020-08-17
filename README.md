@@ -75,10 +75,6 @@ The project currently does not accept any contributions yet.
 
 Rlsl will start to accept contributions after those issues are properly addressed.
 
-### Donate
-
-[![Patreon](https://c5.patreon.com/external/logo/become_a_patron_button.png)](https://www.patreon.com/maikklein)
-
 ## Community
 
 Want to chat? Join us on [gitter](https://gitter.im/MaikKlein/rlsl).
