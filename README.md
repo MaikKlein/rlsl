@@ -1,6 +1,5 @@
 # Rlsl - Rust Like Shading Language
-
-**The project is currently unusable**
+## Deprecated in favor of [rust-gpu](https://github.com/EmbarkStudios/rust-gpu)
 
 [![Join the chat at https://gitter.im/MaikKlein/rlsl](https://badges.gitter.im/MaikKlein/rlsl.svg)](https://gitter.im/MaikKlein/rlsl?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge&utm_content=badge)
 
